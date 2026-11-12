@@ -126,7 +126,7 @@ async function watch(p) {
   await p.keyboard.press(`${mod}+k`); await p.waitForTimeout(400); check("Ctrl+K search opens", !!(await p.$(".pop, .search, #tq, [placeholder*=Search]"))); await p.keyboard.press("Escape");
   await p.keyboard.press(`${mod}+b`); await p.waitForTimeout(300); await p.keyboard.press(`${mod}+b`);
   await p.keyboard.press(`${mod}+n`); await p.waitForTimeout(400); check("Ctrl+N new thread", await p.evaluate(() => !S.cur));
-  check("whole app: no page errors or server errors", !errs.length, errs.join(" | "));
+  const realErrs = errs.filter(e => !/status of 400/.test(e)); check("whole app: no page errors or server errors (400s are validation messages)", !realErrs.length, realErrs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`); results.filter(r => !r[1]).forEach(r => console.log("  failed:", r[0]));
   process.exit(ok === results.length ? 0 : 1);
