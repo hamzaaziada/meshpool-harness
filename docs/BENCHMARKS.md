@@ -1,6 +1,35 @@
 # Benchmarks
 
-Meshpool Code and Meshpool Work run **Meshpool Harness v3**. Meshpool Auto uses the results on this page to choose a harness for each task (see [ROUTING.md](ROUTING.md)).
+Meshpool Auto uses the results on this page to choose a harness for each task (see [ROUTING.md](ROUTING.md)).
+
+**Which harness the numbers describe.** Run C below measured the Meshpool Harness v3 *benchmark loop* (the one-shot
+engine). Meshpool Code and Meshpool Work in the app run the app's own chat agent, which shares that loop's tools but
+not its loop. Since 12 November 2026 the app agent is measured directly (next section).
+
+## App agent, measured directly (12 November 2026, dev tasks)
+
+Every agent ran at the same time on DeepSeek V4.1 Flash through the Meshpool gateway, with the same task text, caps
+and graders. These are dev tasks and one run each, so a result can move by about two tasks; the frozen test tasks
+confirm before any claim. Raw rows: `harness-lab/bench/results/`.
+
+SWE-bench Verified, 9 dev tasks:
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Pi | 8/9 | $0.0072 | 108 s |
+| Codex CLI | 7/9 | $0.0065 | 84 s |
+| Meshpool Code (app agent) | 7/9 | $0.0084 | 107 s |
+| Meshpool Harness v5 (engine loop) | 7/9 | $0.0104 | 137 s |
+
+Computer use, MiniWoB++, 10 dev tasks (second round; the browser tool with the fixes the app now uses):
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Meshpool Harness v5 | 9/10 | $0.0009 | 18.7 s |
+| Pi | 9/10 | $0.0014 | 22.5 s |
+| Codex CLI | 9/10 | $0.0025 | 23.3 s |
+
+Terminal-Bench 2.0 is running; results will be added here.
 
 ## How the agents were measured
 

@@ -13,20 +13,23 @@ from meshpool_harness import config as C
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
-     "description": "Meshpool's coding agent. It reads and edits your code, runs commands and tests, and uses your "
-                    "MCP servers. Runs Meshpool Harness v3: 18 of 20 on SWE-bench Verified and 97 of 102 on "
-                    "computer use in Meshpool's benchmark."},
+     "description": "Best for: coding in your project with your MCP servers, connectors and skills, and web tasks in "
+                    "a browser. Reads and edits your code, runs commands and tests. Measured 12 Nov 2026 on 9 "
+                    "SWE-bench Verified tasks (same model as Pi and Codex): 7 of 9 solved, $0.008 and 107 s per "
+                    "solved task. Its browser tool has the fixes that made Meshpool the cheapest agent on Meshpool's "
+                    "computer-use test (MiniWoB++)."},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
-     "description": "Built-in work agent for research, writing, spreadsheets, decks and data analysis. It uses "
-                    "Meshpool's office engines and needs nothing else installed."},
+     "description": "Best for: documents, spreadsheets, decks, data analysis and research. Uses Meshpool's office "
+                    "engines and needs nothing else installed. Not yet benchmarked against other agents."},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
-      "description": "Pi, the minimal open-source coding agent by Mario Zechner, bundled with Meshpool. Reads, writes, "
-                     "edits and runs commands, uses your MCP servers and connectors, and runs on your Meshpool key "
-                     "and models."}
+      "description": "Best for: plain coding tasks at low cost. Solved the most (8 of 9, $0.007 per solved task) on "
+                     "Meshpool's 9-task SWE-bench Verified test, 12 Nov 2026, same model as Meshpool Code. Pi is the "
+                     "minimal open-source coding agent by Mario Zechner, bundled with Meshpool; it uses your MCP "
+                     "servers and connectors and runs on your Meshpool key and models."}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
-        "description": "Picks the best harness for each new task, from Meshpool's benchmark results. You see which "
-                       "one it picked and why."}
+        "description": "Best when you are not sure which to use: picks the harness that scored best on Meshpool's "
+                       "benchmarks for that kind of task. You see which one it picked and why."}
 # Subscriptions: the official Claude Code and Codex agents, through the Agent Client Protocol adapters. They sign in
 # with the user's own Claude or ChatGPT account, so usage comes out of that subscription, not the Meshpool key.
 CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"
@@ -36,19 +39,22 @@ SUBSCRIPTIONS = [
      "command": "npx", "args": ["-y", CLAUDE_ACP], "models": "harness", "login": "claude", "share_mcp": True,
      "env_unset": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
      "setup": "Sign in with your Claude account first: Settings, Harnesses, Claude, Sign in.",
-     "description": "Claude Code by Anthropic on your Claude Pro or Max plan. Uses your Meshpool connectors, skills and "
-                    "MCP servers."},
+     "description": "Best for: hard coding tasks. The Claude Code harness solved 20 of 20 SWE-bench Verified tasks in "
+                    "Meshpool's tests (on a shared model); here it runs Anthropic's models on your Claude Pro or Max "
+                    "plan. Uses your Meshpool connectors, skills and MCP servers."},
     {"id": "chatgpt-subscription", "name": "ChatGPT (your subscription)", "mode": "code", "type": "acp",
      "command": "npx", "args": ["-y", CODEX_ACP], "models": "harness", "login": "codex", "share_mcp": True,
      "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
      "setup": "Sign in with your ChatGPT account first: Settings, Harnesses, ChatGPT, Sign in.",
-     "description": "Codex by OpenAI on your ChatGPT Plus, Pro or Business plan. Uses your Meshpool connectors, skills "
-                    "and MCP servers."},
+     "description": "Best for: terminal and command-line tasks. The Codex harness led Terminal-Bench and was the "
+                    "fastest on coding in Meshpool's tests (on a shared model); here it runs OpenAI's models on your "
+                    "ChatGPT Plus, Pro or Business plan. Uses your Meshpool connectors, skills and MCP servers."},
 ]
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
             "chatgpt-subscription"}
-HERMES_NOTE = ("Hermes by Nous Research, bundled with Meshpool: it remembers what it learns, builds its own skills, "
+HERMES_NOTE = ("Best for: ongoing work where memory matters. Hermes by Nous Research, bundled with Meshpool: it "
+               "remembers what it learns, builds its own skills, "
                "uses the web, files and terminal, and makes PowerPoint, Excel and Word files with Meshpool's office "
                "engines. Runs on your Meshpool key and model.")
 
