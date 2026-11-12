@@ -1,0 +1,75 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index d9c9b0db04..0aa0b185e9 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -690,7 +690,17 @@ class QuerySet:
+         assert not self.query.is_sliced, \
+             "Cannot use 'limit' or 'offset' with in_bulk"
+         if field_name != 'pk' and not self.model._meta.get_field(field_name).unique:
+-            raise ValueError("in_bulk()'s field_name must be a unique field but %r isn't." % field_name)
++            fields = self.model._meta.unique_together
++            unique_fields = [field[0] for field in fields if len(field) == 1]
++            unique_fields.extend(
++                constraint.fields[0]
++                for constraint in self.model._meta.total_unique_constraints
++                if len(constraint.fields) == 1
++            )
++            if field_name not in unique_fields:
++                raise ValueError(
++                    "in_bulk()'s field_name must be a unique field but %r isn't." % field_name
++                )
+         if id_list is not None:
+             if not id_list:
+                 return {}
+diff --git a/tests/lookup/models.py b/tests/lookup/models.py
+index fbc9fa606f..83e99cf0c3 100644
+--- a/tests/lookup/models.py
++++ b/tests/lookup/models.py
+@@ -108,3 +108,13 @@ class Freebie(models.Model):
+         to_fields=['id', 'product'],
+         on_delete=models.CASCADE,
+     )
++
++
++class UniqueConstraintArticle(models.Model):
++    headline = models.CharField(max_length=100)
++    slug = models.SlugField(blank=True, null=True)
++
++    class Meta:
++        constraints = [
++            models.UniqueConstraint(fields=['slug'], name='unique_slug'),
++        ]
+diff --git a/tests/lookup/tests.py b/tests/lookup/tests.py
+index baefdf9701..cb36266925 100644
+--- a/tests/lookup/tests.py
++++ b/tests/lookup/tests.py
+@@ -12,6 +12,7 @@ from django.utils.deprecation import RemovedInDjango40Warning
+ 
+ from .models import (
+     Article, Author, Freebie, Game, IsNullWithNoneAsRHS, Player, Season, Tag,
++    UniqueConstraintArticle,
+ )
+ 
+ 
+@@ -189,6 +190,21 @@ class LookupTests(TestCase):
+             }
+         )
+ 
++    def test_in_bulk_with_unique_constraint(self):
++        UniqueConstraintArticle.objects.bulk_create([
++            UniqueConstraintArticle(slug='slug1'),
++            UniqueConstraintArticle(slug='slug2'),
++        ])
++        self.assertEqual(
++            UniqueConstraintArticle.objects.in_bulk(
++                ['slug1', 'slug2'], field_name='slug',
++            ),
++            {
++                article.slug: article
++                for article in UniqueConstraintArticle.objects.all()
++            },
++        )
++
+     def test_in_bulk_non_unique_field(self):
+         msg = "in_bulk()'s field_name must be a unique field but 'author' isn't."
+         with self.assertRaisesMessage(ValueError, msg):

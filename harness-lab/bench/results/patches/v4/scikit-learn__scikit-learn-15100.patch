@@ -1,0 +1,59 @@
+diff --git a/doc/whats_new/v0.22.rst b/doc/whats_new/v0.22.rst
+index a2d4a8dac..8ed549a73 100644
+--- a/doc/whats_new/v0.22.rst
++++ b/doc/whats_new/v0.22.rst
+@@ -250,6 +250,12 @@ Changelog
+   :class:`feature_extraction.text.VectorizerMixin` can now be pickled.
+   :pr:`14430` by :user:`Dillon Niederhut <deniederhut>`.
+ 
++- |Fix| :func:`feature_extraction.text.strip_accents_unicode` now strips
++  combining characters from strings that are already decomposed. This affects
++  :class:`feature_extraction.text.CountVectorizer` and
++  :class:`feature_extraction.text.TfidfVectorizer` when ``strip_accents='unicode'``.
++  :pr:`15100` by `Joel Nothman`_.
++
+ - |API| Deprecated unused `copy` param for
+   :meth:`feature_extraction.text.TfidfVectorizer.transform` it will be
+   removed in v0.24. :pr:`14520` by
+diff --git a/sklearn/feature_extraction/tests/test_text.py b/sklearn/feature_extraction/tests/test_text.py
+index 7b7697ff4..b69da3099 100644
+--- a/sklearn/feature_extraction/tests/test_text.py
++++ b/sklearn/feature_extraction/tests/test_text.py
+@@ -97,6 +97,21 @@ def test_strip_accents():
+     expected = 'this is a test'
+     assert strip_accents_unicode(a) == expected
+ 
++    # strings that are already decomposed
++    a = "o\u0308"  # o with diaeresis
++    expected = "o"
++    assert strip_accents_unicode(a) == expected
++
++    # combining marks by themselves
++    a = "\u0307"
++    expected = ""
++    assert strip_accents_unicode(a) == expected
++
++    # Multiple combining marks on one character
++    a = "o\u0308\u0304"  # o with diaeresis and macron
++    expected = "o"
++    assert strip_accents_unicode(a) == expected
++
+ 
+ def test_to_ascii():
+     # check some classical latin accentuated symbols
+diff --git a/sklearn/feature_extraction/text.py b/sklearn/feature_extraction/text.py
+index bb5a9d646..11236d958 100644
+--- a/sklearn/feature_extraction/text.py
++++ b/sklearn/feature_extraction/text.py
+@@ -130,10 +130,7 @@ def strip_accents_unicode(s):
+         ASCII equivalent.
+     """
+     normalized = unicodedata.normalize('NFKD', s)
+-    if normalized == s:
+-        return s
+-    else:
+-        return ''.join([c for c in normalized if not unicodedata.combining(c)])
++    return ''.join([c for c in normalized if not unicodedata.combining(c)])
+ 
+ 
+ def strip_accents_ascii(s):
