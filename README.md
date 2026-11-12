@@ -19,12 +19,56 @@ All versions and checksums are on the [Releases](https://github.com/hamzaaziada/
 
 On first launch, paste your Meshpool API key. Then choose where Meshpool can work, and allow the permissions it asks for.
 
+## Quick start
+
+There are three ways to run Meshpool.
+
+1. **Desktop app:** download it above.
+2. **Command line** on macOS or Linux:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | sh
+   meshpool login
+   meshpool
+   ```
+
+   On Windows, in PowerShell:
+
+   ```powershell
+   irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
+   ```
+
+   The command line installer needs Python 3.10 or later.
+
+3. **In your browser on localhost:** after installing the command line, run `meshpool ui`. It opens the full app at `http://127.0.0.1:8765`. It runs only on your computer and is not reachable from other machines.
+
+### Use your Claude or ChatGPT subscription
+
+Meshpool can run tasks on your own Claude Pro or Max plan, or on your ChatGPT Plus, Pro or Business plan. It does this through the official Claude Code and Codex agents.
+
+1. Open **Settings**, then **Harnesses**.
+2. Choose **Sign in** next to **Claude (your subscription)** or **ChatGPT (your subscription)**.
+3. Pick that harness for a thread.
+
+Your Meshpool connectors, skills and MCP servers work with it too. This needs Node.js, which the desktop app includes.
+
+### Bring your skills and MCP servers
+
+On first launch, and later under **Settings**, Meshpool finds the skills and MCP servers you already use, and imports the ones you pick. It looks in:
+
+- Claude Desktop and Claude Code;
+- Codex;
+- Cursor, Windsurf, VS Code, Cline and Gemini CLI.
+
 ## What it does
 
 - **Two modes.**
   - **Cowork** is a chat with a live progress panel and the files the task made.
   - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
-- **Four agents (harnesses), switchable per thread:** Meshpool Code, Meshpool Work, Pi and Hermes. All of them run on your Meshpool key and model list.
+- **Harnesses (the agent behind a thread), switchable per thread:**
+  - **Meshpool Auto** picks the best harness for each task, based on benchmark results.
+  - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key and model list.
+  - **Claude and ChatGPT** run on your own subscription.
 - **Web research without a browser.**
   - The agent can search the web and read pages, PDFs and Office files.
   - It can research a question across many sources at once, with links you can check.

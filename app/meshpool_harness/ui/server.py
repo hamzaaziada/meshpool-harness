@@ -429,6 +429,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, get_settings())
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
+            if u.path == "/api/import":
+                from meshpool_harness import importer as IM
+                return self._send(200, IM.scan())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -537,6 +540,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_action(self._json()))
+            if u.path == "/api/route":
+                from meshpool_harness import harness_router as HRT
+                b = self._json()
+                return self._send(200, HRT.route(b.get("text", ""), b.get("kind", "cowork")))
+            if u.path == "/api/harness-login":
+                from meshpool_harness import harnesses as HRS
+                b = self._json()
+                return self._send(200, HRS.login({"claude-subscription": "claude",
+                                                  "chatgpt-subscription": "codex"}.get(b.get("id", ""), b.get("id", ""))))
+            if u.path == "/api/import":
+                from meshpool_harness import importer as IM
+                r = IM.run(self._json().get("keys") or [])
+                C.load_into_env(override=True)
+                return self._send(200, dict(r, found=IM.scan()))
             if u.path == "/api/web-test":
                 from meshpool_harness import web as WEB
                 C.load_into_env(override=True)

@@ -23,8 +23,30 @@ PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpoo
       "description": "Pi, the minimal open-source coding agent by Mario Zechner, bundled with Meshpool. Reads, writes, "
                      "edits and runs commands, uses your MCP servers and connectors, and runs on your Meshpool key "
                      "and models."}
+AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
+        "description": "Picks the best harness for each new task, from Meshpool's benchmark results. You see which "
+                       "one it picked and why."}
+# Subscriptions: the official Claude Code and Codex agents, through the Agent Client Protocol adapters. They sign in
+# with the user's own Claude or ChatGPT account, so usage comes out of that subscription, not the Meshpool key.
+CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"
+CODEX_ACP = "@agentclientprotocol/codex-acp@2.6.0"
+SUBSCRIPTIONS = [
+    {"id": "claude-subscription", "name": "Claude (your subscription)", "mode": "code", "type": "acp",
+     "command": "npx", "args": ["-y", CLAUDE_ACP], "models": "harness", "login": "claude", "share_mcp": True,
+     "env_unset": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
+     "setup": "Sign in with your Claude account first: Settings, Harnesses, Claude, Sign in.",
+     "description": "Claude Code by Anthropic on your Claude Pro or Max plan. Uses your Meshpool connectors, skills and "
+                    "MCP servers."},
+    {"id": "chatgpt-subscription", "name": "ChatGPT (your subscription)", "mode": "code", "type": "acp",
+     "command": "npx", "args": ["-y", CODEX_ACP], "models": "harness", "login": "codex", "share_mcp": True,
+     "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+     "setup": "Sign in with your ChatGPT account first: Settings, Harnesses, ChatGPT, Sign in.",
+     "description": "Codex by OpenAI on your ChatGPT Plus, Pro or Business plan. Uses your Meshpool connectors, skills "
+                    "and MCP servers."},
+]
 MODES = ("code", "cowork")
-RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi"}
+RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
+            "chatgpt-subscription"}
 HERMES_NOTE = ("Hermes by Nous Research, bundled with Meshpool: it remembers what it learns, builds its own skills, "
                "uses the web, files and terminal, and makes PowerPoint, Excel and Word files with Meshpool's office "
                "engines. Runs on your Meshpool key and model.")
@@ -159,6 +181,10 @@ def load_all() -> list[dict]:
     if bh:
         out.append(dict(bh, available=True, builtin=True))
     out += [dict(b, available=True, builtin=True) for b in BUILTIN[1:]]
+    for sub in SUBSCRIPTIONS:
+        out.append(dict(sub, available=_available(sub), builtin=True, subscription=True,
+                        signed_in=signed_in(sub["login"])))
+    out.insert(0, dict(AUTO, available=True, builtin=True))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
             try:
@@ -182,6 +208,59 @@ def examples() -> list[dict]:
             except (ValueError, OSError):
                 continue
     return rows
+
+
+def signed_in(which: str) -> bool:
+    """Whether the Claude Code or Codex sign-in already exists on this computer (it never reads the secret)."""
+    try:
+        if which == "codex":
+            return (Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "auth.json").is_file()
+        if which == "claude":
+            cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+            if (cfg / ".credentials.json").is_file():
+                return True
+            if sys.platform == "darwin":
+                import subprocess
+                r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials"],
+                                   capture_output=True, timeout=5)
+                return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def npx() -> str:
+    return shutil.which("npx") or "npx"
+
+
+def login(which: str) -> dict:
+    """Start the official sign-in for a subscription. Codex opens the browser by itself; Claude Code's sign-in runs
+    in a terminal window, where the user types /login."""
+    import subprocess
+    if which == "codex":
+        cmd = [npx(), "-y", "@openai/codex@latest", "login"]
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
+        return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "
+                                       "are signed in."}
+    if which == "claude":
+        line = f'"{npx()}" -y @anthropic-ai/claude-code@latest'
+        if sys.platform == "darwin":
+            script = line.replace("\\", "\\\\").replace('"', '\\"')
+            subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
+                              "-e", 'tell application "Terminal" to activate'])
+        elif os.name == "nt":
+            subprocess.Popen(["cmd", "/c", "start", "Claude sign-in", "cmd", "/k", line])
+        else:
+            for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
+                if shutil.which(term):
+                    subprocess.Popen([term, "-e", line])
+                    break
+            else:
+                return {"ok": False, "message": f"Open a terminal and run: {line}  then type /login."}
+        return {"ok": True, "message": "A terminal window opened with Claude Code. Type /login there, choose your "
+                                       "Claude account, then close the window and come back."}
+    raise ValueError("Unknown sign-in.")
 
 
 def get(hid: str) -> dict:

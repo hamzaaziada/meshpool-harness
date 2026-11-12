@@ -128,7 +128,10 @@ class Session:
         else:
             if not workdir or not Path(workdir).expanduser().is_dir():
                 raise ValueError(f"Project folder not found: {workdir or '(empty)'}")
-            self.harness = HR.get(harness or HR.default_for(kind))
+            hid = harness or HR.default_for(kind)
+            if hid == "meshpool-auto":                     # Auto picks per task; without one, use the mode default
+                hid = "meshpool-code" if kind == "code" else "meshpool-work"
+            self.harness = HR.get(hid)
             self.kind = kind if kind in HR.MODES else self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
                 if not self.harness.get("available"):
@@ -397,8 +400,23 @@ def create(body: dict) -> dict:
     if not wd or Path(wd).expanduser().resolve() == default_project().resolve():
         wd = str(default_project())
         Path(wd).mkdir(parents=True, exist_ok=True)
-    s = Session(workdir=wd, mode=body.get("mode"), harness=body.get("harness") or None,
-                kind=body.get("kind") or "code", model=body.get("model") or None, plan=bool(body.get("plan")))
+    harness, routed = body.get("harness") or None, None
+    kind = body.get("kind") or "code"
+    if (harness or HR.default_for(kind)) == "meshpool-auto":
+        from meshpool_harness import harness_router as HRT
+        routed = HRT.route(body.get("task") or "", kind)
+        harness = routed["harness"]
+    model = body.get("model") or None
+    try:
+        if HR.get(harness or HR.default_for(kind)).get("models") != "meshpool":
+            model = None                            # its own account picks the model; a Meshpool id would not exist
+    except (KeyError, ValueError):
+        pass
+    s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
+                kind=kind, model=model, plan=bool(body.get("plan")))
+    if routed:
+        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']}. {routed['reason']}"})
+        write_meta(s.id, routed=routed["harness"])
     with LOCK:
         LIVE[s.id] = s
     try:
@@ -565,7 +583,8 @@ def run_scheduled(t: dict) -> str:
     folder = t.get("folder") or ""
     if not folder or not Path(folder).expanduser().is_dir():
         folder = ""
-    v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork"})
+    v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                "task": t.get("prompt", "")})
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])

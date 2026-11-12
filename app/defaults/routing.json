@@ -1,0 +1,32 @@
+{
+  "about": "Meshpool Auto: which harness gets a new task. Each category lists harnesses with a score from 0 to 100; Auto picks the highest-scoring harness that is installed and signed in. Replace the scores with benchmark results; the source field says where each number came from.",
+  "version": 1,
+  "source": "Initial scores from Meshpool's internal runs (Nov 2026). Replace with the benchmark table.",
+  "categories": {
+    "code": {
+      "keywords": ["code", "bug", "fix", "refactor", "test", "tests", "function", "class", "api", "repo", "repository", "pull request", "pr ", "commit", "build", "compile", "deploy", "ci", "error", "stack trace", "typescript", "python", "javascript", "react", "endpoint", "sql", "migration", "script", "dockerfile", "lint"],
+      "scores": {"meshpool-code": 80, "pi": 74, "claude-subscription": 85, "chatgpt-subscription": 82, "hermes": 60, "meshpool-work": 40}
+    },
+    "research": {
+      "keywords": ["research", "find out", "look up", "search", "compare", "competitors", "market", "news", "sources", "who is", "what is", "latest", "trends", "landscape", "summarize the web", "investigate"],
+      "scores": {"meshpool-work": 78, "hermes": 80, "meshpool-code": 62, "pi": 55, "claude-subscription": 76, "chatgpt-subscription": 76}
+    },
+    "documents": {
+      "keywords": ["deck", "slides", "presentation", "pptx", "powerpoint", "word", "docx", "report", "memo", "pdf", "document", "proposal", "one-pager", "brief", "letter"],
+      "scores": {"meshpool-work": 85, "hermes": 78, "meshpool-code": 55, "pi": 50, "claude-subscription": 70, "chatgpt-subscription": 68}
+    },
+    "data": {
+      "keywords": ["excel", "xlsx", "spreadsheet", "csv", "model", "forecast", "financial", "dashboard", "chart", "analysis", "analyze", "pivot", "power bi", "pbix", "dataset", "numbers", "table"],
+      "scores": {"meshpool-work": 84, "hermes": 74, "meshpool-code": 70, "pi": 60, "claude-subscription": 72, "chatgpt-subscription": 72}
+    },
+    "gtm": {
+      "keywords": ["lead", "leads", "prospect", "outreach", "email sequence", "cold email", "linkedin", "crm", "apollo", "instantly", "hubspot", "campaign", "icp", "pipeline", "sales"],
+      "scores": {"hermes": 82, "meshpool-work": 80, "meshpool-code": 55, "pi": 50, "claude-subscription": 72, "chatgpt-subscription": 70}
+    },
+    "general": {
+      "keywords": [],
+      "scores": {"meshpool-work": 75, "hermes": 74, "meshpool-code": 70, "pi": 60, "claude-subscription": 72, "chatgpt-subscription": 72}
+    }
+  },
+  "mode_bonus": {"code": {"meshpool-code": 5, "pi": 3}, "cowork": {"meshpool-work": 5, "hermes": 5}}
+}
