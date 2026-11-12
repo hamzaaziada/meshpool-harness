@@ -6,7 +6,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 
 | Folder | What it is | Where it comes from |
 |---|---|---|
-| `rt-mac/python` | Python 3.12 for Apple silicon, with the packages in `packaging/requirements-runtime.txt` and `app/requirements.txt` | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) `aarch64-apple-darwin` install_only, then `pip install` |
+| `rt-mac/python` | Python 3.12 for Apple silicon, with the packages in `packaging/requirements-cli.txt` (the same list `install.sh` uses: office formats and PDF readers) | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) `aarch64-apple-darwin` install_only, then `pip install` |
 | `rt-macx64/python` | The same for Intel Macs | `x86_64-apple-darwin` build |
 | `rt-win/python` | The same for Windows | `x86_64-pc-windows-msvc` build |
 | `node-mac-arm64`, `node-mac-x64`, `node-win` | Node.js 24 | [nodejs.org/dist](https://nodejs.org/dist/) |

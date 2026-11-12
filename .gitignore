@@ -13,3 +13,4 @@ mcp-health.json
 /skills/
 app/routing.csv
 harness-lab/bench/results/raw/
+app/vendor/

@@ -246,6 +246,11 @@ class Session:
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:
                 time.sleep(0.1)
+            if self.harness.get("type") == "acp":
+                # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and carry
+                # on with the old task. Say plainly that it was stopped; the note is hidden in the chat (after \u200b).
+                text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                               "answer this message instead.")
         if self.state in ("working", "waiting"):
             if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
                 self.agent.steer(self._body(text, images), images=images)

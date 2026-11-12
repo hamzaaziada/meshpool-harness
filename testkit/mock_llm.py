@@ -33,6 +33,40 @@ def plan(messages, tools):
         if step == 0 and "terminal" in names:
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
         return ("text", "Long task finished.")
+    if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
+        return ("text", "Bonjour! (the claude-skill instructions were applied)")
+    if "$claude-skill" in u:                             # built-in agents load a mentioned skill with use_skill
+        if step == 0 and "use_skill" in names:
+            return ("tool", "use_skill", {"name": "claude-skill"})
+        if done and "french" in done[-1]["content"].lower():
+            return ("text", "Bonjour! (the claude-skill instructions were applied)")
+        return ("text", "The skill did not load: " + (done[-1]["content"][:120] if done else "no tool"))
+    if "open the test page" in u:                        # browser use through the browser MCP server
+        import re as _re
+        url = (_re.search(r"https?://\S+", utext) or [None])[0]
+        op = next((n for n in names if n.endswith("browser_open")), None)
+        ty = next((n for n in names if n.endswith("browser_type")), None)
+        if step == 0 and op and url:
+            return ("tool", op, {"url": url.rstrip(".")})
+        if step == 1 and ty:
+            ref = (_re.search(r"\[(e\d+)\][^\n]*Date", done[-1]["content"]) or [None, "e1"])[1]
+            return ("tool", ty, {"ref": ref, "text": "10/23/2016"})
+        return ("text", "Browser: " + " || ".join(m["content"][:300].replace("\n", " ") for m in done))
+    if "check the code" in u:                            # MH_OBSERVE / MH_NAV / MH_LINT_EDIT tools in the app agent
+        if step == 0 and "probe" in names:
+            return ("tool", "probe", {"command": "python3 -m pytest -q"})
+        if step == 1 and "symbol" in names:
+            return ("tool", "symbol", {"name": "add"})
+        if step == 2 and "edit" in names:
+            return ("tool", "read_file", {"path": "calc.py"})
+        if step == 3:
+            return ("tool", "edit", {"path": "calc.py", "old": "return a + b", "new": "return a + bb"})
+        return ("text", "Code tools: " + " || ".join(m["content"][:400].replace("\n", " ") for m in done))
+    if "take a screenshot of my screen" in u:            # computer use
+        sc = next((n for n in names if n.endswith("screenshot") and "browser" not in n), None)
+        if step == 0 and sc:
+            return ("tool", sc, {})
+        return ("text", "Computer use: " + (done[-1]["content"][:300] if done else "no computer tool"))
     if "read the pdf" in u:
         if step == 0:
             return ("tool", "read_file" if "read_file" in names else "read", {"path": "report.pdf"})
