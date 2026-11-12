@@ -1,6 +1,8 @@
---- a/acp_adapter/server.py	2026-11-12 15:20:03.799515839 +0200
-+++ b/acp_adapter/server.py	2026-11-12 15:20:03.784531142 +0200
-@@ -198,7 +198,12 @@
+diff --git a/acp_adapter/server.py b/acp_adapter/server.py
+index 4831a9a..f79a29a 100644
+--- a/acp_adapter/server.py
++++ b/acp_adapter/server.py
+@@ -198,7 +198,12 @@ def _bind_guarded(stack: contextlib.ExitStack, label: str, setup: Callable[[], C
  
  
  def _attach_interrupted_prompt(interrupted_prompt: str, guidance: str) -> str:
@@ -14,7 +16,7 @@
  
  
  def _take_interrupted_prompt(state: SessionState) -> tuple[bool, str]:
-@@ -895,7 +900,7 @@
+@@ -893,7 +898,7 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
              except Exception:
                  logger.debug("Could not emit ACP provenance update after rotation for %s", session_id, exc_info=True)
  
@@ -23,3 +25,18 @@
          cancelled = bool(state.cancel_event and state.cancel_event.is_set())
          # The local "waiting for model" interrupt status is metadata, not prose; stop_reason carries it.
          from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
+diff --git a/tools/approval.py b/tools/approval.py
+index 503ab01..8b9eddf 100644
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -1025,6 +1025,10 @@ def check_all_command_guards(command: str, env_type: str,
+     # approval flow (block used to be a hard stop) so users can inspect the findings and approve.
+     tirith_result = _tirith_scan(command)
+     is_dangerous, pattern_key, description = detect_dangerous_command(command)
++    if not is_dangerous and os.environ.get("HERMES_ASK_EVERY_COMMAND") == "1":
++        # Meshpool: the ACP client applies the user's permission mode (Supervised asks, Auto allows), so every
++        # command goes through the approval request, not only the ones these patterns flag.
++        is_dangerous, pattern_key, description = True, "run a command", "run a command"
+     warnings = []
+     session_key = get_current_session_key()
+     if tirith_result["action"] in {"block", "warn"}:

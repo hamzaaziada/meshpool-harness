@@ -216,7 +216,9 @@ class Checkpoints:
 
     # ---------- undo ---------------------------------------------------------------------------------------------
     def revert_to_before(self, turn: int) -> dict:
-        """Put the folder back as it was before `turn`. Returns what changed on disk."""
+        """Undo the file changes the agent made in `turn` and every later turn. Only files those turns changed are
+        touched, and only while they still hold what the agent left: files the user (or another tool) created or
+        edited since stay as they are and are listed in "kept". Returns what changed on disk."""
         turns = self._turns()
         t = next((x for x in turns if x["n"] == turn), None)
         if not t:
@@ -224,20 +226,28 @@ class Checkpoints:
         target = self._load_manifest(t["before"])
         now_id = self.snapshot()
         now = self._load_manifest(now_id) if now_id else {}
-        restored, deleted = [], []
-        for path, sha in target.items():
-            if now.get(path) != sha:
-                p = self.root / path
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(self._get(sha))
-                restored.append(path)
-        for path in now:
-            if path not in target:
+        agent_left: dict = {}                     # path -> content sha the agent's last change left (None: deleted)
+        for x in sorted((x for x in turns if x["n"] >= turn and x.get("after")), key=lambda x: x["n"]):
+            after = self._load_manifest(x["after"])
+            for ch in x.get("changed") or []:
+                agent_left[ch["path"]] = after.get(ch["path"])
+        restored, deleted, kept = [], [], []
+        for path, left in sorted(agent_left.items()):
+            if now.get(path) != left:             # changed after the agent: not ours to undo
+                kept.append(path)
+                continue
+            p = self.root / path
+            if path in target:
+                if now.get(path) != target[path]:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(self._get(target[path]))
+                    restored.append(path)
+            elif path in now:
                 try:
-                    (self.root / path).unlink()
+                    p.unlink()
                     deleted.append(path)
                 except OSError:
-                    pass
+                    kept.append(path)
         self._last.clear()
         self._save_turns([x for x in turns if x["n"] < turn])
-        return {"restored": restored, "deleted": deleted, "message_index": t.get("message_index")}
+        return {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}

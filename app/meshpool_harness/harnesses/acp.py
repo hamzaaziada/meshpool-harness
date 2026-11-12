@@ -149,6 +149,14 @@ def office_server(roots: list[str]) -> dict:
             "env": [{"name": k, "value": v} for k, v in env.items()]}
 
 
+def _auth_failure(text: str) -> bool:
+    """A short reply that is only an authentication error from the model endpoint (HTTP 401/403)."""
+    import re
+    s = (text or "").strip()
+    return len(s) < 400 and bool(re.search(r"\b40[13]\b", s)) and bool(
+        re.search(r"(?i)api.?key|bad key|unauthori[sz]ed|authenticat|forbidden|invalid.{0,20}key", s))
+
+
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
 
@@ -529,6 +537,10 @@ class ACPAgent:
             final = "".join(self._text)
             self._flush_text()
             stop = r.get("stopReason", "end_turn")
+            if _auth_failure(final):
+                # Some harnesses (Hermes) reply with the raw HTTP error as plain text. Say what to do instead.
+                self._emit({"type": "error", "text": "The endpoint rejected the API key. Check it in Settings, "
+                                                     "Endpoint and key, then send your message again."})
             if stop == "cancelled" or self._stop:
                 self._emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
             elif stop in ("max_tokens", "max_turn_requests"):

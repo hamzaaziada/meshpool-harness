@@ -615,7 +615,9 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 act = b.get("action", "add")
                 if act == "pick":
-                    from meshpool_harness.ui.desktop import choose_folder
+                    from meshpool_harness.ui.desktop import choose_folder, has_folder_picker
+                    if not has_folder_picker():          # the UI asks the user to type or paste the path instead
+                        return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
                     path = choose_folder(b.get("start", ""))
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
@@ -626,7 +628,8 @@ class Handler(BaseHTTPRequestHandler):
                     W.add_project(home, "Home")
                     return self._send(200, {"projects": W.projects(), "picked": home})
                 if act == "add":
-                    W.add_project(b.get("path", ""), b.get("name", ""))
+                    added = W.add_project(b.get("path", ""), b.get("name", ""))
+                    return self._send(200, {"projects": W.projects(), "picked": added["path"]})
                 elif act == "remove":
                     W.remove_project(b.get("path", ""))
                 elif act == "rename":

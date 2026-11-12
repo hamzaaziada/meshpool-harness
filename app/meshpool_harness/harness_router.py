@@ -8,6 +8,7 @@ so routing is instant, free and repeatable.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from meshpool_harness import config as C
@@ -43,9 +44,11 @@ def route(text: str, kind: str = "cowork") -> dict:
     scores = dict((t["categories"].get(cat) or t["categories"].get("general") or {}).get("scores") or {})
     for hid, bonus in ((t.get("mode_bonus") or {}).get(kind) or {}).items():
         scores[hid] = scores.get(hid, 0) + bonus
+    # A subscription spends the user's own Claude or ChatGPT plan: Auto picks one only after the user allowed it.
+    subs_ok = (C.read().get("MH_AUTO_SUBSCRIPTIONS") or os.environ.get("MH_AUTO_SUBSCRIPTIONS", "0")) == "1"
     ready = {h["id"]: h for h in HR.load_all()
              if h.get("available") and not h.get("error") and h.get("type") != "auto"
-             and (not h.get("subscription") or h.get("signed_in"))}
+             and (not h.get("subscription") or (subs_ok and h.get("signed_in")))}
     ranking = sorted(((s, hid) for hid, s in scores.items() if hid in ready), reverse=True)
     if not ranking:
         hid = HR.default_for(kind if kind in HR.MODES else "cowork")
