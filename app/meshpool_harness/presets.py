@@ -34,6 +34,8 @@ PRESETS = {
 #   MH_KEEPWARM_S=<s>     while tools run longer than <s> seconds, re-send the cached prefix with max_tokens=1 every
 #                         <s> seconds so the serving side keeps the prompt cache (harness-lab/findings/001).
 #                         MH_KEEPWARM_MAX caps pings per tool batch (default 20). Usage gains keepwarm_calls.
+#   MH_PARALLEL_MANY=1    bash_many runs its commands at the same time when every one is read-only (tools.read_only:
+#                         a conservative allow-list; any write, redirect or unknown program keeps the batch in order).
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 

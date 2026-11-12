@@ -136,7 +136,8 @@ class _KeepWarm:
     max_tokens=1 every <seconds>, so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
     cache misses come after gaps over 40 s between calls (harness-lab/findings/001). A ping reads the prefix at the
     cached price (about 50 times cheaper than a miss). The prefix ends before the latest assistant message, so the
-    request stays valid (no tool call without its result) and is an exact prefix of the next real request."""
+    request stays valid (no tool call without its result) and is an exact prefix of the next real request. It keeps the
+    real task_id so it carries the same prompt_cache_key and session header (same backend); role="keepwarm" marks it."""
 
     def __init__(self, client, model, messages, tools, ctx, period):
         import threading
@@ -153,7 +154,7 @@ class _KeepWarm:
             n += 1
             try:
                 r = self.client.chat(model=self.model, messages=self.prefix, tools=self.tools, max_tokens=1,
-                                     task_id=self.ctx.get("task_id", "") + "-kw", job_id=self.ctx.get("job_id", ""),
+                                     task_id=self.ctx.get("task_id", ""), job_id=self.ctx.get("job_id", ""),
                                      role="keepwarm", profile=self.ctx.get("profile", "deepseek"))
             except Exception:                        # noqa: BLE001 - a failed ping must never touch the run
                 return

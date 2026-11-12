@@ -18,6 +18,50 @@ def _bash():
 
 MAX_TOOL_CHARS = 8000
 HEAD, TAIL = 3000, 3000
+_CAP_LOCK = threading.Lock()
+
+_RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg", "wc", "file", "stat", "which",
+             "type", "echo", "printf", "pwd", "env", "printenv", "uname", "du", "df", "tree", "nl", "sort", "uniq",
+             "cut", "tr", "diff", "cmp", "md5sum", "sha256sum", "sha1sum", "xxd", "od", "hexdump", "strings", "jq",
+             "readlink", "realpath", "basename", "dirname", "id", "whoami", "date", "ps", "true", "column", "less",
+             "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
+             "rustc", "ldd", "nproc", "free", "hostname", "lsb_release", "getconf", "test", "["}
+_RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-parse", "branch", "remote", "describe",
+           "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
+
+
+def read_only(cmd: str) -> bool:
+    """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
+    import re
+    import shlex
+    s = re.sub(r"\d?>\s*/dev/null|2>&1|>&2", " ", cmd)
+    if re.search(r"[>`]|\$\(|<<|\bxargs\b|-exec\b|-delete\b|\bsudo\b", s):
+        return False
+    for seg in re.split(r"\|\|?|&&|;|\n", s):
+        try:
+            w = shlex.split(seg)
+        except ValueError:
+            return False
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):             # FOO=bar cmd
+            w = w[1:]
+        if not w:
+            continue
+        prog, rest = w[0].rsplit("/", 1)[-1], w[1:]
+        if prog not in _RO_PROGS:
+            return False
+        if prog == "sed" and any(a.startswith("-i") or a == "--in-place" for a in rest):
+            return False
+        if prog == "awk" and "system" in seg:
+            return False
+        if prog == "git" and not (rest and rest[0] in _RO_GIT):
+            return False
+        if prog in ("pip", "pip3") and not (rest and rest[0] in ("show", "list", "freeze", "--version", "-V")):
+            return False
+        if prog in ("python", "python3", "node", "npm", "cargo", "go", "java", "gcc", "rustc") and not (
+                rest and (rest[0] in ("--version", "-V", "version", "-version")
+                          or rest[:3] in (["-m", "pip", "show"], ["-m", "pip", "list"]))):
+            return False
+    return True
 
 
 def _fn(name, desc, props, req):
@@ -147,8 +191,10 @@ class Workspace:
         text = clean(text)
         if len(text) <= MAX_TOOL_CHARS:
             return text
-        self._n += 1
-        f = self.run_dir / f"out_{self._n:03d}_{label}.txt"
+        with _CAP_LOCK:                          # bash_many may run commands in threads (MH_PARALLEL_MANY)
+            self._n += 1
+            n = self._n
+        f = self.run_dir / f"out_{n:03d}_{label}.txt"
         f.write_text(text)
         return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
                 + text[-TAIL:])
@@ -404,17 +450,25 @@ class Workspace:
         return self._run(command, timeout_s, "bash")[0]
 
     def bash_many(self, commands, timeout_s=None):
-        """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style)."""
-        parts = []
-        for cmd in [c for c in commands if isinstance(c, str) and c.strip()][:8]:
+        """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style).
+        MH_PARALLEL_MANY=1: when every command is read-only (see read_only), run them at the same time; the turn then
+        takes as long as the slowest command instead of the sum. Output order and format are unchanged."""
+        cmds = [c for c in commands if isinstance(c, str) and c.strip()][:8]
+
+        def one(cmd):
             if self.should_stop and self.should_stop():
-                parts.append(f"$ {cmd}\n[not run: stopped by the user]")
-                continue
+                return f"$ {cmd}\n[not run: stopped by the user]"
             out, code = self._run(cmd, timeout_s, "bash")
             body = out.split("\n", 1)[1] if out.startswith("[exit ") else out
             if len(body) > 2500:
                 body = body[:1200] + f"\n... [{len(body) - 2400} chars cut; run it alone for the full output] ...\n" + body[-1200:]
-            parts.append(f"$ {cmd}\n[exit {code}]\n{body}")
+            return f"$ {cmd}\n[exit {code}]\n{body}"
+        if os.environ.get("MH_PARALLEL_MANY") == "1" and len(cmds) > 1 and all(read_only(c) for c in cmds):
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(4, len(cmds))) as ex:
+                parts = list(ex.map(one, cmds))
+        else:
+            parts = [one(c) for c in cmds]
         return "\n\n".join(parts) or "no commands given"
 
     def run_tests(self, command, timeout_s=None):
