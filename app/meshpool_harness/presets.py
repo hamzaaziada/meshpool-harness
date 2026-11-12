@@ -30,6 +30,13 @@ PRESETS = {
            "MH_BROWSER_DERIVE": "1"},            # one line of working before acting on a value taken from the page
 }
 
+# Experimental flags, off unless set, not in any preset until a measured run keeps them (harness-lab/LOG.md):
+#   MH_KEEPWARM_S=<s>     while tools run longer than <s> seconds, re-send the cached prefix with max_tokens=1 every
+#                         <s> seconds so the serving side keeps the prompt cache (harness-lab/findings/001).
+#                         MH_KEEPWARM_MAX caps pings per tool batch (default 20). Usage gains keepwarm_calls.
+# Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
+# previous prompt was cached).
+
 
 def apply(name: str | None = None) -> dict:
     name = name or os.environ.get("MH_PRESET")

@@ -131,6 +131,46 @@ def _endstate_report(task_text: str, ws) -> str:
     return "\n\n".join(parts)
 
 
+class _KeepWarm:
+    """MH_KEEPWARM_S=<seconds> (default off). While tools run longer than that, re-send the conversation so far with
+    max_tokens=1 every <seconds>, so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
+    cache misses come after gaps over 40 s between calls (harness-lab/findings/001). A ping reads the prefix at the
+    cached price (about 50 times cheaper than a miss). The prefix ends before the latest assistant message, so the
+    request stays valid (no tool call without its result) and is an exact prefix of the next real request."""
+
+    def __init__(self, client, model, messages, tools, ctx, period):
+        import threading
+        self.client, self.model, self.tools, self.ctx, self.period = client, model, tools, ctx, period
+        self.prefix = [dict(m) for m in messages[:-1]]
+        self.usage = {"keepwarm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
+        self.stop = threading.Event()
+        self.th = threading.Thread(target=self._loop, daemon=True)
+        self.th.start()
+
+    def _loop(self):
+        n = 0
+        while not self.stop.wait(self.period) and n < int(os.environ.get("MH_KEEPWARM_MAX", "20")):
+            n += 1
+            try:
+                r = self.client.chat(model=self.model, messages=self.prefix, tools=self.tools, max_tokens=1,
+                                     task_id=self.ctx.get("task_id", "") + "-kw", job_id=self.ctx.get("job_id", ""),
+                                     role="keepwarm", profile=self.ctx.get("profile", "deepseek"))
+            except Exception:                        # noqa: BLE001 - a failed ping must never touch the run
+                return
+            u = (r or {}).get("usage") or {}
+            self.usage["keepwarm_calls"] += 1
+            self.usage["prompt_tokens"] += u.get("prompt_tokens", 0)
+            self.usage["completion_tokens"] += u.get("completion_tokens", 0)
+            self.usage["cached_tokens"] += ((u.get("prompt_tokens_details") or {}).get("cached_tokens")
+                                            or u.get("prompt_cache_hit_tokens") or 0)
+
+    def finish(self, usage: dict):
+        self.stop.set()
+        self.th.join(timeout=1)
+        for k, v in self.usage.items():
+            usage[k] = usage.get(k, 0) + v
+
+
 def run(*a, **kw):
     """Full-history archive (Meta-Harness / Harness²): every run's transcript is saved next to its workspace so an
     offline optimizer can grep raw traces instead of summaries. Local disk only; no tokens."""
@@ -141,9 +181,9 @@ def run(*a, **kw):
         res = _run(*a, _box=box, **kw)
     finally:
         try:                                     # where the time goes: model calls vs tools (MH_TIMING_LOG)
-            if res is not None and os.environ.get("MH_TIMING", "1") == "1":
+            if res is not None and os.environ.get("MH_TIMING_LOG"):   # opt-in: an embedding app gets no stray files
                 ctx = kw.get("ctx") or {}
-                path = Path(os.environ.get("MH_TIMING_LOG") or Path(__file__).resolve().parents[2] / "timing.jsonl")
+                path = Path(os.environ["MH_TIMING_LOG"])
                 with open(path, "a") as f:
                     f.write(json.dumps({"task_id": ctx.get("task_id", ""), "profile": os.environ.get("MH_HARNESS_PROFILE", "v1"),
                                         "turns": res.turns, "wall_s": round(time.time() - t0, 1),
@@ -186,6 +226,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if not caps.max_seconds and _os.environ.get("MH_MAX_SECONDS"):
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
     t_start = time.time()
+    last_prompt = 0
     for turn in range(1, caps.max_turns + 1):
         res.turns = turn
         if caps.max_seconds and time.time() - t_start > caps.max_seconds:
@@ -208,6 +249,11 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         res.usage["completion_tokens"] += u.get("completion_tokens", 0)
         _cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
         res.usage["cached_tokens"] = res.usage.get("cached_tokens", 0) + _cached
+        _prev = last_prompt                                # a full miss: under half of the last prompt was cached
+        if _prev and _cached < 0.5 * _prev:
+            res.usage["full_miss_calls"] = res.usage.get("full_miss_calls", 0) + 1
+            res.usage["full_miss_tokens"] = res.usage.get("full_miss_tokens", 0) + u.get("prompt_tokens", 0) - _cached
+        last_prompt = u.get("prompt_tokens", 0)
         _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
         if _budget:
             _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio
@@ -241,90 +287,96 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         injected = [nag] if nag else []
         _tt = time.time()
         turn_failed = False
-        for c in calls:
-            name = c.get("function", {}).get("name", "")
-            raw = c.get("function", {}).get("arguments", "{}")
-            out = None
-            try:
-                args = validate(name, raw, tool_names)
-                if (name == "finish" and os.environ.get("MH_TODO") == "1" and res.usage.get("todo_refusals", 0) < 2
-                        and [t for t in getattr(ws, "todos", []) if not t["done"]]):
-                    res.usage["todo_refusals"] = res.usage.get("todo_refusals", 0) + 1
-                    left = [t["text"] for t in ws.todos if not t["done"]]
-                    messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content":
-                                     "finish refused: these todo items are not done:\n- " + "\n- ".join(left)
-                                     + "\nComplete them (or mark an item done if it is), then finish."})
-                    continue
-                if name == "finish" and turn_failed:
-                    out = ("finish not accepted: an action earlier in this same turn failed. Check the page or output, "
-                           "then finish.")
-                    messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": out})
-                    continue
-                if name == "finish" and os.environ.get("MH_REVIEW") == "1" and not res.usage.get("review_done"):
-                    res.usage["review_done"] = 1
-                    rv = _finish_review(task_text, args.get("answer", ""), messages, ws, client, model, ctx)
-                    if rv:
-                        log_failure(ctx, "review_concern", True, rv[:200])
-                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": rv})
+        _kw_s = float(os.environ.get("MH_KEEPWARM_S", "0") or 0)
+        warm = _KeepWarm(client, model, messages, tools, ctx, _kw_s) if _kw_s > 0 else None
+        try:
+            for c in calls:
+                name = c.get("function", {}).get("name", "")
+                raw = c.get("function", {}).get("arguments", "{}")
+                out = None
+                try:
+                    args = validate(name, raw, tool_names)
+                    if (name == "finish" and os.environ.get("MH_TODO") == "1" and res.usage.get("todo_refusals", 0) < 2
+                            and [t for t in getattr(ws, "todos", []) if not t["done"]]):
+                        res.usage["todo_refusals"] = res.usage.get("todo_refusals", 0) + 1
+                        left = [t["text"] for t in ws.todos if not t["done"]]
+                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content":
+                                         "finish refused: these todo items are not done:\n- " + "\n- ".join(left)
+                                         + "\nComplete them (or mark an item done if it is), then finish."})
                         continue
-                if name == "finish" and os.environ.get("MH_ENDSTATE_CHECK") == "1" and not res.usage.get("endstate_shown"):
-                    res.usage["endstate_shown"] = 1
-                    rep = _endstate_report(task_text, ws)
-                    if rep:
-                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
-                                         "content": "End-state check (shown once; finish is accepted next time):\n"
-                                                    + rep + "\nIf this matches what the task asks for, call finish "
-                                                            "again. If not, fix it first."})
+                    if name == "finish" and turn_failed:
+                        out = ("finish not accepted: an action earlier in this same turn failed. Check the page or output, "
+                               "then finish.")
+                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": out})
                         continue
-                if name == "finish":
-                    g = guards.check_finish(args.get("evidence", []))
-                    if not g:
-                        g = guards.check_deliverables(task_text)
-                    if not g and finish_check:
-                        g = finish_check(args["answer"], args.get("artifacts", []), ws)
+                    if name == "finish" and os.environ.get("MH_REVIEW") == "1" and not res.usage.get("review_done"):
+                        res.usage["review_done"] = 1
+                        rv = _finish_review(task_text, args.get("answer", ""), messages, ws, client, model, ctx)
+                        if rv:
+                            log_failure(ctx, "review_concern", True, rv[:200])
+                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": rv})
+                            continue
+                    if name == "finish" and os.environ.get("MH_ENDSTATE_CHECK") == "1" and not res.usage.get("endstate_shown"):
+                        res.usage["endstate_shown"] = 1
+                        rep = _endstate_report(task_text, ws)
+                        if rep:
+                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
+                                             "content": "End-state check (shown once; finish is accepted next time):\n"
+                                                        + rep + "\nIf this matches what the task asks for, call finish "
+                                                                "again. If not, fix it first."})
+                            continue
+                    if name == "finish":
+                        g = guards.check_finish(args.get("evidence", []))
+                        if not g:
+                            g = guards.check_deliverables(task_text)
+                        if not g and finish_check:
+                            g = finish_check(args["answer"], args.get("artifacts", []), ws)
+                            if g:
+                                log_failure(ctx, "engine_check", True, g[:200])
                         if g:
-                            log_failure(ctx, "engine_check", True, g[:200])
-                    if g:
-                        out = g
-                    else:
-                        res.ok, res.answer = True, args["answer"]
-                        res.evidence, res.artifacts = args.get("evidence", []), args.get("artifacts", [])
-                        res.reason = "finished"
-                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": "accepted"})
+                            out = g
+                        else:
+                            res.ok, res.answer = True, args["answer"]
+                            res.evidence, res.artifacts = args.get("evidence", []), args.get("artifacts", [])
+                            res.reason = "finished"
+                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": "accepted"})
+                            return res
+                    elif name == "need_context":
+                        res.need_context = args
+                        res.reason = "need_context"
                         return res
-                elif name == "need_context":
-                    res.need_context = args
-                    res.reason = "need_context"
+                    elif (name in ("bash", "run_tests", "grep", "glob") and require_check and ws.edits == 0
+                          and turn > EXPLORATION_LOCK and os.environ.get("MH_MODE") not in ("terminal", "light")
+                          and enabled("explore_lock")):
+                        out = (f"ERROR: exploration budget exhausted ({EXPLORATION_LOCK} turns without changing any file). "
+                               "Make your best edit now with edit/write_file (read_file is still available); commands "
+                               "unlock after the first edit.")
+                        log_failure(ctx, "exploration_lock", True, name)
+                    elif name in ("bash", "run_tests"):
+                        out, code = ws._run(args["command"], args.get("timeout_s"), "check" if name == "run_tests" else "bash")
+                        g = guards.after_command(args["command"], code, out)
+                        if g:
+                            injected.append(g)
+                        g = guards.near_duplicate(args["command"])
+                        if g:
+                            injected.append(g)
+                    else:
+                        out = getattr(ws, name)(**args)
+                except ToolError as e:
+                    out = f"ERROR: {e}"
+                    log_failure(ctx, "tool_format" if "argument" in str(e) or "JSON" in str(e) else "tool_error",
+                                True, str(e))
+                    if "stale edit" in str(e):
+                        log_failure(ctx, "stale_edit", True, str(e))
+                except RuntimeError as e:
+                    res.reason = str(e)
                     return res
-                elif (name in ("bash", "run_tests", "grep", "glob") and require_check and ws.edits == 0
-                      and turn > EXPLORATION_LOCK and os.environ.get("MH_MODE") not in ("terminal", "light")
-                      and enabled("explore_lock")):
-                    out = (f"ERROR: exploration budget exhausted ({EXPLORATION_LOCK} turns without changing any file). "
-                           "Make your best edit now with edit/write_file (read_file is still available); commands "
-                           "unlock after the first edit.")
-                    log_failure(ctx, "exploration_lock", True, name)
-                elif name in ("bash", "run_tests"):
-                    out, code = ws._run(args["command"], args.get("timeout_s"), "check" if name == "run_tests" else "bash")
-                    g = guards.after_command(args["command"], code, out)
-                    if g:
-                        injected.append(g)
-                    g = guards.near_duplicate(args["command"])
-                    if g:
-                        injected.append(g)
-                else:
-                    out = getattr(ws, name)(**args)
-            except ToolError as e:
-                out = f"ERROR: {e}"
-                log_failure(ctx, "tool_format" if "argument" in str(e) or "JSON" in str(e) else "tool_error",
-                            True, str(e))
-                if "stale edit" in str(e):
-                    log_failure(ctx, "stale_edit", True, str(e))
-            except RuntimeError as e:
-                res.reason = str(e)
-                return res
-            messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": str(out)})
-            if str(out).startswith("ERROR") or "batch STOPPED" in str(out) or "\nERROR:" in str(out):
-                turn_failed = True
+                messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": str(out)})
+                if str(out).startswith("ERROR") or "batch STOPPED" in str(out) or "\nERROR:" in str(out):
+                    turn_failed = True
+        finally:
+            if warm:
+                warm.finish(res.usage)
         res.usage["tool_s"] = res.usage.get("tool_s", 0.0) + time.time() - _tt
         g = guards.progress(turn, caps.max_turns, ws.edits, require_check)
         if g:

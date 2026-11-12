@@ -1,0 +1,40 @@
+{"r":"The login test is failing after the last merge, can you fix it?","files":[],"wd":"repo","gold":["code"]}
+{"r":"Make me a 12 slide deck for the board on our Q3 results","files":["q3.xlsx"],"gold":["slides"]}
+{"r":"Build a three-statement financial model for a SaaS startup with 5 years of projections","files":[],"gold":["sheets"]}
+{"r":"What are the main themes in these customer interviews?","files":["int1.docx","int2.docx"],"gold":["data"]}
+{"r":"Analyze this CSV of sales and build a deck with the key findings","files":["sales.csv"],"gold":["data","slides"]}
+{"r":"Is there a statistically significant difference in conversion between variant A and B?","files":["ab.csv"],"gold":["data"]}
+{"r":"Create an Excel tracker for our hiring pipeline with status, owner and dates","files":[],"gold":["sheets"]}
+{"r":"Refactor the payment module to remove the duplicated retry logic","files":[],"wd":"repo","gold":["code"]}
+{"r":"Turn this survey data into a summary spreadsheet with charts by region","files":["survey.csv"],"gold":["data","sheets"]}
+{"r":"pytest shows ImportError: cannot import name 'parse_date' from utils","files":[],"wd":"repo","gold":["code"]}
+{"r":"I need a pitch deck for investors, 10 slides, about our climate fintech","files":[],"gold":["slides"]}
+{"r":"Write a bash script that backs up the postgres database nightly","files":[],"gold":["code"]}
+{"r":"Summarize the survey responses and tell me what people complain about most","files":["responses.csv"],"gold":["data"]}
+{"r":"Update the budget workbook so Q4 uses the new headcount numbers","files":["budget.xlsx"],"gold":["sheets"]}
+{"r":"Why did churn go up in March? Here's the export","files":["customers.csv"],"gold":["data"]}
+{"r":"Convert these meeting notes into a short presentation for the leadership offsite","files":["notes.md"],"gold":["slides"]}
+{"r":"Our CI build is broken on the type check step, help","files":[],"wd":"repo","gold":["code"]}
+{"r":"Make a DCF valuation in Excel for a company with these assumptions: 8% WACC, 3% terminal growth","files":[],"gold":["sheets"]}
+{"r":"Plot monthly revenue by product line and explain the trend","files":["rev.csv"],"gold":["data"]}
+{"r":"Code the open-ended answers into themes using our codebook and count them","files":["answers.csv","codebook.md"],"gold":["data"]}
+{"r":"Fix the bug where the CSV parser drops the last row","files":["parser.py"],"wd":"repo","gold":["code"]}
+{"r":"Build a deck and a matching Excel model for the expansion business case","files":[],"gold":["sheets","slides"]}
+{"r":"Run a regression of price on square footage and neighborhood","files":["homes.csv"],"gold":["data"]}
+{"r":"Create a project status presentation from this tracker","files":["tracker.xlsx"],"gold":["slides"]}
+{"r":"Implement pagination for the /orders endpoint and add tests","files":[],"wd":"repo","gold":["code"]}
+{"r":"hey can you help me with something","files":[],"gold":["general"]}
+{"r":"Write me a cover letter for a product manager role","files":[],"gold":["general"]}
+{"r":"Make a cap table for our seed round with 3 investors and an option pool","files":[],"gold":["sheets"]}
+{"r":"Compare NPS across customer segments and flag anything unusual","files":["nps.csv"],"gold":["data"]}
+{"r":"Put together slides summarizing the interview findings","files":["t1.txt","t2.txt","t3.txt"],"gold":["data","slides"]}
+{"r":"Install the dependencies and get the dev server running","files":[],"wd":"repo","gold":["code"]}
+{"r":"Read this Excel file with pandas and fix the script that crashes on empty sheets","files":["load.py"],"wd":"repo","gold":["code"]}
+{"r":"Which products have the highest return rate? Give me a table","files":["returns.csv"],"gold":["data"]}
+{"r":"Draft an email to the team about the new office hours","files":[],"gold":["general"]}
+{"r":"Make a Gantt-style timeline in a spreadsheet for the website relaunch","files":[],"gold":["sheets"]}
+{"r":"Clean up this messy dataset: dedupe, fix dates, standardise country names","files":["raw.csv"],"gold":["data"]}
+{"r":"Prepare a QBR deck for Acme using the usage data","files":["usage.csv"],"gold":["data","slides"]}
+{"r":"Add a unit test for the discount calculation and make sure it passes","files":[],"wd":"repo","gold":["code"]}
+{"r":"What does this spreadsheet tell us about regional margins?","files":["margins.xlsx"],"gold":["data"]}
+{"r":"Make a one-page dashboard in Excel showing weekly KPIs from this csv","files":["kpis.csv"],"gold":["sheets"]}
