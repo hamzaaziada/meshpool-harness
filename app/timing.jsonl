@@ -13,3 +13,8 @@
 {"task_id": "t", "profile": "v1", "turns": 9, "wall_s": 0.7, "model_s": 0.0, "tool_s": 0.7, "model_calls": 9, "reason": "finished"}
 {"task_id": "t", "profile": "v1", "turns": 5, "wall_s": 1.8, "model_s": 0.0, "tool_s": 1.5, "model_calls": 5, "reason": "aborted: command failed 5 times identically: python -m pytest -q tests"}
 {"task_id": "t", "profile": "v1", "turns": 6, "wall_s": 0.7, "model_s": 0.0, "tool_s": 0.7, "model_calls": 6, "reason": "finished"}
+{"task_id": "t", "profile": "v1", "turns": 4, "wall_s": 0.3, "model_s": 0.0, "tool_s": 0.3, "model_calls": 4, "reason": "finished"}
+{"task_id": "t", "profile": "v1", "turns": 5, "wall_s": 0.3, "model_s": 0.0, "tool_s": 0.3, "model_calls": 5, "reason": "finished"}
+{"task_id": "t", "profile": "v1", "turns": 9, "wall_s": 0.7, "model_s": 0.0, "tool_s": 0.6, "model_calls": 9, "reason": "finished"}
+{"task_id": "t", "profile": "v1", "turns": 5, "wall_s": 1.6, "model_s": 0.0, "tool_s": 1.3, "model_calls": 5, "reason": "aborted: command failed 5 times identically: python -m pytest -q tests"}
+{"task_id": "t", "profile": "v1", "turns": 6, "wall_s": 0.7, "model_s": 0.0, "tool_s": 0.7, "model_calls": 6, "reason": "finished"}

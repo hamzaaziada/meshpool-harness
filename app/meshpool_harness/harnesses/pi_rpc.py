@@ -39,6 +39,23 @@ LABEL = {"read": "Read", "write": "Wrote", "edit": "Edited", "bash": "Ran", "pow
          "find": "Listed", "ls": "Listed", "tool_search": "Found tools", "codemode": "Ran a script"}
 
 
+
+def _kill_tree(proc) -> None:
+    """End a harness process and everything it started (commands, MCP servers)."""
+    if not proc:
+        return
+    try:
+        import psutil
+        root = psutil.Process(proc.pid)
+        kids = root.children(recursive=True)
+    except Exception:  # noqa: BLE001
+        kids = []
+    for k in kids:
+        try:
+            k.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
 class PiError(Exception):
     pass
 
@@ -535,6 +552,7 @@ class PiAgent:
         p = self._p
         if not p:
             return
+        _kill_tree(p)                                 # commands it started must not outlive the thread
         try:
             p.stdin.close()
         except Exception:  # noqa: BLE001
@@ -549,6 +567,8 @@ class PiAgent:
                 pass
 
     def save(self):
+        if getattr(self, "deleted", False):           # the user deleted this thread; never bring it back
+            return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             (self.dir / "session.json").write_text(json.dumps({
