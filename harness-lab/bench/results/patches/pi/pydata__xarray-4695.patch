@@ -1,0 +1,48 @@
+diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py
+index 32b24ef1..7b98c9aa 100644
+--- a/xarray/core/dataarray.py
++++ b/xarray/core/dataarray.py
+@@ -196,7 +196,7 @@ class _LocIndexer:
+             # expand the indexer so we can handle Ellipsis
+             labels = indexing.expanded_indexer(key, self.data_array.ndim)
+             key = dict(zip(self.data_array.dims, labels))
+-        return self.data_array.sel(**key)
++        return self.data_array.sel(indexers=key)
+ 
+     def __setitem__(self, key, value) -> None:
+         if not utils.is_dict_like(key):
+diff --git a/xarray/core/dataset.py b/xarray/core/dataset.py
+index dbac288c..8e530bf8 100644
+--- a/xarray/core/dataset.py
++++ b/xarray/core/dataset.py
+@@ -1403,7 +1403,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
+         Indexing with a list of names will return a new ``Dataset`` object.
+         """
+         if utils.is_dict_like(key):
+-            return self.isel(**cast(Mapping, key))
++            return self.isel(indexers=cast(Mapping, key))
+ 
+         if hashable(key):
+             return self._construct_dataarray(key)
+diff --git a/xarray/tests/test_dataarray.py b/xarray/tests/test_dataarray.py
+index a8c62a2c..7b0f2756 100644
+--- a/xarray/tests/test_dataarray.py
++++ b/xarray/tests/test_dataarray.py
+@@ -1090,6 +1090,17 @@ class TestDataArray:
+         assert_identical(da[:3, :4], da.loc[["a", "b", "c"], np.arange(4)])
+         assert_identical(da[:, :4], da.loc[:, self.ds["y"] < 4])
+ 
++    def test_loc_dim_name_collision(self):
++        # regression test for GH4695: dimensions named like .sel keyword
++        # arguments (e.g. "method") must still work with .loc
++        array = DataArray(
++            np.zeros((2, 2)),
++            dims=["dim1", "method"],
++            coords={"dim1": ["x", "y"], "method": ["a", "b"]},
++        )
++        expected = array[0, 0]
++        assert_identical(expected, array.loc[{"dim1": "x", "method": "a"}])
++
+     def test_loc_datetime64_value(self):
+         # regression test for https://github.com/pydata/xarray/issues/4283
+         t = np.array(["2017-09-05T12", "2017-09-05T15"], dtype="datetime64[ns]")

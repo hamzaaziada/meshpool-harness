@@ -1,0 +1,30 @@
+diff --git a/sympy/simplify/simplify.py b/sympy/simplify/simplify.py
+index c6b511f20..1593e32e3 100644
+--- a/sympy/simplify/simplify.py
++++ b/sympy/simplify/simplify.py
+@@ -251,7 +251,7 @@ def posify(eq):
+             eq[i] = e.subs(reps)
+         return f(eq), {r: s for s, r in reps.items()}
+ 
+-    reps = {s: Dummy(s.name, positive=True)
++    reps = {s: Dummy(s.name, positive=True, **s.assumptions0)
+                  for s in eq.free_symbols if s.is_positive is None}
+     eq = eq.subs(reps)
+     return eq, {r: s for s, r in reps.items()}
+diff --git a/sympy/simplify/tests/test_simplify.py b/sympy/simplify/tests/test_simplify.py
+index 5fe9352b9..a431c9253 100644
+--- a/sympy/simplify/tests/test_simplify.py
++++ b/sympy/simplify/tests/test_simplify.py
+@@ -511,6 +511,12 @@ def test_posify():
+     assert str(Sum(posify(1/x**n)[0], (n,1,3)).expand()) == \
+         'Sum(_x**(-n), (n, 1, 3))'
+ 
++    # issue 16373: assumptions other than positivity are preserved
++    x = Symbol('x', finite=True)
++    assert posify(x)[0].is_finite is True
++    x = Symbol('x', integer=True)
++    assert posify(x)[0].is_integer is True
++
+ 
+ def test_issue_4194():
+     # simplify should call cancel
