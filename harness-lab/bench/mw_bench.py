@@ -60,7 +60,8 @@ def task_text(utter, bport):
 
 def run_harness(text, wd, flags, bport, timeout):
     env = dict(os.environ, **flags, MH_BROWSER_PORT=str(bport), PYTHONPATH=str(APP), MESHPOOL_BASE_URL=BASE,
-               MESHPOOL_API_KEY="dummy", MH_MODEL=MODEL, MH_MAX_SECONDS=str(timeout - 20))
+               MESHPOOL_API_KEY="dummy", MH_MODEL=MODEL, MH_MAX_SECONDS=str(timeout - 20),
+               MH_FAILURES_LOG="off")
     code = ("import json,sys; from meshpool_harness import run_task; "
             "r = run_task(sys.stdin.read(), workdir=sys.argv[1], engine='browser', max_turns=25); "
             "print('@@' + json.dumps({k: r.get(k) for k in ('ok','reason','turns','usage','error')}, default=str))")
