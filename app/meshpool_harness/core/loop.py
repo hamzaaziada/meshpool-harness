@@ -131,6 +131,31 @@ def _endstate_report(task_text: str, ws) -> str:
     return "\n\n".join(parts)
 
 
+def _scope_report(ws) -> str | None:
+    """MH_SCOPE_CHECK=1: at the first finish, if the change spreads past a minimal fix (more than one non-test source
+    file, or more than 30 changed non-test lines), show the per-file diff size once and ask to drop what the task
+    does not need. Rule fixed in advance (harness-lab LOG cycle 5), not tuned on any task. None = nothing to show."""
+    from .guards import TEST_PATH
+    try:
+        out, _ = ws._run("git diff --numstat HEAD -- . ':!.run' ':!.junie' 2>/dev/null", 30, "bash", record=False)
+    except Exception:                                 # noqa: BLE001 - a report must never break a run
+        return None
+    rows = []
+    for line in str(out).splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or TEST_PATH.search(parts[2]):
+            continue
+        rows.append((parts[2], int(parts[0]) + int(parts[1])))
+    if len(rows) <= 1 and sum(n for _, n in rows) <= 30:
+        return None
+    lines = "\n".join(f"  {f}: {n} lines" for f, n in sorted(rows, key=lambda r: -r[1])[:10])
+    return ("Scope check (shown once; finish is accepted next time). Your change touches these non-test files:\n"
+            + lines + "\nHidden tests check the behaviour the task asks for, and every extra change is a chance to "
+            "break one. Keep the smallest fix that does what the task asks: revert edits it does not need (git "
+            "checkout -- <file> for a whole file), re-run your check, then finish. If every change is needed, finish "
+            "again.")
+
+
 class _KeepWarm:
     """MH_KEEPWARM_S=<seconds> (default off). While tools run longer than that, re-send the conversation so far with
     max_tokens=1 every <seconds>, so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
@@ -325,6 +350,14 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                              "content": "End-state check (shown once; finish is accepted next time):\n"
                                                         + rep + "\nIf this matches what the task asks for, call finish "
                                                                 "again. If not, fix it first."})
+                            continue
+                    if (name == "finish" and os.environ.get("MH_SCOPE_CHECK") == "1" and require_check
+                            and not res.usage.get("scope_shown")):
+                        res.usage["scope_shown"] = 1
+                        rep = _scope_report(ws)
+                        if rep:
+                            log_failure(ctx, "scope_check", True, rep[:200])
+                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": rep})
                             continue
                     if name == "finish":
                         g = guards.check_finish(args.get("evidence", []))

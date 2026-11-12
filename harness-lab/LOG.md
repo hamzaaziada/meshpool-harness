@@ -64,3 +64,14 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   failing check in the same turn gets the finish refused, and the model sees the failing output. Unit-tested.
 - Expected effect: one model call less per solved task, about 3% of calls on Verified and 5–10 s each.
 - Paid confirmation: bundle with the next sentinel A/B. Watch for new wrong finishes (none expected, given the guard).
+
+## 2026-11-12, cycle 5: scope check before finish (`MH_SCOPE_CHECK`, off by default)
+
+- Evidence: findings/003. Both v3 Verified misses added changes past the core fix, one of them in an unrelated file.
+- Change: once, at the first finish of a code task, if `git diff --numstat` shows more than one non-test file or more
+  than 30 non-test lines, the harness lists the size per file and asks the model to revert unneeded edits and
+  finish again. Test files are ignored. A git error shows nothing.
+- Offline evidence: `test_scope_check.py` (one-file fix: nothing shown; two files: shown once, test dir left out; off
+  by default).
+- Paid confirmation: Verified dev split, v4 against v4 plus this flag. Keep under the pre-registered rule, with no
+  new wrong finishes.
