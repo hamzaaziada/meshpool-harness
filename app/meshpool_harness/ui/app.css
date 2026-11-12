@@ -345,7 +345,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .ctx button:hover{background:var(--hover)}
 .ctx button.danger{color:var(--del)}
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide (QA: 250px at 1024) */
-@media (max-width:1280px) and (min-width:981px){.panel{width:min(var(--pw,460px),33vw)}.app:not(.noside):has(>.panel){--sw:220px}}
+@media (max-width:1280px) and (min-width:981px){.panel{width:min(var(--pw,460px),33vw)}.app:not(.noside):has(>.panel:not([hidden])){--sw:220px}}
 @media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow)}}
 @media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:268px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 10px 10px}}
 
