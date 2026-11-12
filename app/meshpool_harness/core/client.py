@@ -2,12 +2,45 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+WITHHELD = ("[output withheld: the API gateway rejected this command output, probably because of long hex, byte or "
+            "key-like strings. Re-run the command so it prints decoded values or a short summary instead.]")
+
+
+_HEXISH = None
+
+
+def _hex_score(text: str) -> float:
+    """Share of a text that looks like hex dumps, long hex runs or byte escapes (what the gateway's filter rejects)."""
+    global _HEXISH
+    if _HEXISH is None:
+        import re
+        _HEXISH = re.compile(r"(?:\b[0-9a-fA-F]{2}\b[ ]){6,}|[0-9a-fA-F]{16,}|(?:\\x[0-9a-fA-F]{2}){3,}")
+    if not text:
+        return 0.0
+    return sum(len(m.group(0)) for m in _HEXISH.finditer(text)) / len(text)
+
+
+def _withhold_latest_output(messages, limit=6) -> bool:
+    """Withhold one tool output after a content-tied rejection: the most hex-like output anywhere in the history
+    first (the trigger can be an old output; the filter is partly random), else the newest. At most `limit` per
+    conversation, so a rejection caused by something else still ends the run instead of erasing the history."""
+    if sum(1 for m in messages if m.get("content") == WITHHELD) >= limit:
+        return False
+    tools = [m for m in messages if m.get("role") == "tool" and m.get("content") != WITHHELD]
+    if not tools:
+        return False
+    worst = max(tools, key=lambda m: _hex_score(str(m.get("content") or "")))
+    target = worst if _hex_score(str(worst.get("content") or "")) > 0.05 else tools[-1]
+    target["content"] = WITHHELD
+    return True
 
 
 class LiveClient:
@@ -39,6 +72,7 @@ class LiveClient:
                 r = self.ledger.chat(model=model, messages=messages, profile=profile, task_id=task_id,
                                      role=role, job_id=job_id, max_tokens=max_tokens, temperature=temperature,
                                      extra=ex, retries=0)
+                self._n429 = 0                                    # a success resets the 429 backoff
                 _log_event(task_id, role, model, r)
                 return r
             except RuntimeError as e:
@@ -53,9 +87,19 @@ class LiveClient:
                 if "rejected as invalid" in msg and attempt < 4:   # gateway rejects valid requests at random
                     time.sleep(2 * attempt)                        # (GATEWAY_ISSUES #10): retry the same request
                     continue
+                if ("rejected as invalid" in msg and os.environ.get("MH_400_WITHHOLD") == "1"
+                        and _withhold_latest_output(messages)):
+                    # The rejection is tied to content (e.g. hex or byte strings in a command's output; GATEWAY_ISSUES
+                    # #12), so retrying the same request cannot pass. Withhold the newest tool output and tell the
+                    # model, instead of crashing the whole run.
+                    continue
                 if "HTTP 429" in msg:                       # meshpool team token limit: wait for the window to reset
                     import re as _re
                     wait = 65
+                    if os.environ.get("MH_429_BACKOFF") == "1":   # v4: "please slow down" 429s carry no reset time
+                        n429 = getattr(self, "_n429", 0) + 1
+                        self._n429 = n429                         # and clear in seconds: back off 3, 6, 12 ... 60 s
+                        wait = min(60, 3 * 2 ** (n429 - 1))
                     mt = _re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg)
                     if mt:
                         import calendar

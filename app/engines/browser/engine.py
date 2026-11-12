@@ -49,8 +49,23 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, max_turns: int 
         ctl.main(["start"])
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+    if os.environ.get("MH_BROWSER_PREFETCH", "1") == "1":     # saves the first "look at the page" model call
+        try:
+            snap = ctl.call("snapshot")
+            if snap.get("url") and not str(snap.get("url")).startswith("about:"):
+                task += ("\n\nCurrent page (already captured; numbers are valid until the page changes):\n"
+                         + ctl.render(snap))
+        except Exception:
+            pass
+    system = SYSTEM
+    if os.environ.get("MH_BROWSER_FINISH_SAME_TURN") == "1":    # saves the last model call on simple tasks
+        system += ("\nWhen you are sure an action completes the task, call finish in the same turn as that action "
+                   "(issue both tool calls together). If the action fails, the finish is not accepted.")
+    if os.environ.get("MH_BROWSER_DERIVE") == "1":              # fewer careless first actions on a prefetched page
+        system += ("\nBefore you type or choose a value that you work out from the page (a count, a date, an order, a "
+                   "sum, which item matches), write the working in one short line in your reply, then act.")
     r = run(task, client=client or LiveClient("browser"), model=model, profile=None, ws=ws,
-            ctx={"task_id": task_id, "model": model, "role": "worker"}, system_text=SYSTEM,
+            ctx={"task_id": task_id, "model": model, "role": "worker"}, system_text=system,
             caps=Caps(max_turns=max_turns), require_check=False)
     return {"ok": r.ok, "answer": r.answer, "evidence": r.evidence, "turns": r.turns, "reason": r.reason,
             "usage": r.usage, "artifacts": []}

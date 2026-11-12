@@ -83,6 +83,49 @@ class Guards:
             msgs.append("GUARD budget: 5 turns left. Make your best fix now, run the check, and finish.")
         return "\n".join(msgs) or None
 
+    def stall(self, turn: int) -> str | None:
+        """v3 loop breaker (MH_STALL=1): progress = a file change or a passing command not run before. After 12 turns
+        without progress, nudge once to change approach; again at 24. Never blocks anything."""
+        if os.environ.get("MH_STALL") != "1":
+            return None
+        seen = getattr(self, "_stall_seen", set())
+        cmds = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in seen]
+        for c in cmds:
+            seen.add(c["cmd"])
+        self._stall_seen = seen
+        edits = getattr(self.ws, "edits", 0)
+        if cmds or edits != getattr(self, "_stall_edits", 0) or not hasattr(self, "_stall_last"):
+            self._stall_last, self._stall_edits = turn, edits
+            return None
+        since = turn - self._stall_last
+        if since in (12, 24):
+            log_failure(self.ctx, "stall", True, f"{since} turns without progress")
+            return (f"GUARD stall: {since} turns without progress (no file changed, no new command succeeded). "
+                    "Your current approach is not converging. In one sentence, state a different hypothesis or a "
+                    "simpler route to the goal, then try it.")
+        return None
+
+    def repeat_calls(self, calls: list) -> str | None:
+        """v3 (MH_DOOM=1): 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
+        if os.environ.get("MH_DOOM") != "1" or not calls:
+            return None
+        hist = getattr(self, "_call_hist", [])
+        for c in calls:
+            f = c.get("function", {})
+            hist.append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        self._call_hist = hist[-12:]
+        h = self._call_hist
+        hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
+        for k in (2, 3):
+            if not hit and len(h) >= 3 * k and h[-k:] == h[-2 * k:-k] == h[-3 * k:-2 * k]:
+                hit = True
+        if hit and getattr(self, "_doom_turn", -10) < len(h) - 6:
+            self._doom_turn = len(h)
+            log_failure(self.ctx, "repeat_calls", True, h[-1][:120])
+            return ("GUARD loop: you are repeating the same tool calls and getting the same results. Stop and reconsider: "
+                    "use a different tool, different arguments, or a different approach.")
+        return None
+
     def near_duplicate(self, cmd: str) -> str | None:
         """Third near-identical search (same core pattern) gets a reminder instead of silent repetition."""
         if not enabled("repeat_search"):

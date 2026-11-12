@@ -66,7 +66,7 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
   - **Cowork** is a chat with a live progress panel and the files the task made.
   - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
 - **Harnesses (the agent behind a thread), switchable per thread:**
-  - **Meshpool Auto** picks the best harness for each task, based on benchmark results.
+  - **Meshpool Auto** picks the best harness for each task, based on benchmark results. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
   - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key and model list.
   - **Claude and ChatGPT** run on your own subscription.
 - **Web research without a browser.**

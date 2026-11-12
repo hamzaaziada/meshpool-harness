@@ -40,8 +40,13 @@ SAFE_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
             "mcp__meshpool_tools__calculate"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill"]
-BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "fetch_url", "web_search", "web_research",
-           "todo_write", "use_skill"]
+BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
+           "web_research", "todo_write", "use_skill"]
+# Harness v3 (benchmarked 2026-11-12, run C): bash_many, todo follow-through, loop and stall breakers, a turn-budget
+# note and an environment snapshot. MH_AGENT_V3=0 turns them off.
+V3 = os.environ.get("MH_AGENT_V3", "1") != "0"
+if not V3:
+    BUILTIN.remove("bash_many")
 WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
@@ -90,6 +95,14 @@ Rules
 - To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. For research, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler. Use Markdown code blocks for code."""
+
+V3_RULES = """
+
+Working efficiently
+- When you need several independent facts (file ranges, greps, versions, listings), get them in ONE bash_many call \
+instead of one command per step.
+- For any request with more than one step, list its concrete requirements and your steps with todo_write first, and \
+mark items completed as you go. Before you end your turn, every item should be completed, or say why it is not."""
 
 
 T.SCHEMAS["web_search"] = T._fn(
@@ -149,6 +162,8 @@ class Interrupted(Exception):
 def _summary(name: str, args: dict) -> str:
     if name == "bash":
         return args.get("command", "")
+    if name == "bash_many":
+        return " ; ".join(str(c) for c in args.get("commands") or [])[:400]
     if name in ("read_file", "write_file", "edit"):
         s = args.get("path", "")
         if name == "read_file" and (args.get("start") or args.get("end")):
@@ -174,6 +189,36 @@ def _summary(name: str, args: dict) -> str:
         return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
     s = json.dumps(args, ensure_ascii=False)
     return s if len(s) < 300 else s[:300] + "..."
+
+
+def _env_snapshot(root: Path) -> str:
+    """Harness v3: a short look at the project and the tools on this computer, so the first steps are not spent
+    finding them. Cross-platform, a few seconds at most."""
+    import shutil
+    import subprocess
+    lines = []
+    try:
+        names = sorted(p.name + ("/" if p.is_dir() else "") for p in root.iterdir() if not p.name.startswith(".git"))
+        lines.append("Project folder: " + ", ".join(names[:40]) + (f" (+{len(names) - 40} more)" if len(names) > 40 else ""))
+    except OSError:
+        pass
+    vers = []
+    for tool, arg in (("python3", "--version"), ("python", "--version"), ("node", "--version"), ("git", "--version"),
+                      ("go", "version"), ("cargo", "--version"), ("java", "-version"), ("docker", "--version")):
+        exe = shutil.which(tool)
+        if not exe or (tool == "python" and any(v.startswith("python3") for v in vers)):
+            continue
+        try:
+            r = subprocess.run([exe, arg], capture_output=True, text=True, timeout=3,
+                               creationflags=0x08000000 if os.name == "nt" else 0)
+            v = (r.stdout or r.stderr).strip().splitlines()
+            if v and r.returncode == 0:
+                vers.append(f"{tool}: {v[0][:80]}")
+        except Exception:  # noqa: BLE001
+            pass
+    if vers:
+        lines.append("Tools: " + "; ".join(vers))
+    return "\n".join(lines)
 
 
 def _html_to_text(s: str) -> str:
@@ -247,6 +292,8 @@ class Agent:
             ("cmd.exe (no bash found: write Windows commands)" if os.name == "nt" else "sh")
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
+        if V3:
+            text += V3_RULES
         for name in PROJECT_FILES:
             p = self.root / name
             if p.is_file():
@@ -328,8 +375,14 @@ class Agent:
                    "plan": self.plan})
         turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         final = ""
+        self._todo_touched = False
+        g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "last": 0, "todo_nudged": False}
+        if V3 and len(self.messages) <= 2 and not self.plan:
+            snap = _env_snapshot(self.root)
+            if snap and isinstance(self.messages[-1].get("content"), str):
+                self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
-            for _ in range(self.max_steps):
+            for step in range(self.max_steps):
                 self._check_stop()
                 self._take_inbox()
                 self._maybe_compact()
@@ -345,6 +398,14 @@ class Agent:
                     final = content
                     if self._inbox:                 # the user added something while this reply was written
                         continue
+                    left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
+                    if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
+                        g["todo_nudged"] = True     # once per request: finish the list, or say why not
+                        self.messages.append({"role": "user", "content": (
+                            "[Meshpool] These items on your todo list are not completed:\n- " + "\n- ".join(left[:12])
+                            + "\nComplete them now, or mark them completed if they are done. If one is not needed or "
+                            "you need the user's answer, say so briefly and end your turn.")})
+                        continue
                     break
                 shots = []
                 for c in calls:
@@ -356,6 +417,10 @@ class Agent:
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)
+                if V3:
+                    note = self._v3_notes(step, calls, g)
+                    if note:
+                        self.messages.append({"role": "user", "content": "[Meshpool] " + note})
             else:
                 self.emit({"type": "error", "text": f"Stopped after {self.max_steps} steps in one turn. "
                                                     "Send a message to continue."})
@@ -370,6 +435,35 @@ class Agent:
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
             self.save()
         return final
+
+    def _v3_notes(self, step: int, calls: list, g: dict) -> str:
+        """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the
+        step budget. They add a short note for the model; they never block anything."""
+        notes = []
+        for c in calls:
+            f = c.get("function", {})
+            g["hist"].append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        h = g["hist"] = g["hist"][-12:]
+        hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
+        for k in (2, 3):
+            if not hit and len(h) >= 3 * k and h[-k:] == h[-2 * k:-k] == h[-3 * k:-2 * k]:
+                hit = True
+        if hit and g["doom_at"] < len(h) - 6:
+            g["doom_at"] = len(h)
+            notes.append("You are repeating the same tool calls and getting the same results. Stop and reconsider: "
+                         "use a different tool, different arguments or a different approach.")
+        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in g["seen"]]
+        g["seen"].update(c["cmd"] for c in new)
+        if new or self.ws.edits != g["edits"]:
+            g["last"], g["edits"] = step, self.ws.edits
+        elif step - g["last"] in (12, 24) and self.profile == "code":
+            notes.append(f"{step - g['last']} steps without progress (no file changed, no new command succeeded). "
+                         "Your current approach is not converging. In one sentence, state a different hypothesis or "
+                         "a simpler route, then try it.")
+        if self.max_steps >= 30 and step == self.max_steps - 15:
+            notes.append("15 steps left in this turn. Make sure what the user asked for exists and works now; refine "
+                         "it afterwards if steps remain.")
+        return " ".join(notes)
 
     # ---------- images (computer use, browser screenshots) -----------------------------------------------------
     def _attach_images(self, shots: list):
@@ -455,7 +549,9 @@ class Agent:
                             m["content"] = clean(m["content"])
                     continue
                 if "HTTP 429" in msg:
-                    wait = 30
+                    n429 = getattr(self, "_n429", 0) + 1
+                    self._n429 = n429                      # no reset time: back off 3, 6, 12 ... 60 s (v4)
+                    wait = min(60, 3 * 2 ** (n429 - 1))
                     mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg)
                     if mt:
                         import calendar
@@ -464,6 +560,11 @@ class Agent:
                     self.emit({"type": "status", "text": f"Rate limited by the endpoint. Waiting {int(wait)} s."})
                     self._sleep(wait)
                     continue
+                if "rejected as invalid" in msg and attempt >= 2:
+                    from meshpool_harness.core.client import _withhold_latest_output
+                    if _withhold_latest_output(self.messages):   # content-tied gateway 400: drop the worst output
+                        body = self._body()
+                        continue
                 if attempt >= 5:
                     raise
                 self.emit({"type": "status", "text": f"Model call failed ({msg[:120]}). Retrying."})
@@ -471,6 +572,7 @@ class Agent:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
         self.emit({"type": "model_end"})
+        self._n429 = 0
         u = resp.get("usage") or {}
         cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
         d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
@@ -495,7 +597,7 @@ class Agent:
             b["stream_options"] = {"include_usage": True}
         req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": self.id})
+                                              "X-Harness-Task-Id": self.id, "session_id": self.id})
         timeout = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         got_text = False
         try:
@@ -538,13 +640,16 @@ class Agent:
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
-        group = "edit" if name in ("edit", "write_file") else name
+        group = "edit" if name in ("edit", "write_file") else "bash" if name == "bash_many" else name
         if group in self.always:
             return True, ""
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
+        elif name == "bash_many":
+            cmds = [str(c) for c in args.get("commands") or []]
+            kind, title, detail = "bash", f"Run these {len(cmds)} commands?", "\n".join(cmds)
         elif name in ("edit", "write_file"):
             kind, title, detail = "edit", f"{'Edit' if name == 'edit' else 'Write'} {args.get('path', '')}?", \
                 self._diff(name, args)
@@ -623,6 +728,7 @@ class Agent:
                 items = [{"content": str(i.get("content", "")), "status": i.get("status", "pending")}
                          for i in args.get("items") or [] if isinstance(i, dict)]
                 self.emit({"type": "plan", "entries": items})
+                self._todos, self._todo_touched = items, True
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             else:
@@ -630,6 +736,8 @@ class Agent:
                 if name == "bash":
                     m = re.match(r"\[exit (\d+)\]", out)
                     ok = bool(m) and m.group(1) == "0"
+                elif name == "bash_many":
+                    ok = "[exit " in out and not re.search(r"\[exit [1-9]", out)
         except ToolError as e:
             out, ok = f"ERROR: {e}", False
         except (Interrupted, KeyboardInterrupt):

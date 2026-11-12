@@ -77,6 +77,41 @@ def _sanitize_calls(calls: list) -> list:
     return out
 
 
+FINISH_REVIEW = """You check whether an agent's finished work meets the task. You see the task, the agent's answer, its
+last command outputs, and its code diff if any. Answer in JSON: {"verdict": "ok" | "concern", "concern": "<one or two
+sentences>"}. Say "concern" ONLY for something concrete you can point to: a requirement the task states explicitly
+(a file, path, name, format, output value, behaviour) that the evidence shows is missing or wrong, or output that
+shows an error the agent did not fix. Do not ask for more tests, style changes or extra features. If unsure, say "ok"."""
+
+
+def _finish_review(task_text: str, answer: str, messages: list, ws, client, model: str, ctx: dict) -> str | None:
+    """v3 one-call second opinion at the first finish (MH_REVIEW=1). Shown once; never blocks a second finish."""
+    import subprocess as _sp
+    tails = [str(m.get("content") or "")[-1200:] for m in messages if m.get("role") == "tool"][-3:]
+    diff = ""
+    try:
+        r = _sp.run(["git", "diff", "HEAD", "--", ".", ":!.run", ":!.junie"], cwd=str(ws.root), capture_output=True,
+                    text=True, timeout=20)
+        diff = r.stdout[:8000] if r.returncode == 0 else ""
+    except Exception:
+        pass
+    body = (f"<task>\n{task_text[:6000]}\n</task>\n<answer>\n{answer[:1500]}\n</answer>\n<last_outputs>\n"
+            + "\n---\n".join(tails) + "\n</last_outputs>" + (f"\n<diff>\n{diff}\n</diff>" if diff.strip() else ""))
+    try:
+        resp = client.chat(model=model, messages=[{"role": "system", "content": FINISH_REVIEW},
+                                                  {"role": "user", "content": body}],
+                           max_tokens=300, task_id=ctx.get("task_id", "") + "-rv", role="verifier",
+                           extra={"response_format": {"type": "json_object"}})
+        txt = resp["choices"][0]["message"].get("content") or ""
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+    except Exception:
+        return None
+    if d.get("verdict") == "concern" and str(d.get("concern", "")).strip():
+        return ("REVIEW (a second reader saw the task, your answer and your last outputs): " + d["concern"].strip()
+                + "\nIf it is right, fix it and finish again. If it is wrong, finish again with the same answer.")
+    return None
+
+
 def _endstate_report(task_text: str, ws) -> str:
     """P1 light end-state check (MH_ENDSTATE_CHECK=1): shown once at the first finish, never enforced. Re-runs the
     last check command if files changed after it, and lists the absolute paths the task names."""
@@ -136,6 +171,10 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     """finish_check(answer, artifacts, ws) -> error message or None: engine-specific deterministic verifier."""
     caps = caps or Caps()
     tool_names = tool_names or (CORE + (["load_skill"] if ws.skills else []))
+    if os.environ.get("MH_MULTI_CMD") == "1" and "bash" in tool_names and "bash_many" not in tool_names:
+        tool_names = tool_names[:tool_names.index("bash") + 1] + ["bash_many"] + tool_names[tool_names.index("bash") + 1:]
+    if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # v3: required todo list (ForgeCode)
+        tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
     messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": task_text}]
     if _box is not None:
@@ -201,12 +240,33 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         bad_format = 0
         injected = [nag] if nag else []
         _tt = time.time()
+        turn_failed = False
         for c in calls:
             name = c.get("function", {}).get("name", "")
             raw = c.get("function", {}).get("arguments", "{}")
             out = None
             try:
                 args = validate(name, raw, tool_names)
+                if (name == "finish" and os.environ.get("MH_TODO") == "1" and res.usage.get("todo_refusals", 0) < 2
+                        and [t for t in getattr(ws, "todos", []) if not t["done"]]):
+                    res.usage["todo_refusals"] = res.usage.get("todo_refusals", 0) + 1
+                    left = [t["text"] for t in ws.todos if not t["done"]]
+                    messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content":
+                                     "finish refused: these todo items are not done:\n- " + "\n- ".join(left)
+                                     + "\nComplete them (or mark an item done if it is), then finish."})
+                    continue
+                if name == "finish" and turn_failed:
+                    out = ("finish not accepted: an action earlier in this same turn failed. Check the page or output, "
+                           "then finish.")
+                    messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": out})
+                    continue
+                if name == "finish" and os.environ.get("MH_REVIEW") == "1" and not res.usage.get("review_done"):
+                    res.usage["review_done"] = 1
+                    rv = _finish_review(task_text, args.get("answer", ""), messages, ws, client, model, ctx)
+                    if rv:
+                        log_failure(ctx, "review_concern", True, rv[:200])
+                        messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": rv})
+                        continue
                 if name == "finish" and os.environ.get("MH_ENDSTATE_CHECK") == "1" and not res.usage.get("endstate_shown"):
                     res.usage["endstate_shown"] = 1
                     rep = _endstate_report(task_text, ws)
@@ -263,10 +323,21 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                 res.reason = str(e)
                 return res
             messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": str(out)})
+            if str(out).startswith("ERROR") or "batch STOPPED" in str(out) or "\nERROR:" in str(out):
+                turn_failed = True
         res.usage["tool_s"] = res.usage.get("tool_s", 0.0) + time.time() - _tt
         g = guards.progress(turn, caps.max_turns, ws.edits, require_check)
         if g:
             injected.append(g)
+        g = guards.stall(turn)
+        if g:
+            injected.append(g)
+        g = guards.repeat_calls(calls)
+        if g:
+            injected.append(g)
+        if os.environ.get("MH_TURN_NOTE") == "1" and caps.max_turns >= 30 and turn == caps.max_turns - 15:
+            injected.append("NOTE: 15 turns left. Make sure what the task asks for exists and works now (files, "
+                            "outputs, the fix); refine it afterwards if turns remain.")
         if injected:
             messages.append({"role": "user", "content": "\n".join(injected)})
     res.reason = f"turn cap {caps.max_turns} reached"
