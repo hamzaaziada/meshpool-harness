@@ -1,0 +1,11 @@
+# claude profile: tuned from documentation + smoke tests only (see results.md for what was tested).
+family: claude
+models: {planner: claude-haiku-5.5, worker: claude-haiku-5.5, verifier: claude-haiku-5.5}
+match: ["claude"]
+caching: {mode: explicit_breakpoints, placement: [after_tools_and_system], note: "cache_control ephemeral on system block"}
+tool_calling: {style: native, parallel: true, strict_schemas: true}
+edit_format: exact_replace
+reasoning: {planner: default, worker: default}
+sampling: {worker: {temperature: 0.0}}
+limits: {max_output_tokens: 8192}
+prompt_style: {numbered_method: true, examples: minimal}

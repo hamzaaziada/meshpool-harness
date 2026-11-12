@@ -1,0 +1,66 @@
+# Meshpool
+
+Meshpool is a desktop agent for Mac and Windows. It does research, writing, analysis, spreadsheets, decks and code on your own computer, with any model on the Meshpool endpoint. All you need is a Meshpool API key.
+
+## Download
+
+| Computer | Download |
+|---|---|
+| Mac with Apple silicon (M1 or later) | [Meshpool.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool.dmg) |
+| Mac with an Intel processor | [Meshpool-Intel.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
+| Windows 10 or 11 (64-bit) | [Meshpool-Setup.exe](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+
+All versions and checksums are on the [Releases](https://github.com/hamzaaziada/meshpool-harness/releases) page.
+
+### Install
+
+- **Mac:** open the dmg and drag Meshpool to Applications. The app is not notarized yet, so the first time, right-click Meshpool in Applications and choose **Open**.
+- **Windows:** run Meshpool-Setup.exe. If SmartScreen appears, choose **More info**, then **Run anyway**.
+
+On first launch, paste your Meshpool API key. Then choose where Meshpool can work, and allow the permissions it asks for.
+
+## What it does
+
+- **Two modes.**
+  - **Cowork** is a chat with a live progress panel and the files the task made.
+  - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
+- **Four agents (harnesses), switchable per thread:** Meshpool Code, Meshpool Work, Pi and Hermes. All of them run on your Meshpool key and model list.
+- **Web research without a browser.**
+  - The agent can search the web and read pages, PDFs and Office files.
+  - It can research a question across many sources at once, with links you can check.
+- **Connectors:** GitHub, Jira and Confluence, Linear, Notion, Apollo, Instantly, ClickUp, Airtable, Attio, Intercom, Granola, Canva, Zapier, Netlify, Webflow, Sentry, GitLab, Vercel, Supabase and Stripe. You can also add any remote MCP server.
+- **Skills**, shared by every agent.
+- **Instructions and memory** that carry over between chats.
+- **Scheduled tasks**, such as a daily brief or a weekly report.
+- **Parallel sub-agents** for big jobs.
+- **Files in:** PDF (including scans, with offline OCR in many languages), Word, Excel, PowerPoint, Power BI, CSV, images and more.
+- **Files out:** Excel, PowerPoint, Word and PDF.
+- **Control while it works:**
+  - **Enter** adds to the task.
+  - **Interrupt** stops the task and does your new message instead.
+  - **Esc** stops.
+
+## Repository layout
+
+| Folder | Contents |
+|---|---|
+| `app/` | Meshpool's source: the agent, the desktop app UI, the office engines, defaults and tests. |
+| `packaging/` | Build scripts, the Mac and Windows launchers, the Windows installer script, icons and the Hermes patch. |
+| `testkit/` | A mock model server and UI tests. |
+| `docs/` | [Building](docs/BUILDING.md) and [releasing](docs/RELEASING.md). |
+
+To run from source during development:
+
+```sh
+cd app
+pip install -r requirements.txt
+python -m meshpool_harness ui
+```
+
+## License and credit
+
+Meshpool is licensed under the [Apache License 2.0](LICENSE). You can use, change and share it.
+
+If you redistribute Meshpool or anything based on it, you must keep the [NOTICE](NOTICE) file and its credit to Meshpool. The Meshpool name and logo are not licensed: a modified version must use its own name and logo.
+
+Meshpool bundles third-party open-source software, each under its own license. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

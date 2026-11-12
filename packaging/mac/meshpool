@@ -1,0 +1,14 @@
+#!/bin/bash
+# The meshpool terminal command, using the Python inside Meshpool.app.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"; SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+RES="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+export MESHPOOL_HOME="${MESHPOOL_HOME:-$HOME/Library/Application Support/Meshpool}"
+export PATH="$RES/python/bin:$PATH"
+export PYTHONPATH="$RES/app" PYTHONUTF8=1 PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
+export PYTHONDONTWRITEBYTECODE=1   # bytecode is precompiled inside the app; never write into it
+export MESHPOOL_CLI="$RES/meshpool"
+exec "$RES/python/bin/python3" -m meshpool_harness "$@"

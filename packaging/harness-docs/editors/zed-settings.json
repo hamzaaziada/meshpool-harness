@@ -1,0 +1,12 @@
+{
+  "agent_servers": {
+    "Meshpool": {
+      "command": "meshpool",
+      "args": ["acp"]
+    },
+    "Meshpool Work": {
+      "command": "meshpool",
+      "args": ["acp", "--profile", "work"]
+    }
+  }
+}

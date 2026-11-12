@@ -1,0 +1,10 @@
+# openai profile: documentation + smoke tests only. Automatic prefix caching (min prefix length unverified).
+family: openai
+models: {planner: gpt-6-luna, worker: gpt-6-luna, verifier: gpt-6-luna}
+match: ["gpt-"]
+caching: {mode: automatic_prefix}
+tool_calling: {style: native, parallel: true, strict_schemas: true}
+edit_format: exact_replace
+sampling: {worker: {temperature: null}}   # some reasoning models reject temperature; omit it
+limits: {max_output_tokens: 8192, param: max_completion_tokens}
+prompt_style: {numbered_method: true}

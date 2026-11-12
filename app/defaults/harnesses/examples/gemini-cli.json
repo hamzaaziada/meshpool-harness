@@ -1,0 +1,11 @@
+{
+  "id": "gemini-cli",
+  "name": "Gemini CLI",
+  "mode": "code",
+  "type": "acp",
+  "command": "gemini",
+  "args": ["--experimental-acp"],
+  "description": "Google's open-source coding agent, through its ACP mode.",
+  "install": "Install it with: npm install -g @google/gemini-cli, then sign in by running gemini once.",
+  "homepage": "https://github.com/google-gemini/gemini-cli"
+}
