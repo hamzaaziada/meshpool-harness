@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 
 from .guards import Guards, enabled, log_failure
+from .metrics import CacheMeter
 from .tools import CORE, ToolError, Workspace, schemas, validate
 
 
@@ -131,30 +132,7 @@ def _endstate_report(task_text: str, ws) -> str:
     return "\n\n".join(parts)
 
 
-def _scope_report(ws) -> str | None:
-    """MH_SCOPE_CHECK=1: at the first finish, if the change spreads past a minimal fix (more than one non-test source
-    file, or more than 30 changed non-test lines), show the per-file diff size once and ask to drop what the task
-    does not need. Rule fixed in advance (harness-lab LOG cycle 5), not tuned on any task. None = nothing to show."""
-    from .guards import TEST_PATH
-    try:
-        out, _ = ws._run("git diff --numstat HEAD -- . ':!.run' ':!.junie' 2>/dev/null", 30, "bash", record=False)
-    except Exception:                                 # noqa: BLE001 - a report must never break a run
-        return None
-    rows = []
-    for line in str(out).splitlines():
-        parts = line.split("\t")
-        if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit() or TEST_PATH.search(parts[2]):
-            continue
-        rows.append((parts[2], int(parts[0]) + int(parts[1])))
-    if len(rows) <= 1 and sum(n for _, n in rows) <= 30:
-        return None
-    lines = "\n".join(f"  {f}: {n} lines" for f, n in sorted(rows, key=lambda r: -r[1])[:10])
-    return ("Scope check (shown once; finish is accepted next time). Your change touches these non-test files:\n"
-            + lines + "\nHidden tests check the behaviour the task asks for, and every extra change is a chance to "
-            "break one. Keep the smallest fix that does what the task asks: revert edits it does not need (git "
-            "checkout -- <file> for a whole file), re-run your check, then finish. If every change is needed, finish "
-            "again.")
-
+from .finishing import scope_report as _scope_report  # noqa: E402,F401  (shared with the app agent)
 
 class _KeepWarm:
     """MH_KEEPWARM_S=<seconds> (default off). While tools run longer than that, re-send the conversation so far with
@@ -252,7 +230,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if not caps.max_seconds and _os.environ.get("MH_MAX_SECONDS"):
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
     t_start = time.time()
-    last_prompt = 0
+    meter = CacheMeter()
     for turn in range(1, caps.max_turns + 1):
         res.turns = turn
         if caps.max_seconds and time.time() - t_start > caps.max_seconds:
@@ -275,11 +253,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         res.usage["completion_tokens"] += u.get("completion_tokens", 0)
         _cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
         res.usage["cached_tokens"] = res.usage.get("cached_tokens", 0) + _cached
-        _prev = last_prompt                                # a full miss: under half of the last prompt was cached
-        if _prev and _cached < 0.5 * _prev:
-            res.usage["full_miss_calls"] = res.usage.get("full_miss_calls", 0) + 1
-            res.usage["full_miss_tokens"] = res.usage.get("full_miss_tokens", 0) + u.get("prompt_tokens", 0) - _cached
-        last_prompt = u.get("prompt_tokens", 0)
+        meter.observe(u, res.usage)                         # full cache misses (core/metrics.py)
         _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
         if _budget:
             _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio

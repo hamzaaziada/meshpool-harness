@@ -86,3 +86,18 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - findings/005: the app's chat agents run their own loop (`agent/core.py`), so the benchmark measures a sibling of
   what users run. Recommendation: shared helpers for finish checks and cache counters, then benchmark the app agent.
 - Python Playwright installed in this container for the probe; Chromium is preinstalled.
+
+## 2026-11-12, cycle 7: one core for both loops (owner approved)
+
+- Shared modules:
+  - `core/webfix.py`: browser fixes, now also in the app's browser tool;
+  - `core/metrics.py`: cache-miss meter in both loops;
+  - `core/finishing.py`: scope check in both loops, worded "reply" for the app agent.
+- `run_task(engine="agent" | "agent-work")` runs the app's chat agent headless, so it can be benchmarked. The Agent
+  class gains an optional `sessions_dir`, and nothing else changes for the app.
+- Tests: `test_agent_headless.py` covers the run staying inside the workdir, errors returned rather than raised, and
+  the scope check shown once.
+- With every flag off, the app behaves as before. The always-on change is two new usage counters
+  (`full_miss_calls`, `full_miss_tokens`) in the saved session usage.
+- Checked by hand: the app's browser tool on a local page shows (read-only) and (invalid), and sets a picker field
+  at once.

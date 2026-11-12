@@ -15,7 +15,9 @@ Ranked by expected value per dollar of testing. Evidence first, then a flag, the
 | 3a | Final check and finish in one turn for code (`MH_CODE_FINISH_SAME_TURN`) | speed, cost | browser engine already does this; the finish guard refuses a failing check, so it is safe; unit-tested | built |
 | 3b | Run read-only `bash_many` commands at the same time (`MH_PARALLEL_MANY`) | speed | batch time becomes the slowest command, not the sum; unit-tested | built |
 | 11 | MiniWoB tail: browser-tool bugs (`MH_BROWSER_READONLY`, `_SETTLE`, `_STATES`, `_KEYTYPE`) | cost, speed, solves | findings/004: both tasks reach reward 1 by hand in 7 and 2 actions | built; sentinel round next |
-| 12 | One core for the app agent and the benchmark loop, then benchmark the app agent | product truth | findings/005: app chat agents run a separate loop | idea: owner's call |
+| 12 | One core for the app agent and the benchmark loop | product truth | findings/005 | built (cycle 7): shared browser fixes, cache meter, scope check; `run_task(engine="agent")` runs the app agent headless |
+| 13 | Benchmark the app agent (`engine="agent"`) beside the engine loop | product truth | needs the experiment package's runners to accept the new engine | idea: next, with the first paid run |
+| 14 | Harness router: pick the best harness per task type from measured results | all | owner's idea; `harness_router.py` exists in the app | later: needs per-task-type results first |
 | 7 | Observation masking in rare large steps (JetBrains: -53% cost, same solves) | speed; cost only if not cached | for us cached context is 50x cheaper than new input, so masking saves less money than in the paper and each mask step costs one full miss; check latency per call against context size first | idea |
 | 8 | Compact page slice plus several actions per call on MiniWoB (Synapse) | cost, speed | 32 calls per MiniWoB task today; most tasks need 1–2 | idea |
 | 9 | Harness search with RRSI acceptance rules (noise floor, tokens must pay for score) | process | IDEAS_RESEARCH.md; matches our decide-rule | idea |
