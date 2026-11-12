@@ -22,3 +22,23 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Paid confirmation (needs approval, about $0.50): 4 Terminal-Bench dev tasks with long builds, arms
   `MH_KEEPWARM_S=20` and off, side by side. Keep if `full_miss_tokens` per task falls by half or more and solves do
   not drop.
+
+## 2026-11-12, cycle 2: parallel read-only batches (`MH_PARALLEL_MANY`, off by default)
+
+- Fix to cycle 1: the keep-warm ping used task id `<id>-kw`, which gives it a different `prompt_cache_key` and
+  session header than the real call. If the gateway routes by key, the ping would warm the wrong backend. It now
+  keeps the real task id; `role="keepwarm"` marks it. Test added.
+- Checked backlog item 5: our tool output cap (3,000 head plus 3,000 tail chars) is already tighter than Codex's.
+  No change.
+- Change: `bash_many` describes its commands as independent but ran them one by one. With the flag on, a batch whose
+  commands are all read-only runs on up to 4 threads. `read_only()` is a conservative allow-list (cat, grep, git log,
+  sed -n, version checks ...). Any redirect, `$( )`, heredoc, `-exec`, `-delete`, `sed -i`, install, script run or
+  unknown program keeps the batch in order. Output text is identical to the sequential run.
+- Offline evidence: `test_parallel_many.py` (3 commands of 0.6 s: 1.8 s in order, under 1.3 s in parallel, same
+  output; a write followed by a read stays in order; capped outputs get unique files). Tests no longer write the
+  failure catalog into the package folder (`tests/conftest.py`).
+- Expected effect: small. It saves tool time only on turns that batch slow reads (large-repo greps, `find`, `git log`
+  on big histories). Model time dominates our wall time, so expect under 5% wall time on Terminal-Bench.
+- Paid confirmation: not worth a run on its own; bundle it with the next sentinel A/B.
+- Open question for the owner: offline work cannot show why book-flight and terminal take 20+ turns, or whether
+  keep-warm works. Both need a few real transcripts (cents per MiniWoB task).
