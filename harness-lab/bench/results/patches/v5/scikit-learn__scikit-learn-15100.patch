@@ -1,20 +1,41 @@
+diff --git a/doc/whats_new/v0.22.rst b/doc/whats_new/v0.22.rst
+index a2d4a8dac..65a343387 100644
+--- a/doc/whats_new/v0.22.rst
++++ b/doc/whats_new/v0.22.rst
+@@ -255,6 +255,11 @@ Changelog
+   removed in v0.24. :pr:`14520` by
+   :user:`Guillem G. Subies <guillemgsubies>`.
+ 
++- |Fix| :func:`feature_extraction.text.strip_accents_unicode` now strips
++  accents from strings that are already in NFKD (decomposed) form, instead of
++  returning them unchanged.
++  :pr:`15100` by :user:`Daniel Grady <dgrady3>`.
++
+ :mod:`sklearn.feature_selection`
+ ................................
+ 
 diff --git a/sklearn/feature_extraction/tests/test_text.py b/sklearn/feature_extraction/tests/test_text.py
-index 7b7697ff4..1b7bdc1a5 100644
+index 7b7697ff4..f60cf41d2 100644
 --- a/sklearn/feature_extraction/tests/test_text.py
 +++ b/sklearn/feature_extraction/tests/test_text.py
-@@ -97,6 +97,16 @@ def test_strip_accents():
+@@ -97,6 +97,21 @@ def test_strip_accents():
      expected = 'this is a test'
      assert strip_accents_unicode(a) == expected
  
-+    # strings that are already decomposed (NFKD form) should still be
-+    # stripped of their combining marks, see gh-15100
-+    a = 'no\u0308e\u0301l'  # noë́l with combining diaeresis and acute accent
-+    expected = 'noel'
++    # strings that are already decomposed
++    a = "o\u0308"  # o + combining diaeresis
++    expected = "o"
 +    assert strip_accents_unicode(a) == expected
 +
-+    # a single combining mark on an ASCII letter
-+    a = chr(110) + chr(771)  # "n" + combining tilde
-+    assert strip_accents_unicode(a) == 'n'
++    # combining marks by themselves
++    a = "\u0300\u0301"  # combining grave and combining acute
++    expected = ""
++    assert strip_accents_unicode(a) == expected
++
++    # decomposition of the ffi ligature
++    a = "\ufb03"
++    expected = "ffi"
++    assert strip_accents_unicode(a) == expected
 +
  
  def test_to_ascii():
