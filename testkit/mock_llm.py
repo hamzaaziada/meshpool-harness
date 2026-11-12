@@ -79,7 +79,8 @@ def plan(messages, tools):
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": "hello.py", "content": "print('hello from meshpool')\n"})
         if step == 1:
-            return ("tool", "bash", {"command": "python3 hello.py || python hello.py"})
+            sh = "bash" if "bash" in names else "terminal" if "terminal" in names else "bash"   # Hermes: terminal
+            return ("tool", sh, {"command": "python3 hello.py || python hello.py"})
         return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
     if "finish" in u or "harness" in u:                 # one-shot harness engines: call finish
         if step == 0 and "bash" in names:

@@ -11,7 +11,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `rt-win/python` | The same for Windows | `x86_64-pc-windows-msvc` build |
 | `node-mac-arm64`, `node-mac-x64`, `node-win` | Node.js 24 | [nodejs.org/dist](https://nodejs.org/dist/) |
 | `pi/node_modules` | The Pi coding agent | `npm install @earendil-works/pi-coding-agent` |
-| `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
+| `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied; the runtime also needs Hermes' dependencies with its `acp` and `mcp` extras (without `mcp`, Hermes connects to no MCP servers) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
 | `ocr-models` | PP-OCRv5 recognition models for RapidOCR | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) model releases |
 | `git-win` | MinGit for Windows (Git and Bash) | [git-for-windows](https://github.com/git-for-windows/git/releases) |
 | `win/Meshpool` | `Meshpool.exe` and `meshpool.cmd` | Build `packaging/win/launcher` with Go (`GOOS=windows go build`) |
