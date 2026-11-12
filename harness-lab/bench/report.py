@@ -19,7 +19,12 @@ def main(paths):
     for a in arms:
         rs = [v[a] for v in keep.values()]
         n, ok = len(rs), sum(bool(r.get("passed")) for r in rs)
-        cost, wall = sum(r.get("cost", 0) for r in rs), sum(r.get("wall_s", 0) or 0 for r in rs)
+        wall = sum(r.get("wall_s", 0) or 0 for r in rs)
+        # runs with no usage report are left out of cost (never counted as free): $/solved over runs with usage
+        ru = [r for r in rs if r.get("prompt", 0) > 0]
+        cost = sum(r.get("cost", 0) for r in ru) * (len(rs) / max(len(ru), 1))
+        if len(ru) < len(rs):
+            print(f"  ({a}: {len(rs) - len(ru)} of {len(rs)} runs had no usage report; cost scaled from the rest)")
         pr, ca = sum(r.get("prompt", 0) for r in rs), sum(r.get("cached", 0) for r in rs)
         print(f"{a:8}{f'{ok}/{n}':>10}{(cost / ok if ok else float('nan')):10.4f}{(wall / ok if ok else float('nan')):10.1f}"
               f"{cost:9.4f}{wall:9.0f}{sum(r.get('calls', 0) or 0 for r in rs) / max(n, 1):8.1f}"
