@@ -1,0 +1,5 @@
+timestamp,model,profile,task_id,category,caught,detail
+2026-11-12T13:50:42Z,mock,deepseek,t,finish_without_check,True,no passing command after last edit
+2026-11-12T13:50:43Z,mock,deepseek,t,test_tampering,True,tests/test_calc.py
+2026-11-12T13:50:45Z,mock,deepseek,t,repeat_failure,True,python -m pytest -q tests
+2026-11-12T13:50:46Z,mock,deepseek,t,error_not_quoted,True,FAILED tests/test_calc.py::test_add - assert -1 == 5

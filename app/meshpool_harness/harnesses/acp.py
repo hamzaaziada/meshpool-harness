@@ -194,6 +194,8 @@ class ACPAgent:
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX"):
             if k not in (m.get("env") or {}):
                 env.pop(k, None)               # never leak Meshpool's Python into another Python app
+        for k in m.get("env_unset") or []:
+            env.pop(k, None)                   # e.g. a subscription harness must not bill an API key instead
         for k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
             if env.get(k) and not (Path(self.root) / env[k]).exists():   # as the harness sees it from its cwd
                 env.pop(k)                     # a stale CA path breaks every HTTPS client in the harness

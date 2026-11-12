@@ -226,11 +226,40 @@ def ask_key(force: bool = False) -> bool:
     return True
 
 
+LOGO = ["  ▗▄▖ ▗▄▖  ",
+        " ▟███▙███▙ ",
+        "▟█▛ ▜█▛ ▜█▙"]
+
+
+def logo_lines(color: bool) -> list[str]:
+    """The Meshpool mark (two waves, blue to light blue) and the wordmark, for terminals."""
+    from meshpool_harness import __version__
+    stops = [(29, 78, 216), (37, 99, 235), (56, 189, 248)]
+
+    def grad(text: str) -> str:
+        if not color:
+            return text
+        out, n = [], max(len(text) - 1, 1)
+        for i, ch in enumerate(text):
+            t = i / n
+            a, b = (stops[0], stops[1]) if t < 0.5 else (stops[1], stops[2])
+            u = t * 2 if t < 0.5 else (t - 0.5) * 2
+            r, g, bl = (round(a[k] + (b[k] - a[k]) * u) for k in range(3))
+            out.append(f"\x1b[38;2;{r};{g};{bl}m{ch}" if ch != " " else ch)
+        return "".join(out) + "\x1b[0m"
+    tag = f"v{__version__} · meshpool.ai"
+    rows = [grad(LOGO[0]), grad(LOGO[1]) + "  " + ("\x1b[1m" if color else "") + "meshpool" + ("\x1b[0m" if color else ""),
+            grad(LOGO[2]) + "  " + ("\x1b[2m" if color else "") + tag + ("\x1b[0m" if color else "")]
+    return rows
+
+
 def _banner(term: Terminal, agent, mcp):
     st = term.st
     model = os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     term.p("")
-    term.p(f"  {st.teal('◆')} {st.bold('Meshpool')}  {st.dim('coding agent')}")
+    for row in logo_lines(st.on):
+        term.p("  " + row)
+    term.p("")
     term.p(f"  {st.dim('Model')}   {model}")
     term.p(f"  {st.dim('Folder')}  {agent.root}")
     if mcp:
