@@ -452,10 +452,12 @@ class Handler(BaseHTTPRequestHandler):
                 import meshpool_harness as MH
 
                 def rd(name):
-                    try:
-                        return (C.APP / name).read_text(encoding="utf-8")
-                    except OSError:
-                        return ""
+                    for base in (C.APP, C.APP.parent):      # packaged: beside the app; from source: the repo root
+                        try:
+                            return (base / name).read_text(encoding="utf-8")
+                        except OSError:
+                            continue
+                    return ""
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__, "notice": rd("NOTICE"),
                                         "license": rd("LICENSE"), "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/jobs":
