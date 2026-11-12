@@ -23,6 +23,7 @@ ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v5"}, "v5s": {"MH_PRESET
         "app": {"MH_PRESET": "v5"},
         "v5nt": {"MH_PRESET": "v5", "MH_TODO": "0"}, "v5ft": {"MH_PRESET": "v5", "MH_CODE_FINISH_SAME_TURN": "1"},
         "v5sp": {"MH_PRESET": "v5", "MH_SCOPE_PROMPT": "1"},
+        "v5o": {"MH_PRESET": "v5", "MH_OBSERVE": "1"}, "appo": {"MH_PRESET": "v5", "MH_OBSERVE": "1"},
         "codex": {}, "pi": {}}
 TURNS, WALL = 60, 1800
 
@@ -129,9 +130,9 @@ def one(arm, inst, data):
         host, name = setup(iid, arm)
         text = instructions(inst, name)
         t0 = time.time()
-        if arm.startswith("v"):
+        if arm.startswith("v") and not arm.startswith("app"):
             r = run_engine(text, str(host), ARMS[arm], "code", f"{arm}-{iid}")
-        elif arm == "app":
+        elif arm.startswith("app"):
             r = run_engine(text, str(host), ARMS[arm], "agent", f"{arm}-{iid}")
         elif arm == "codex":
             r = M.run_codex(text, str(host), WALL)
