@@ -7,12 +7,12 @@ InstallDirRegKey HKCU "Software\Meshpool" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SetCompressorDictSize 64
-BrandingText "Meshpool 2.4.0"
-VIProductVersion "2.4.0.0"
+BrandingText "Meshpool 2.5.0"
+VIProductVersion "2.5.0.0"
 VIAddVersionKey "ProductName" "Meshpool"
 VIAddVersionKey "FileDescription" "Meshpool Setup"
-VIAddVersionKey "FileVersion" "2.4.0"
-VIAddVersionKey "ProductVersion" "2.4.0"
+VIAddVersionKey "FileVersion" "2.5.0"
+VIAddVersionKey "ProductVersion" "2.5.0"
 VIAddVersionKey "CompanyName" "Meshpool"
 VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool. Apache License 2.0."
 
@@ -50,7 +50,7 @@ Section "Meshpool" SecMain
   nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$$d = ''$INSTDIR''; $$p = [string][Environment]::GetEnvironmentVariable(''Path'',''User''); if (($$p -split '';'') -notcontains $$d) { [Environment]::SetEnvironmentVariable(''Path'', (($$p.TrimEnd('';'') + '';'' + $$d).TrimStart('';'')), ''User'') }"'
   !define UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\Meshpool"
   WriteRegStr HKCU "${UNINST}" "DisplayName" "Meshpool"
-  WriteRegStr HKCU "${UNINST}" "DisplayVersion" "2.4.0"
+  WriteRegStr HKCU "${UNINST}" "DisplayVersion" "2.5.0"
   WriteRegStr HKCU "${UNINST}" "Publisher" "Meshpool"
   WriteRegStr HKCU "${UNINST}" "DisplayIcon" "$INSTDIR\Meshpool.ico"
   WriteRegStr HKCU "${UNINST}" "InstallLocation" "$INSTDIR"

@@ -12,6 +12,7 @@ function ago(t) {
   if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m"; if (s < 86400) return Math.floor(s / 3600) + "h";
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
+const RES = id => document.getElementById(id) || {className: "", textContent: "", innerHTML: ""};   // results outlive a re-render
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem("mp_" + k)); localStorage.setItem("mp_" + k, JSON.stringify(v)); } catch (e) { return null; } }
 
 const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -982,6 +983,8 @@ async function openFile(root, rel, node) {
   const v = $("#viewer"); v.hidden = false; v.innerHTML = `<div class="pnote">Loading...</div>`;
   try {
     const f = await api(`/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`);
+    const raw = `/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`;
+    if (f.binary && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(rel)) { v.innerHTML = `<div class="pbar"><span class="p" style="font-family:var(--mono);font-size:12px">${esc(rel)}</span></div><div class="imgview"><img src="${raw}" alt="${esc(rel)}"></div>`; return; }
     if (f.binary) { v.innerHTML = `<div class="pbar"><span class="p" style="font-family:var(--mono);font-size:12px">${esc(rel)}</span></div><div class="pnote">${esc(f.note || "Binary file. Open it from the folder.")}</div>`; return; }
     v.innerHTML = `<div class="pbar"><span style="font-family:var(--mono);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rel)}</span><button class="btn" id="fsave" disabled>Save</button></div><textarea id="ftext" spellcheck="false"></textarea>`;
     const ta = $("#ftext"); ta.value = f.text;
@@ -1119,11 +1122,11 @@ async function renderSection(sec) {
       await post("/api/settings", {values}); if ($("#sModel").value) await post("/api/models/default", {id: $("#sModel").value});
       await loadSettings(); await loadModels(true); fill();
     };
-    $("#sSave").onclick = async () => { try { await save(); $("#sRes").className = "res ok"; $("#sRes").textContent = "Saved."; renderBar(); } catch (e) { $("#sRes").className = "res bad"; $("#sRes").textContent = e.message; } };
+    $("#sSave").onclick = async () => { try { await save(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved."; renderBar(); } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; } };
     $("#sTest").onclick = async () => {
-      $("#sRes").className = "res"; $("#sRes").textContent = "Testing...";
-      try { await save(); const r = await post("/api/test"); $("#sRes").className = "res " + (r.ok ? "ok" : "bad"); $("#sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : `Connection failed: ${r.detail}`; renderBar(); }
-      catch (e) { $("#sRes").className = "res bad"; $("#sRes").textContent = e.message; }
+      RES("sRes").className = "res"; RES("sRes").textContent = "Testing...";
+      try { await save(); const r = await post("/api/test"); RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : `Connection failed: ${r.detail}`; renderBar(); }
+      catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
     };
   } else if (sec === "models") {
     if (!S.models) await loadModels();
@@ -1166,8 +1169,8 @@ async function renderSection(sec) {
         await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
         await post("/api/assistant", {action: "memory", text: $("#paMem").value});
         await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked});
-        $("#paRes").className = "res ok"; $("#paRes").textContent = "Saved. New threads use it.";
-      } catch (e) { $("#paRes").className = "res bad"; $("#paRes").textContent = e.message; }
+        RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New threads use it.";
+      } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
   } else if (sec === "scheduled") {
     const draw = a => {
@@ -1189,8 +1192,8 @@ async function renderSection(sec) {
       done();
       const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; };
       $("#tsWhen").onchange = sync; sync();
-      const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { $("#tsRes").className = "res bad"; $("#tsRes").textContent = e.message; } };
-      $("#tsAdd").onclick = () => act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value});
+      const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
+      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
       $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this task?", text: "It stops running. Threads from earlier runs stay.", ok: "Delete", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });
@@ -1209,8 +1212,8 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Web search</h3><p class="lead">Every harness can search the web, read pages and PDFs, and research a question across many sources at once, without opening a browser. It works with no setup through free search engines. For heavy research, add a key below: searches get faster and are never limited.</p>
       ${keys.map(k => { const f = get(k); return `<label class="field"><span>${esc(f.label)}</span>${f.key === "SEARXNG_URL" ? `<input data-wk="${k}" spellcheck="false" value="${esc(f.value || "")}" placeholder="http://localhost:8888">` : `<input data-wk="${k}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) : "Not set"}">`}<small>${esc(f.help)}</small></label>`; }).join("")}
       <div style="display:flex;gap:8px"><button class="btn primary" id="wSave">Save</button><button class="btn" id="wTest">Test search</button></div><div class="res" id="wRes"></div>`;
-    $("#wSave").onclick = async () => { const values = {}; $$("[data-wk]", b).forEach(x => { if (x.value.trim() || x.dataset.wk === "SEARXNG_URL") values[x.dataset.wk] = x.value.trim(); }); try { await post("/api/settings", {values}); $("#wRes").className = "res ok"; $("#wRes").textContent = "Saved."; } catch (e) { $("#wRes").className = "res bad"; $("#wRes").textContent = e.message; } };
-    $("#wTest").onclick = async () => { $("#wRes").className = "res"; $("#wRes").textContent = "Searching..."; try { const r = await post("/api/web-test"); $("#wRes").className = "res " + (r.ok ? "ok" : "bad"); $("#wRes").textContent = r.ok ? `Search works: ${r.count} results in ${r.seconds} s, first: ${r.first}` : r.error; } catch (e) { $("#wRes").className = "res bad"; $("#wRes").textContent = e.message; } };
+    $("#wSave").onclick = async () => { const values = {}; $$("[data-wk]", b).forEach(x => { if (x.value.trim() || x.dataset.wk === "SEARXNG_URL") values[x.dataset.wk] = x.value.trim(); }); try { await post("/api/settings", {values}); RES("wRes").className = "res ok"; RES("wRes").textContent = "Saved."; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
+    $("#wTest").onclick = async () => { RES("wRes").className = "res"; RES("wRes").textContent = "Searching..."; try { const r = await post("/api/web-test"); RES("wRes").className = "res " + (r.ok ? "ok" : "bad"); RES("wRes").textContent = r.ok ? `Search works: ${r.count} results in ${r.seconds} s, first: ${r.first}` : r.error; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
   } else if (sec === "connectors") {
     const draw = rows => {
       b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every harness (Meshpool, Pi and Hermes) can then use them as tools: CRM records, leads, tasks, issues, pages, pull requests and more. Sign-in happens in your browser; Meshpool keeps the access on this computer only.</p>
@@ -1225,47 +1228,47 @@ async function renderSection(sec) {
       done();
       $("#cxAdd").onclick = async () => {
         const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
-        $("#cxAdd").disabled = true; $("#cnRes").className = "res"; $("#cnRes").textContent = "Checking the server...";
+        $("#cxAdd").disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Checking the server...";
         const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
         S.connCache = r.connectors; draw(r.connectors);
-        if (r.url) { $("#cnRes").className = "res"; $("#cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
-          const id = r.id, t0 = Date.now(); const tick = async () => { if (!$("#cnl")) return; const l = (await api("/api/connectors")).connectors; if (l.find(c => c.id === id)?.connected) { draw(l); $("#cnRes").className = "res ok"; $("#cnRes").textContent = "Connected. New threads can use it."; return; } if (Date.now() - t0 < 300000) setTimeout(tick, 2000); }; setTimeout(tick, 2000);
-        } else { $("#cnRes").className = "res ok"; $("#cnRes").textContent = "Added. New threads can use it."; }
+        if (r.url) { RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
+          const id = r.id, t0 = Date.now(); const tick = async () => { if (!$("#cnl")) return; const l = (await api("/api/connectors")).connectors; if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected. New threads can use it."; return; } if (Date.now() - t0 < 300000) setTimeout(tick, 2000); }; setTimeout(tick, 2000);
+        } else { RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Added. New threads can use it."; }
       };
-      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { $("#cnRes").className = "res bad"; $("#cnRes").textContent = e.message; return null; } };
+      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { RES("cnRes").className = "res bad"; RES("cnRes").textContent = e.message; return null; } };
       $$("[data-go]", b).forEach(x => x.onclick = async () => {
         x.disabled = true; x.textContent = "Opening sign-in...";
         const r = await act({action: "connect", id: x.dataset.go});
         if (!r) { x.disabled = false; x.textContent = "Connect"; return; }
-        $("#cnRes").className = "res"; $("#cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
+        RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
         const id = x.dataset.go, t0 = Date.now();
         const tick = async () => {
           if (!$("#cnl")) return;
           const l = (await api("/api/connectors")).connectors;
-          if (l.find(c => c.id === id)?.connected) { draw(l); $("#cnRes").className = "res ok"; $("#cnRes").textContent = `${l.find(c => c.id === id).name} is connected. New threads can use it.`; return; }
+          if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `${l.find(c => c.id === id).name} is connected. New threads can use it.`; return; }
           if (Date.now() - t0 < 300000) setTimeout(tick, 2000);
         };
         setTimeout(tick, 2000);
       });
       $("[data-ghfound]", b)?.addEventListener("click", async e => {
-        e.target.disabled = true; $("#cnRes").className = "res"; $("#cnRes").textContent = "Looking for a GitHub login on this computer...";
+        e.target.disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Looking for a GitHub login on this computer...";
         const r = await act({action: "github_found", id: "github"}); e.target.disabled = false;
-        if (r) { S.connCache = r.connectors; draw(r.connectors); $("#cnRes").className = "res ok"; $("#cnRes").textContent = r.message; }
+        if (r) { S.connCache = r.connectors; draw(r.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = r.message; }
       });
       $("[data-ghdev]", b)?.addEventListener("click", async () => {
         const r = await act({action: "github_device", id: "github"}); if (!r) return;
-        $("#cnRes").className = "res"; $("#cnRes").innerHTML = `Enter this code on GitHub: <b class="ucode">${esc(r.user_code)}</b> <a href="${esc(r.url)}" target="_blank" rel="noopener">Open github.com/login/device</a>`;
+        RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Enter this code on GitHub: <b class="ucode">${esc(r.user_code)}</b> <a href="${esc(r.url)}" target="_blank" rel="noopener">Open github.com/login/device</a>`;
         const tick = async () => {
           if (!$("#cnl")) return;
           let q; try { q = await post("/api/connectors", {action: "github_poll", id: "github"}); } catch (e) { return; }
-          if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); $("#cnRes").className = "res ok"; $("#cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
-          if (q.status === "failed") { $("#cnRes").className = "res bad"; $("#cnRes").textContent = q.error; return; }
+          if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
+          if (q.status === "failed") { RES("cnRes").className = "res bad"; RES("cnRes").textContent = q.error; return; }
           setTimeout(tick, (r.interval || 5) * 1000);
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
-      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); $("#cnRes").className = "res ok"; $("#cnRes").textContent = "Connected."; } });
+      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected."; } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect?", text: "Threads stop using it. You can connect again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
@@ -1294,7 +1297,7 @@ async function renderSection(sec) {
         $("#skEdCancel").onclick = drawSk;
       });
     };
-    const skillAct = async body => { try { S.skills = (await post("/api/skills", body)).skills; drawSk(); $("#skRes").className = "res ok"; $("#skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : ""; } catch (e) { $("#skRes").className = "res bad"; $("#skRes").textContent = e.message; } };
+    const skillAct = async body => { try { S.skills = (await post("/api/skills", body)).skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : ""; } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
     drawSk();
     const upload = async (files, paths) => {
       const list = [];
@@ -1317,7 +1320,7 @@ async function renderSection(sec) {
         upload(files, paths);
       } else upload([...e.dataTransfer.files]);
     };
-    $("#skCreate").onclick = () => skillAct({action: "create", name: $("#skName").value, description: $("#skDesc").value, body: $("#skBody").value});
+    $("#skCreate").onclick = () => { if (!$("#skName").value.trim() || !$("#skBody").value.trim()) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Give the skill a name and instructions."; return; } skillAct({action: "create", name: $("#skName").value, description: $("#skDesc").value, body: $("#skBody").value}); };
     $("#skOpen").onclick = () => post("/api/skills", {action: "open"});
   } else if (sec === "harnesses") {
     await loadHarnesses();
@@ -1327,13 +1330,13 @@ async function renderSection(sec) {
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Cowork" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop a harness .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
-    const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { $("#hRes").className = "res bad"; $("#hRes").textContent = e.message; } };
+    const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
     $$("[data-rm]", b).forEach(x => x.onclick = () => act({remove: x.dataset.rm}));
     $$("[data-login]", b).forEach(x => x.onclick = async () => {
-      try { const r = await post("/api/harness-login", {id: x.dataset.login}); $("#hRes").className = "res " + (r.ok ? "" : "bad"); $("#hRes").textContent = r.message; }
-      catch (e) { $("#hRes").className = "res bad"; $("#hRes").textContent = e.message; return; }
+      try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("hRes").className = "res " + (r.ok ? "" : "bad"); RES("hRes").textContent = r.message; }
+      catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; return; }
       const id = x.dataset.login, t0 = Date.now();
-      const tick = async () => { if (!$("#hRes")) return; await loadHarnesses(); if (harness(id).signed_in) { renderSection("harnesses"); renderBar(); toast(harness(id).name + " is signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
+      const tick = async () => { if (!RES("hRes")) return; await loadHarnesses(); if (harness(id).signed_in) { renderSection("harnesses"); renderBar(); toast(harness(id).name + " is signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
       setTimeout(tick, 3000);
     });
     $$("[data-dm]", b).forEach(x => x.onchange = async () => { await act({default_mode: x.dataset.dm, id: x.value}); store("harness_" + x.dataset.dm, null); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } });
@@ -1352,8 +1355,8 @@ async function renderSection(sec) {
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
-    $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { $("#mRes").className = "res bad"; $("#mRes").textContent = e.message; } };
-    $("#mTest").onclick = async () => { $("#mRes").className = "res"; $("#mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); $("#mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); $("#mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { $("#mRes").className = "res bad"; $("#mRes").textContent = e.message; } };
+    $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
   } else if (sec === "permissions") {
     const draw = async body => {
       const r = await post("/api/permissions", body || {});
@@ -1388,7 +1391,7 @@ async function renderSection(sec) {
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
       <div style="display:flex;gap:8px"><button class="btn primary" id="adSave">Save</button><button class="btn" id="adData">Open the data folder</button></div><div class="res" id="adRes"></div>`;
-    $("#adSave").onclick = async () => { const values = {}; keys.forEach(x => { values[x.key] = $("#ad_" + x.key).value; }); try { await post("/api/settings", {values}); $("#adRes").className = "res ok"; $("#adRes").textContent = "Saved."; } catch (e) { $("#adRes").className = "res bad"; $("#adRes").textContent = e.message; } };
+    $("#adSave").onclick = async () => { const values = {}; keys.forEach(x => { values[x.key] = $("#ad_" + x.key).value; }); try { await post("/api/settings", {values}); RES("adRes").className = "res ok"; RES("adRes").textContent = "Saved."; } catch (e) { RES("adRes").className = "res bad"; RES("adRes").textContent = e.message; } };
     $("#adData").onclick = () => post("/api/open-data");
   }
   done();
@@ -1411,7 +1414,7 @@ function showOnboarding() {
   $("#oShow").onclick = () => { const i = $("#oKey"); i.type = i.type === "password" ? "text" : "password"; $("#oShow").textContent = i.type === "password" ? "Show" : "Hide"; };
   $("#oKey").onkeydown = e => { if (e.key === "Enter") $("#oGo").click(); };
   $("#oGo").onclick = async () => {
-    const key = $("#oKey").value.trim(); const res = $("#oRes");
+    const key = $("#oKey").value.trim(); const res = RES("oRes");
     if (!key) { res.className = "res bad"; res.textContent = "Paste your API key first."; return; }
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key...";
     try {
@@ -1507,7 +1510,7 @@ function setupStep(o, prev) {
     <div id="oImport"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   $$("[data-login]", card).forEach(x => x.onclick = async () => {
-    try { const r = await post("/api/harness-login", {id: x.dataset.login}); $("#oSubRes").className = "res"; $("#oSubRes").textContent = r.message; } catch (e) { $("#oSubRes").className = "res bad"; $("#oSubRes").textContent = e.message; }
+    try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("oSubRes").className = "res"; RES("oSubRes").textContent = r.message; } catch (e) { RES("oSubRes").className = "res bad"; RES("oSubRes").textContent = e.message; }
     const id = x.dataset.login, t0 = Date.now();
     const tick = async () => { if (!$("#oSubs")) return; await loadHarnesses(); if (harness(id).signed_in) { x.outerHTML = `<span class="badge added">Signed in</span>`; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
