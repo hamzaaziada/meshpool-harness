@@ -20,12 +20,17 @@
    - On a Mac, run `packaging/mac/test.sh`.
    - Install the Windows build once on a real PC.
 
-5. **Publish:**
+5. **Publish** from a computer where `gh` is signed in:
 
    ```sh
-   shasum -a 256 Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe > SHA256SUMS.txt
-   gh release create vX.Y.Z Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe SHA256SUMS.txt \
-     --title "Meshpool X.Y.Z" --notes-file notes.md
+   packaging/release.sh X.Y.Z notes.md Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe
    ```
+
+   The script:
+
+   - writes SHA256SUMS.txt;
+   - creates the release as a draft;
+   - uploads each file with retries, so a slow or shaky connection is fine (rerun the script to resume);
+   - publishes the release once every file is on GitHub.
 
    Keep the asset names exactly as they are. The download links in the README point to `releases/latest/download/<name>`, so they always serve the newest release.

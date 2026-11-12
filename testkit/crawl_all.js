@@ -105,7 +105,7 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
     const keepBusy = async () => { if (await state(busy) === "idle") { await api(`/api/agent/${busy}/send`, {text: "long task please"}); await p.waitForTimeout(1200); } await open(busy); };
     await p.waitForTimeout(3000);
     await crawl(`[${hid}] mid-run`, keepBusy);
-    check(`[${hid}] task still finishes after mid-run clicking`, await (async () => { for (let i = 0; i < 120; i++) { if (await state(busy) === "idle") return true; await p.waitForTimeout(500); } return false; })());
+    check(`[${hid}] task still finishes after mid-run clicking (approving anything the clicks switched to Supervised)`, await (async () => { await open(busy); for (let i = 0; i < 160; i++) { const s = await state(busy); if (s === "idle") return true; if (s === "waiting") await p.click(".appr:not(.done) [data-d]", {timeout: 1500}).catch(() => {}); await p.waitForTimeout(500); } return false; })());
     // waiting for approval
     const wait = await mk("ask", "say hello and create hello.py");
     for (let i = 0; i < 120 && await state(wait) !== "waiting"; i++) await p.waitForTimeout(500);
