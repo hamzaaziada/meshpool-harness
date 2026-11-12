@@ -31,7 +31,7 @@ from meshpool_harness.core.wire import sse_to_chat
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
-READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill"}
+READ_ONLY = {"read_file", "grep", "glob", "symbol", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill"}
 SAFE_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
             "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__memory_save",
             "mcp__meshpool_assistant__memory_forget", "mcp__meshpool_assistant__schedule_task",
@@ -47,6 +47,8 @@ BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many
 V3 = os.environ.get("MH_AGENT_V3", "1") != "0"
 if not V3:
     BUILTIN.remove("bash_many")
+if os.environ.get("MH_NAV") == "1":               # symbol: definition and uses in one call (core/diagnose.py)
+    BUILTIN.insert(BUILTIN.index("grep") + 1, "symbol")
 if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug before editing (core/observe.py)
     BUILTIN[BUILTIN.index("bash") + 1:BUILTIN.index("bash") + 1] = ["probe", "trace"]
 WORK_TOOLS = BUILTIN + ["office_task"]

@@ -13,6 +13,7 @@ Ranked by expected value per dollar of testing. Evidence first, then a flag, the
 | 5 | Tool output truncation like Codex (head and tail, byte cap) | cost, speed | our cap is 6,000 chars (3,000 head, 3,000 tail), already tighter than Codex's 10K tokens | no change needed |
 | 6 | Scope check before finish (`MH_SCOPE_CHECK`) | solves | findings/003: both v3 Verified misses changed more than needed; Codex changed 3–5 lines in one file | built; measure on dev split only |
 | 15 | Observability tools: probe (failure digest with locals) and trace (project functions that ran) (`MH_OBSERVE`) | solves, calls, cost | findings/007: 27 calls after the first edit, 0.5 repro runs before it | built; A/B next |
+| 16 | Compiler-style feedback after edits (`MH_LINT_EDIT`) and code navigation (`symbol`, `MH_NAV`) | calls, re-reads, solves | findings/007: 9.7 re-reads after the first edit | built; in the A/B |
 | 3a | Final check and finish in one turn for code (`MH_CODE_FINISH_SAME_TURN`) | speed, cost | browser engine already does this; the finish guard refuses a failing check, so it is safe; unit-tested | built |
 | 3b | Run read-only `bash_many` commands at the same time (`MH_PARALLEL_MANY`) | speed | batch time becomes the slowest command, not the sum; unit-tested | built |
 | 11 | MiniWoB tail: browser-tool bugs (`MH_BROWSER_READONLY`, `_SETTLE`, `_STATES`, `_KEYTYPE`) | cost, speed, solves | findings/004: both tasks reach reward 1 by hand in 7 and 2 actions | built; sentinel round next |
