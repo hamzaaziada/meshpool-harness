@@ -15,3 +15,4 @@ timestamp,model,profile,task_id,category,caught,detail
 2026-11-12T15:14:29Z,mock,deepseek,t,test_tampering,True,tests/test_calc.py
 2026-11-12T15:14:31Z,mock,deepseek,t,repeat_failure,True,python -m pytest -q tests
 2026-11-12T15:14:32Z,mock,deepseek,t,error_not_quoted,True,FAILED tests/test_calc.py::test_add - assert -1 == 5
+2026-11-12T19:08:31Z,deepseek-v4.1-flash,,app-1794510397,turn_cap,False,turn cap 25 reached

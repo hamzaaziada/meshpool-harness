@@ -1,0 +1,2 @@
+v4:x 114.5s $0.0054 | v5:OK 32.9s $0.0026 | codex:OK 156.1s $0.0123 | pi:OK 47.4s $0.0027 <- book-flight#1
+v4:OK 9.1s $0.0011 | v5:OK 38.9s $0.0011 | codex:OK 6.7s $0.0017 | pi:OK 7.9s $0.0006 <- find-word#1

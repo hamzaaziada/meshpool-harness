@@ -24,3 +24,11 @@ solves, on SWE-bench Verified, Terminal-Bench 2 and MiniWoB++.
 
 The full experiment package (eval scripts, result rows, per-call logs) is not in this repo. Its key numbers are in
 `findings/`.
+
+## Benchmarks (`bench/`)
+
+- `mw_bench.py`: same-time MiniWoB++ comparison (our harness arms, Codex CLI, pi), one model and task text.
+- `ver_bench.py`: same-time SWE-bench Verified comparison (harness arms, the app agent, Codex CLI, pi), official grader,
+  spend stop from the key's spend header.
+- `report.py`: solves, $ per solved, time per solved, on tasks every arm finished.
+- `results/`: raw rows and logs.
