@@ -53,6 +53,9 @@ PRESETS = {
 #                         of a 10 s timeout.  MH_BROWSER_SETTLE=1: wait until the page is quiet (max 1.5 s) before the
 #                         snapshot, so late menus are listed.  MH_BROWSER_STATES=1: mark (invalid), (disabled),
 #                         (read-only).  MH_BROWSER_KEYTYPE=1: retype as key presses when a set value does not show.
+#   MH_OBSERVE=1          probe (failure digest: failing tests, project frames, local values) and trace (project
+#                         functions that ran, in order) for code tasks, in both loops, plus a prompt line to reproduce
+#                         with probe before the first edit (harness-lab/findings/007).
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 

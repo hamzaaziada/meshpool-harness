@@ -4,3 +4,6 @@ app:OK 82.7s $0.0034 | pi:OK 84.3s $0.0057 | codex:OK 88.7s $0.0057 | v5:OK 124.
 app:OK 240.0s $0.0030 | pi:OK 113.2s $0.0033 | codex:OK 71.5s $0.0049 | v5:OK 285.1s $0.0040 <- sympy__sympy-16450
 app:OK 30.5s $0.0041 | pi:OK 98.6s $0.0090 | codex:OK 46.2s $0.0057 | v5:OK 169.2s $0.0165 <- django__django-13821
 app:OK 225.8s $0.0166 | pi:OK 336.6s $0.0225 | codex:x 95.2s $0.0000 | v5:x 476.2s $0.0194 <- scikit-learn__scikit-learn-25102
+app:OK 50.5s $0.0048 | pi:OK 30.1s $0.0028 | codex:OK 55.6s $0.0058 | v5:OK 59.4s $0.0046 <- pydata__xarray-3151
+app:OK 152.5s $0.0053 | pi:OK 52.5s $0.0033 | codex:OK 42.0s $0.0040 | v5:OK 58.1s $0.0032 <- sympy__sympy-20154
+app:x 149.6s $0.0053 | pi:x 96.1s $0.0057 | codex:x 40.0s $0.0000 | v5:x 230.3s $0.0056 <- pylint-dev__pylint-4970

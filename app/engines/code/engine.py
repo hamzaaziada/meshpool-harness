@@ -184,6 +184,10 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     if os.environ.get("MH_TERSE") == "1":              # v4: output tokens cost 4x input; keep prose between calls short
         system += ("\nBetween tool calls write at most one short sentence. Put the work in tool arguments, not in "
                    "prose, and do not repeat file contents or command output back.")
+    if os.environ.get("MH_OBSERVE") == "1":               # see the bug before editing it (findings 007)
+        system += ("\nBefore your first edit, reproduce the problem with probe (a failing test or a short script) "
+                   "and read its diagnosis. If the cause is not clear, run trace on the same command to see which "
+                   "project functions run. After an edit, use probe to see what still fails.")
     if os.environ.get("MH_SCOPE_PROMPT") == "1":           # the app agent's rule: its patches stayed in scope
         system += ("\nDo what the task asks, nothing more: no extra features, refactors, docs or changelog entries. "
                    "Look before you change anything.")

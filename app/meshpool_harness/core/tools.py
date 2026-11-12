@@ -92,6 +92,15 @@ SCHEMAS = {
                                   "ranges, grep several patterns, check versions). Each runs on its own, even if an "
                                   "earlier one fails; you get every output, labelled.",
                      {"commands": {"type": "array", "items": S}, "timeout_s": I}, ["commands"]),
+    "probe": _fn("probe", "Run a test or a script and get a diagnosis instead of raw output: the failing tests, the "
+                          "exception, and the failing frames in this project's code with their local variable values "
+                          "(library frames dropped). Use it to see the bug before you edit, and after an edit to see "
+                          "what still fails. Counts as a check for finish.",
+                 {"command": S, "timeout_s": I}, ["command"]),
+    "trace": _fn("trace", "Run a Python test or script (python file.py, python -m mod, pytest ...) and list the "
+                          "project's own functions that ran, in first-call order with call counts, then the output "
+                          "tail. Use it to find where to edit before you change anything.",
+                 {"command": S, "timeout_s": I}, ["command"]),
     "run_tests": _fn("run_tests", "Run a test or check command. Its exit code counts as evidence for finish.",
                      {"command": S, "timeout_s": I}, ["command"]),
     "finish": _fn("finish", "Finish the task. `evidence` must name checks you actually ran in this session "
@@ -413,7 +422,7 @@ class Workspace:
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True):
+    def _run(self, command, timeout_s, kind, record=True, raw=False):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -452,6 +461,8 @@ class Workspace:
                 f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
         except OSError:
             pass
+        if raw:                                  # probe/trace post-process the full text themselves
+            return f"[exit {code}]\n{out}", code
         return self._cap(f"[exit {code}]\n{out}", kind), code
 
     def bash(self, command, timeout_s=None):
@@ -478,6 +489,25 @@ class Workspace:
         else:
             parts = [one(c) for c in cmds]
         return "\n\n".join(parts) or "no commands given"
+
+    def probe(self, command, timeout_s=None):
+        """MH_OBSERVE: run a check and return a failure digest (core/observe.py). Recorded as a check."""
+        from .observe import digest, probe_command
+        out, _ = self._run(probe_command(command), timeout_s, "check", raw=True)
+        return digest(out)
+
+    def trace(self, command, timeout_s=None):
+        """MH_OBSERVE: run a Python command under a project-only profiler (core/observe.py)."""
+        from .observe import trace_command
+        wrapped = trace_command(command)
+        if wrapped is None:
+            raise ToolError("trace runs one Python command: python file.py ..., python -m module ..., or pytest ... "
+                            "(optionally after `cd dir &&`), without pipes or redirects")
+        out, _ = self._run(wrapped, timeout_s, "bash", raw=True)
+        i = out.rfind("=== trace:")
+        if i < 0:
+            return self._cap(out, "trace")
+        return self._cap((out[:i][-1500:] + "\n" + out[i:])[-7000:], "trace")
 
     def run_tests(self, command, timeout_s=None):
         return self._run(command, timeout_s, "check")[0]
