@@ -1,72 +1,32 @@
 diff --git a/CHANGES b/CHANGES
-index bc32362ae..9df93d0af 100644
+index bc32362ae..200eba820 100644
 --- a/CHANGES
 +++ b/CHANGES
 @@ -16,6 +16,9 @@ Features added
  Bugs fixed
  ----------
  
-+* #9575: autodoc: Do not show the return annotation of ``__init__()`` methods
-+  (and therefore of classes) when ``autodoc_typehints = "description"``.
++* #10449: autodoc: The return type of a class is no longer injected into the
++  class description when :confval:`autodoc_typehints` is ``description``.
 +
  Testing
  --------
  
 diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
-index 06768168e..ccd236dbc 100644
+index 06768168e..e08497b26 100644
 --- a/sphinx/ext/autodoc/typehints.py
 +++ b/sphinx/ext/autodoc/typehints.py
-@@ -12,6 +12,20 @@ from sphinx.application import Sphinx
- from sphinx.util import inspect, typing
- 
- 
-+def report_return_annotation(objtype: str, name: str) -> bool:
-+    """Check if the return annotation of *obj* should be reported.
-+
-+    Constructor methods (the class itself and its ``__init__()``) always return
-+    ``None`` so their return annotations are useless and only add noise.
-+    """
-+    if objtype == 'class':
-+        return False
-+    elif objtype == 'method' and (name or '').endswith('.__init__'):
-+        return False
-+    else:
-+        return True
-+
-+
- def record_typehints(app: Sphinx, objtype: str, name: str, obj: Any,
-                      options: Dict, args: str, retann: str) -> None:
-     """Record type hints to env object."""
-@@ -28,7 +42,7 @@ def record_typehints(app: Sphinx, objtype: str, name: str, obj: Any,
-             for param in sig.parameters.values():
+@@ -29,7 +29,12 @@ def record_typehints(app: Sphinx, objtype: str, name: str, obj: Any,
                  if param.annotation is not param.empty:
                      annotation[param.name] = typing.stringify(param.annotation, mode)
--            if sig.return_annotation is not sig.empty:
-+            if report_return_annotation(objtype, name) and sig.return_annotation is not sig.empty:
-                 annotation['return'] = typing.stringify(sig.return_annotation, mode)
+             if sig.return_annotation is not sig.empty:
+-                annotation['return'] = typing.stringify(sig.return_annotation, mode)
++                if objtype == "class":
++                    # suppress the return type of a class, which is the type
++                    # of an instance returned by its constructor
++                    pass
++                else:
++                    annotation['return'] = typing.stringify(sig.return_annotation, mode)
      except (TypeError, ValueError):
          pass
-diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py
-index fdb82b1b9..d87ffe31f 100644
---- a/tests/test_ext_autodoc_configs.py
-+++ b/tests/test_ext_autodoc_configs.py
-@@ -1041,18 +1041,12 @@ def test_autodoc_typehints_description_with_documented_init(app):
-             '   Parameters:\n'
-             '      **x** (*int*) --\n'
-             '\n'
--            '   Return type:\n'
--            '      None\n'
--            '\n'
-             '   __init__(x)\n'
-             '\n'
-             '      Init docstring.\n'
-             '\n'
-             '      Parameters:\n'
--            '         **x** (*int*) -- Some integer\n'
--            '\n'
--            '      Return type:\n'
--            '         None\n' == context)
-+            '         **x** (*int*) -- Some integer\n' == context)
  
- 
- @pytest.mark.sphinx('text', testroot='ext-autodoc',

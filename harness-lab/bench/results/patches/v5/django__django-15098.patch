@@ -1,89 +1,158 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index 6ea18dd22f..d4979492de 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -24,6 +24,7 @@ from django.utils.functional import cached_property
+ from django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes
+ from django.utils.regex_helper import _lazy_re_compile, normalize
+ from django.utils.translation import get_language
++from django.utils.translation.trans_real import language_code_prefix_re
+ 
+ from .converters import get_converter
+ from .exceptions import NoReverseMatch, Resolver404
+@@ -324,7 +325,24 @@ class LocalePrefixPattern:
+         language_prefix = self.language_prefix
+         if path.startswith(language_prefix):
+             return path[len(language_prefix):], (), {}
+-        return None
++        match = language_code_prefix_re.match(path)
++        if not match:
++            return None
++        code = match['code']
++        # Empty language prefixes in settings.LANGUAGES are handled by Django
++        # as "unprefixed" language codes. Don't match the default language
++        # prefix if it's not supposed to be prefixed.
++        languages = [
++            code for code, name in settings.LANGUAGES
++            if not name.startswith('__')
++        ]
++        if (
++            code.lower() == settings.LANGUAGE_CODE.lower() or
++            not languages
++        ):
++            if not self.prefix_default_language:
++                return None
++        return path[len(code) + 1:], (), {}
+ 
+     def check(self):
+         return []
 diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
-index 7dcc77b46c..044eb3f5fb 100644
+index 7dcc77b46c..a31cc83763 100644
 --- a/django/utils/translation/trans_real.py
 +++ b/django/utils/translation/trans_real.py
-@@ -43,7 +43,14 @@ language_code_re = _lazy_re_compile(
+@@ -43,7 +43,18 @@ language_code_re = _lazy_re_compile(
      re.IGNORECASE
  )
  
 -language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
-+# Regex for extracting the language code from the URL path prefix. It matches
-+# one or two subtags, optionally followed by a third one, e.g. 'en', 'en-us' or
-+# 'en-latn-us' (see RFC 5646). The third subtag is only part of the match when
-+# it's followed by another path segment, so that e.g. '/de-simple-page/' is not
-+# mistaken for a language prefix.
 +language_code_prefix_re = _lazy_re_compile(
-+    r'^/(\w+([@-]\w+){0,2})(/|$)', re.IGNORECASE,
++    r'^/?'
++    r'(?P<code>('
++    # Extracted from RFC 5646. This is a subset of it, as Django doesn't
++    # support every type of subtag (e.g. extensions, private use, etc.).
++    r'[a-z]{2,3}(-[a-z]{3})?'   # ISO 639-1/2/3/5 (language, optionally extlang)
++    r'(-[a-z]{4})?'             # ISO 15924 (script)
++    r'(-[a-z]{2}|-[0-9]{3})?'   # ISO 3166-1 (region) or UN M.49 (region)
++    r')|und)'
++    r'(/|$)',
++    re.IGNORECASE,
 +)
  
  
  @receiver(setting_changed)
-@@ -482,9 +489,13 @@ def get_supported_language_variant(lang_code, strict=False):
-         except KeyError:
-             pass
-         i = None
--        while (i := lang_code.rfind('-', 0, i)) > -1:
--            possible_lang_codes.append(lang_code[:i])
--        generic_lang_code = possible_lang_codes[-1]
-+        generic_lang_code = possible_lang_code = lang_code
-+        while (i := possible_lang_code.rfind('-')) > -1:
-+            possible_lang_code = possible_lang_code[:i]
-+            possible_lang_codes.append(possible_lang_code)
-+            if len(possible_lang_code.split('-')) == 1:
-+                generic_lang_code = possible_lang_code
-+                break
+@@ -486,10 +497,19 @@ def get_supported_language_variant(lang_code, strict=False):
+             possible_lang_codes.append(lang_code[:i])
+         generic_lang_code = possible_lang_codes[-1]
          supported_lang_codes = get_languages()
++        # Language codes are case insensitive, e.g. 'en-Latn-US' is the same
++        # language as 'en-latn-us'.
++        lowercased_supported_lang_codes = {
++            supported_code.lower(): supported_code
++            for supported_code in supported_lang_codes
++        }
  
          for code in possible_lang_codes:
-@@ -510,7 +521,7 @@ def get_language_from_path(path, strict=False):
+             if code in supported_lang_codes and check_for_language(code):
+                 return code
++            supported_code = lowercased_supported_lang_codes.get(code.lower())
++            if supported_code is not None and check_for_language(supported_code):
++                return supported_code
+         if not strict:
+             # if fr-fr is not supported, try fr-ca.
+             for supported_code in supported_lang_codes:
+@@ -498,21 +518,21 @@ def get_supported_language_variant(lang_code, strict=False):
+     raise LookupError(lang_code)
+ 
+ 
+-def get_language_from_path(path, strict=False):
++def get_language_from_path(path):
+     """
+-    Return the language code if there's a valid language code found in `path`.
++    Return the language code if a language prefix is found in `path`.
+ 
+-    If `strict` is False (the default), look for a country-specific variant
+-    when neither the language code nor its generic variant is found.
++    Return settings.LANGUAGE_CODE if the prefix is a valid language code that
++    isn't supported. Return None if the path doesn't contain a language prefix.
+     """
+     regex_match = language_code_prefix_re.match(path)
+     if not regex_match:
          return None
-     lang_code = regex_match[1]
+-    lang_code = regex_match[1]
++    lang_code = regex_match['code']
      try:
 -        return get_supported_language_variant(lang_code, strict=strict)
-+        return get_supported_language_variant(lang_code, strict=True)
++        return get_supported_language_variant(lang_code)
      except LookupError:
-         return None
+-        return None
++        return settings.LANGUAGE_CODE
  
+ 
+ def get_language_from_request(request, check_path=False):
+@@ -526,9 +546,7 @@ def get_language_from_request(request, check_path=False):
+     code, otherwise this is skipped for backwards compatibility.
+     """
+     if check_path:
+-        lang_code = get_language_from_path(request.path_info)
+-        if lang_code is not None:
+-            return lang_code
++        return get_language_from_path(request.path_info)
+ 
+     lang_code = request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME)
+     if lang_code is not None and lang_code in get_languages() and check_for_language(lang_code):
 diff --git a/tests/i18n/tests.py b/tests/i18n/tests.py
-index bb6ea15f85..a3b02bbd1e 100644
+index bb6ea15f85..98eda5dd05 100644
 --- a/tests/i18n/tests.py
 +++ b/tests/i18n/tests.py
-@@ -1902,6 +1902,38 @@ class CountrySpecificLanguageTests(SimpleTestCase):
-         self.assertEqual('pt-br', lang)
+@@ -1610,6 +1610,31 @@ class MiscTests(SimpleTestCase):
+         self.assertEqual(g('/de-ch/'), 'de')
+         self.assertIsNone(g('/de-simple-page/'))
  
- 
-+@override_settings(
-+    USE_I18N=True,
-+    LANGUAGES=[
-+        ('en-us', 'English'),
-+        ('en-latn-us', 'Latin English'),
-+    ],
-+    MIDDLEWARE=[
-+        'django.middleware.locale.LocaleMiddleware',
-+        'django.middleware.common.CommonMiddleware',
-+    ],
-+    ROOT_URLCONF='i18n.urls',
-+)
-+class LanguageScriptAndRegionTests(SimpleTestCase):
-+    def test_check_for_language(self):
-+        self.assertTrue(check_for_language('en-latn-us'))
-+
-+    def test_get_language_from_path(self):
++    @override_settings(
++        LANGUAGES=[
++            ('en', 'English'),
++            ('en-latn-us', 'Latin English'),
++            ('de', 'German'),
++            ('de-at', 'Austrian German'),
++            ('pl', 'Polish'),
++        ],
++        LANGUAGE_CODE='en',
++    )
++    def test_get_language_from_path_real_with_script_and_region(self):
 +        g = trans_real.get_language_from_path
-+        self.assertEqual(g('/en-us/'), 'en-us')
 +        self.assertEqual(g('/en-latn-us/'), 'en-latn-us')
-+        self.assertIsNone(g('/de-simple-page/'))
++        self.assertEqual(g('/en-latn-us'), 'en-latn-us')
++        # The language is case insensitive and matched to the case used in
++        # settings.LANGUAGES.
++        self.assertEqual(g('/en-Latn-US/'), 'en-latn-us')
++        self.assertEqual(g('/en-LATN-us/'), 'en-latn-us')
++        # A language part alone is a valid prefix.
++        self.assertEqual(g('/en/'), 'en')
++        # An unsupported script or region falls back to the generic language.
++        self.assertEqual(g('/en-lat-us/'), 'en')
++        self.assertEqual(g('/en-latn/'), 'en')
++        self.assertEqual(g('/en-latn-us-extra/'), 'en')
 +
-+    def test_i18n_patterns_with_script_and_region(self):
-+        response = self.client.get('/en-us/simple/')
-+        self.assertEqual(response.status_code, 200)
-+        response = self.client.get('/en-latn-us/simple/')
-+        self.assertEqual(response.status_code, 200)
-+        # An unknown language prefix must not match.
-+        response = self.client.get('/de-simple-page/simple/')
-+        self.assertEqual(response.status_code, 404)
-+
-+
- class TranslationFilesMissing(SimpleTestCase):
- 
-     def setUp(self):
+     def test_get_language_from_path_null(self):
+         g = trans_null.get_language_from_path
+         self.assertIsNone(g('/pl/'))

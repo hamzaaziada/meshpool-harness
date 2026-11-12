@@ -1,0 +1,105 @@
+diff --git a/django/utils/functional.py b/django/utils/functional.py
+index 5f12aa08ff..c085a551fb 100644
+--- a/django/utils/functional.py
++++ b/django/utils/functional.py
+@@ -291,6 +291,16 @@ class LazyObject:
+         """
+         raise NotImplementedError('subclasses of LazyObject must provide a _setup() method')
+ 
++    def _setup_class(self):
++        """
++        Return the class the wrapped object is an instance of, or None when
++        it's unknown until the wrapped object has been evaluated.
++
++        Returning a class allows lazy `__class__` lookups that don't access
++        the wrapped object (and therefore don't resolve it too early).
++        """
++        return None
++
+     # Because we have messed with __class__ below, we confuse pickle as to what
+     # class we are pickling. We're going to have to initialize the wrapped
+     # object to successfully pickle it, so we might as well just pickle the
+@@ -337,7 +347,11 @@ class LazyObject:
+ 
+     # Need to pretend to be the wrapped class, for the sake of objects that
+     # care about this (especially in equality tests)
+-    __class__ = property(new_method_proxy(operator.attrgetter("__class__")))
++    def __class__(self):
++        result = self._setup_class()
++        if result is None:
++            result = self._wrapped.__class__
++        return result
+     __eq__ = new_method_proxy(operator.eq)
+     __lt__ = new_method_proxy(operator.lt)
+     __gt__ = new_method_proxy(operator.gt)
+@@ -368,7 +382,7 @@ class SimpleLazyObject(LazyObject):
+     Designed for compound objects of unknown type. For builtins or objects of
+     known type, use django.utils.functional.lazy.
+     """
+-    def __init__(self, func):
++    def __init__(self, func, _compiled_result_type=None):
+         """
+         Pass in a callable that returns the object to be wrapped.
+ 
+@@ -378,11 +392,15 @@ class SimpleLazyObject(LazyObject):
+         value.
+         """
+         self.__dict__['_setupfunc'] = func
++        self.__dict__['_setupclass'] = _compiled_result_type
+         super().__init__()
+ 
+     def _setup(self):
+         self._wrapped = self._setupfunc()
+ 
++    def _setup_class(self):
++        return self.__dict__['_setupclass']
++
+     # Return a meaningful representation of the lazy object for debugging
+     # without evaluating the wrapped object.
+     def __repr__(self):
+diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
+index 7dcc77b46c..5e6404a09e 100644
+--- a/django/utils/translation/trans_real.py
++++ b/django/utils/translation/trans_real.py
+@@ -43,7 +43,27 @@ language_code_re = _lazy_re_compile(
+     re.IGNORECASE
+ )
+ 
+-language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
++language_code_prefix_re_cache = {}
++
++
++def get_language_code_prefix_re():
++    """
++    Return a compiled regular expression that matches any language listed in
++    settings.LANGUAGES at the beginning of a URL path. The language code is
++    captured in group 1.
++    """
++    language_codes = frozenset(code for code, name in settings.LANGUAGES if code)
++    try:
++        return language_code_prefix_re_cache[language_codes]
++    except KeyError:
++        pass
++    regex = re.compile(
++        r'^(?:%s)(/|$)' % '|'.join(
++            re.escape(code) for code in sorted(language_codes, key=len, reverse=True)
++        )
++    )
++    language_code_prefix_re_cache[language_codes] = regex
++    return regex
+ 
+ 
+ @receiver(setting_changed)
+@@ -505,10 +525,10 @@ def get_language_from_path(path, strict=False):
+     If `strict` is False (the default), look for a country-specific variant
+     when neither the language code nor its generic variant is found.
+     """
+-    regex_match = language_code_prefix_re.match(path)
++    regex_match = get_language_code_prefix_re().match(path)
+     if not regex_match:
+         return None
+-    lang_code = regex_match[1]
++    lang_code = regex_match[0][1:-1]
+     try:
+         return get_supported_language_variant(lang_code, strict=strict)
+     except LookupError:
