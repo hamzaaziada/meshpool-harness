@@ -1,1 +1,3 @@
 key spend at start: $64.99483295069999
+v5:OK 146.4s $0.0179 | app:x 163.8s $0.0063 | codex:x 12.3s $0.0000 | pi:x 19.2s $0.0007 <- sqlite-db-truncate
+v5:OK 20.7s $0.0021 | app:OK 24.3s $0.0033 | codex:OK 28.7s $0.0029 | pi:OK 20.3s $0.0021 <- multi-source-data-merger
