@@ -408,6 +408,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "brand" / m.group(1)).read_bytes(),
                               "image/png" if m.group(2) == "png" else "font/woff2",
                               {"Cache-Control": "max-age=86400"})
+        if u.path == "/raw":                          # a project file, for image and PDF previews
+            q = parse_qs(u.query)
+            if q.get("t", [""])[0] != TOKEN:
+                return self._send(403, {"error": "forbidden"})
+            try:
+                p = W._inside(W.check_root(q.get("root", [""])[0]), q.get("path", [""])[0])
+            except (ValueError, OSError):
+                return self._send(404, {"error": "not found"})
+            if not p.is_file() or p.stat().st_size > 60_000_000:
+                return self._send(404, {"error": "not found"})
+            ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+            if not (ctype.startswith("image/") or ctype == "application/pdf"):
+                return self._send(415, {"error": "only images and PDFs are served"})
+            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'inline; filename="{p.name}"',
+                                                          "X-Content-Type-Options": "nosniff",
+                                                          "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
         if u.path.startswith("/files/"):
             q = parse_qs(u.query)
             if q.get("t", [""])[0] != TOKEN:
@@ -540,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_action(self._json()))
-            if u.path == "/api/route":
+            if u.path == "/api/route-harness":
                 from meshpool_harness import harness_router as HRT
                 b = self._json()
                 return self._send(200, HRT.route(b.get("text", ""), b.get("kind", "cowork")))
