@@ -40,6 +40,10 @@ PRESETS = {
 #                         refuses it when that check fails). Saves one model call per solved task.
 #   MH_SCOPE_CHECK=1      code tasks: at the first finish, if the change touches more than one non-test file or more
 #                         than 30 non-test lines, show the per-file diff size once and ask to drop unneeded edits.
+#   MH_BROWSER_READONLY=1 browser: a read-only field (picker input) gets its value set at once, with a note, instead
+#                         of a 10 s timeout.  MH_BROWSER_SETTLE=1: wait until the page is quiet (max 1.5 s) before the
+#                         snapshot, so late menus are listed.  MH_BROWSER_STATES=1: mark (invalid), (disabled),
+#                         (read-only).  MH_BROWSER_KEYTYPE=1: retype as key presses when a set value does not show.
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 
