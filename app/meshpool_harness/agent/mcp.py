@@ -67,6 +67,52 @@ def active_config(path: Path | None = None) -> dict:
     return cfg
 
 
+# ---------- health: remember which servers failed, so one broken server does not slow every new thread ----------
+
+HEALTH_TTL = 30 * 60
+_HLOCK = threading.Lock()
+
+
+def _health_file() -> Path:
+    return C.home() / "mcp-health.json"
+
+
+def _sig(spec) -> str:
+    import hashlib
+    return hashlib.sha1(json.dumps(spec, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _read_health() -> dict:
+    try:
+        d = json.loads(_health_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def record_health(rows: dict) -> None:
+    """rows: {name: (spec, ok, error)}"""
+    if not rows:
+        return
+    with _HLOCK:
+        d = _read_health()
+        now = time.time()
+        for name, (spec, ok, err) in rows.items():
+            d[name] = {"sig": _sig(spec), "ok": bool(ok), "error": str(err or "")[:300], "t": now}
+        try:
+            _health_file().write_text(json.dumps(d, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def recently_failed(name: str, spec) -> str | None:
+    """The error, if this exact server config failed in the last 30 minutes; else None."""
+    h = _read_health().get(name)
+    if h and not h.get("ok") and h.get("sig") == _sig(spec) and time.time() - float(h.get("t") or 0) < HEALTH_TTL:
+        return h.get("error") or "failed"
+    return None
+
+
 def tool_name(server: str, tool: str) -> str:
     n = re.sub(r"[^A-Za-z0-9_-]", "_", f"mcp__{server}__{tool}")
     return n[:64]
@@ -336,7 +382,7 @@ class Manager:
         self.map: dict[str, tuple[str, str]] = {}
         self.last_images: list[dict] = []
 
-    def start(self, timeout: float = 90) -> "Manager":
+    def start(self, timeout: float = 90, use_health: bool = True) -> "Manager":
         try:
             cfg = active_config(self.path)
         except (ValueError, OSError) as e:
@@ -352,6 +398,10 @@ class Manager:
                 continue
             s = Server(name, spec, log_dir, self.roots)
             self.servers[name] = s
+            bad = recently_failed(name, spec) if use_health else None
+            if bad is not None:                       # failed a moment ago: do not make every thread wait for it
+                s.status, s.error = "error", f"skipped, it failed recently ({bad}). Check it in Settings, MCP servers."
+                continue
             th = threading.Thread(target=s.start, args=(timeout,), daemon=True)
             th.start()
             threads.append((s, th))
@@ -359,6 +409,8 @@ class Manager:
             th.join(timeout + 5)
             if th.is_alive():
                 s.status, s.error = "error", f"did not start within {int(timeout)} s"
+        record_health({n: (cfg.get(n), s.status == "connected", s.error) for n, s in self.servers.items()
+                       if not str(s.error).startswith("skipped")})
         self.map = {}
         for s in self.servers.values():
             for t in s.tools:

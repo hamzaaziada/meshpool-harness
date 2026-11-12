@@ -92,6 +92,8 @@ def mcp_servers_for_acp(roots: list[str]) -> list[dict]:
     for name, spec in cfg.items():
         if not isinstance(spec, dict) or spec.get("disabled"):
             continue
+        if M.recently_failed(name, spec) is not None:
+            continue                                 # a broken server would make the harness wait and retry it
         spec = M._expand(spec)
         if spec.get("url"):
             out.append({"type": "http", "name": name, "url": spec["url"],
