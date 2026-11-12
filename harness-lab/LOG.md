@@ -42,3 +42,25 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Paid confirmation: not worth a run on its own; bundle it with the next sentinel A/B.
 - Open question for the owner: offline work cannot show why book-flight and terminal take 20+ turns, or whether
   keep-warm works. Both need a few real transcripts (cents per MiniWoB task).
+
+## 2026-11-12, cycle 3: cause of the cache misses (analysis only)
+
+- Joined the call ledger's cut-off calls with the per-call cache log (findings/002). 73% of avoidable full-miss
+  tokens come on the call right after a 20 s first-token cut-off. Those retries miss the cache 46% of the time,
+  against 7% for other calls.
+- Conclusion: v4's 90 s first-token wait should fix most of the cost gap as well as the time gap, with no extra calls.
+  Keep-warm drops to a second-order item.
+- Also found: per model call, Codex took about 9 s on Terminal-Bench and 4.5 s on Verified; we took about 20 s and
+  11 s. Codex makes as many calls per task as we do or more, so the speed gap is per-call wait, not call count.
+  Cut-offs explain part of it (14% of calls lost 20 s or more each).
+- No code change. Next paid step (needs approval): v3 against v4 on 4 Terminal-Bench dev tasks, same time, about
+  $0.60. Compare cut-offs, full misses, uncached tokens and seconds per call.
+
+## 2026-11-12, cycle 4: check and finish in one turn (`MH_CODE_FINISH_SAME_TURN`, off by default)
+
+- Change: one prompt line for the code engine. When the model expects its check to pass, it calls the check and
+  finish together. The browser engine has done this since v3.
+- Safety: the finish guard already needs a passing command after the last edit, and the evidence must cite it. A
+  failing check in the same turn gets the finish refused, and the model sees the failing output. Unit-tested.
+- Expected effect: one model call less per solved task, about 3% of calls on Verified and 5–10 s each.
+- Paid confirmation: bundle with the next sentinel A/B. Watch for new wrong finishes (none expected, given the guard).

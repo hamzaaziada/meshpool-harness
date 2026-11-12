@@ -36,6 +36,8 @@ PRESETS = {
 #                         MH_KEEPWARM_MAX caps pings per tool batch (default 20). Usage gains keepwarm_calls.
 #   MH_PARALLEL_MANY=1    bash_many runs its commands at the same time when every one is read-only (tools.read_only:
 #                         a conservative allow-list; any write, redirect or unknown program keeps the batch in order).
+#   MH_CODE_FINISH_SAME_TURN=1  code engine: run the final check and finish in one turn (the finish guard still
+#                         refuses it when that check fails). Saves one model call per solved task.
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 
