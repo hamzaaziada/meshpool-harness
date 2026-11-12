@@ -28,7 +28,7 @@ def main(paths):
     print("\nper task:")
     for (t, s), v in sorted(keep.items()):
         print(f"  {t[:34]:34}" + " ".join(f"{a}:{'OK' if v[a].get('passed') else '--'}/{v[a].get('wall_s', 0):.0f}s"
-                                         for a in arms))
+                                         for a in arms), flush=True)
 
 
 if __name__ == "__main__":
