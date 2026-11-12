@@ -200,6 +200,9 @@ class Session:
             self.state = "idle"
 
     def emit(self, ev: dict):
+        if ev.get("type") == "interrupted" and getattr(self, "_interrupting", False):
+            self._interrupting = False               # the new message is being answered: do not say "send a message"
+            ev = dict(ev, text="Stopped the previous request.")
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
@@ -253,6 +256,7 @@ class Session:
         self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
             self.emit({"type": "status", "text": "Interrupted. Working on your new message instead."})
+            self._interrupting = True
             self.stop()
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:

@@ -68,7 +68,9 @@ def find_skills() -> list[dict]:
             sid = SK.slug(meta.get("name") or d.name)
             out.append({"key": "skill:" + str(d), "kind": "skill", "source": source, "name": meta.get("name") or d.name,
                         "description": meta.get("description", "")[:200], "path": str(d), "id": sid,
-                        "exists": sid in have})
+                        "exists": sid in have,
+                        # plugin skills come in bundles of dozens: listed, but not ticked by default
+                        "suggested": source != "Claude Code plugin"})
     return out
 
 
