@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Meshpool</string>
+  <key>CFBundleDisplayName</key><string>Meshpool</string>
+  <key>CFBundleIdentifier</key><string>ai.meshpool.desktop</string>
+  <key>CFBundleExecutable</key><string>Meshpool</string>
+  <key>CFBundleIconFile</key><string>Meshpool</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>2.4.0</string>
+  <key>CFBundleVersion</key><string>2.4.0</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Meshpool agents control other apps when you ask them to.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>Meshpool agents read and write files in folders you choose.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Meshpool agents read and write files in folders you choose.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Meshpool agents read and write files in folders you choose.</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright 2026 Meshpool. Apache License 2.0.</string>
+</dict>
+</plist>

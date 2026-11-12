@@ -1,0 +1,11 @@
+{
+  "id": "codex",
+  "name": "Codex",
+  "mode": "code",
+  "type": "acp",
+  "command": "npx",
+  "args": ["-y", "@zed-industries/codex-acp"],
+  "description": "OpenAI's coding agent, through Zed's ACP adapter.",
+  "install": "Needs Node.js and an OpenAI sign-in or OPENAI_API_KEY. Check the adapter's package name on npm if it does not start.",
+  "homepage": "https://github.com/zed-industries/codex-acp"
+}

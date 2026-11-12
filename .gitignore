@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+deps/
+dist-src/
+*.dmg
+*.exe
+!packaging/win/*.exe
+.DS_Store
+app/memory/*.sqlite

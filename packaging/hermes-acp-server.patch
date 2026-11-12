@@ -1,0 +1,25 @@
+--- a/acp_adapter/server.py	2026-11-12 15:20:03.799515839 +0200
++++ b/acp_adapter/server.py	2026-11-12 15:20:03.784531142 +0200
+@@ -198,7 +198,12 @@
+ 
+ 
+ def _attach_interrupted_prompt(interrupted_prompt: str, guidance: str) -> str:
+-    return f"{interrupted_prompt}\n\nUser correction/guidance after interrupt: {guidance}"
++    # Meshpool patch: the new message is the instruction; the stopped request is context only.
++    prev = interrupted_prompt.split("\n\n\u200b")[0].strip()
++    if len(prev) > 400:
++        prev = prev[:400] + "..."
++    return (f"(I stopped your previous request: \"{prev}\". Use what you already did if it helps, "
++            f"but follow my new message.)\n\n{guidance}")
+ 
+ 
+ def _take_interrupted_prompt(state: SessionState) -> tuple[bool, str]:
+@@ -895,7 +900,7 @@
+             except Exception:
+                 logger.debug("Could not emit ACP provenance update after rotation for %s", session_id, exc_info=True)
+ 
+-        final_response = result.get("final_response", "")
++        final_response = result.get("final_response") or ""        # None after a cancel (Meshpool patch)
+         cancelled = bool(state.cancel_event and state.cancel_event.is_set())
+         # The local "waiting for model" interrupt status is metadata, not prose; stop_reason carries it.
+         from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX

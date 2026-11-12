@@ -1,0 +1,209 @@
+{
+ "title": "Northwind Q3 review",
+ "requested_slide_count": 10,
+ "slides": [
+  {
+   "type": "title",
+   "title": "Northwind grew revenue 18% in Q3 while holding margins flat",
+   "subtitle": "Quarterly business review for the executive team",
+   "meta": "Strategy & Operations \u00b7 November 2026"
+  },
+  {
+   "type": "section",
+   "number": 1,
+   "title": "Performance",
+   "subtitle": "Revenue, margin and customer metrics"
+  },
+  {
+   "type": "kpi",
+   "title": "Q3 beat plan on revenue and retention, but cash conversion slipped",
+   "kpis": [
+    {
+     "value": "$48.2M",
+     "label": "Revenue, Q3",
+     "delta": "+18% YoY"
+    },
+    {
+     "value": "31.4%",
+     "label": "Gross margin",
+     "delta": "-0.3 pts"
+    },
+    {
+     "value": "94%",
+     "label": "Net revenue retention",
+     "delta": "+2 pts"
+    },
+    {
+     "value": "41 days",
+     "label": "Days sales outstanding",
+     "delta": "-6 days worse"
+    }
+   ],
+   "takeaway": "Growth is coming from existing accounts; collections are the main operational risk going into Q4.",
+   "source": "Northwind finance system, Q3 close"
+  },
+  {
+   "type": "chart",
+   "title": "Enterprise drove two thirds of the revenue increase",
+   "chart": {
+    "type": "column",
+    "categories": [
+     "Q4 25",
+     "Q1 26",
+     "Q2 26",
+     "Q3 26"
+    ],
+    "series": [
+     {
+      "name": "Enterprise",
+      "values": [
+       22.1,
+       23.4,
+       26.0,
+       29.5
+      ]
+     },
+     {
+      "name": "Mid-market",
+      "values": [
+       15.2,
+       15.9,
+       16.8,
+       18.7
+      ]
+     }
+    ],
+    "number_format": "$0.0\"M\""
+   },
+   "takeaways": [
+    "Enterprise up $7.4M over four quarters",
+    "Mid-market growth steady at 7% per quarter",
+    "No single account above 6% of revenue"
+   ],
+   "source": "Finance system"
+  },
+  {
+   "type": "bullets",
+   "title": "Three operational issues explain most of the margin pressure",
+   "bullets": [
+    "Freight costs rose 11% after the carrier contract reset in July",
+    {
+     "text": "Discounting widened on multi-year renewals",
+     "sub": [
+      "Average discount 14% vs 9% last year",
+      "Concentrated in three regions"
+     ]
+    },
+    "Onboarding headcount grew ahead of new bookings",
+    "Warranty claims normalised after the Q2 spike"
+   ],
+   "callout": "Fixing freight and renewal discounting recovers roughly 1.1 points of margin."
+  },
+  {
+   "type": "two_column",
+   "title": "The renewal discount problem is a policy gap, not a pricing gap",
+   "left": {
+    "heading": "What we see",
+    "bullets": [
+     "Reps approve discounts above 10% without review",
+     "Multi-year deals receive the deepest cuts",
+     "Win rates did not improve with deeper discounts"
+    ]
+   },
+   "right": {
+    "heading": "What we propose",
+    "bullets": [
+     "Deal desk review above 10% discount",
+     "Price multi-year commitments on volume, not term",
+     "Monthly discount report to regional leads"
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "North and West regions account for most of the discount leakage",
+   "columns": [
+    "Region",
+    "Renewals",
+    "Avg discount",
+    "Leakage ($K)"
+   ],
+   "rows": [
+    [
+     "North",
+     "142",
+     "16.2%",
+     "1,240"
+    ],
+    [
+     "West",
+     "118",
+     "15.1%",
+     "980"
+    ],
+    [
+     "South",
+     "97",
+     "11.4%",
+     "410"
+    ],
+    [
+     "East",
+     "88",
+     "9.8%",
+     "220"
+    ],
+    [
+     "Total",
+     "445",
+     "13.9%",
+     "2,850"
+    ]
+   ],
+   "highlight_row": 4,
+   "takeaway": "Two regions drive 78% of leakage, so the fix can start there."
+  },
+  {
+   "type": "timeline",
+   "title": "The plan recovers margin within two quarters",
+   "items": [
+    {
+     "date": "Nov 2026",
+     "label": "Deal desk live",
+     "detail": "Review threshold at 10%"
+    },
+    {
+     "date": "Dec 2026",
+     "label": "Freight re-tender",
+     "detail": "Three carriers shortlisted"
+    },
+    {
+     "date": "Feb 2027",
+     "label": "Discount reporting",
+     "detail": "Monthly regional review"
+    },
+    {
+     "date": "Apr 2027",
+     "label": "Margin target",
+     "detail": "32.5% gross margin"
+    }
+   ]
+  },
+  {
+   "type": "quote",
+   "quote": "We never lost a renewal on price last year. We lost two on onboarding speed.",
+   "attribution": "VP Customer Success",
+   "title": "Customers are telling us speed matters more than price"
+  },
+  {
+   "type": "image_text",
+   "title": "The new deal desk flow adds one approval step for large discounts",
+   "image": "engines/slides/examples/sample.png",
+   "bullets": [
+    "Rep submits discount request in CRM",
+    "Deal desk responds within one business day",
+    "Approvals above 20% go to the CFO"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,13 @@
+# deepseek profile: fully tuned and benchmarked (see results.md). Sources: profiles/notes.md
+family: deepseek
+models: {planner: deepseek-v4.1-flash, worker: deepseek-v4.1-flash, verifier: deepseek-v4.1-flash}
+match: ["deepseek"]
+caching: {mode: automatic_prefix, note: "byte-stable system+tools prefix; append-only history; no compaction below 600k chars"}
+tool_calling: {style: native, parallel: true, strict_schemas: true}
+edit_format: exact_replace          # edit(old,new) with uniqueness + staleness checks
+reasoning: {planner: default, worker: default, verifier: default}
+sampling: {worker: {temperature: 0.0}, planner: {temperature: 0.0}, ensemble: [0.0, 0.4, 0.8]}
+limits: {max_output_tokens: 8192, meshpool_output_cap: 16384}
+prompt_style: {numbered_method: true, examples: minimal, negative_rules: few_and_specific}
+billing: {meshpool_factor_vs_offpeak_list: 1.97, note: "meshpool bills ~DeepSeek peak rate; see results.md"}
+known_failures: [symptom_fix_at_entry_point, nested_docker_quoting, rewrites_whole_scripts, finish_without_check]

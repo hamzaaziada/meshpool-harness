@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshpool-harness"
+version = "2.4.0"
+description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
+readme = "readme.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["pandas>=2.0", "openpyxl>=3.1", "python-pptx>=0.6.23", "python-docx>=1.1", "PyYAML>=6.0",
+                "lxml>=5.0", "Pillow>=10.0", "cairosvg>=2.7"]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.40"]
+dev = ["pytest>=8.0", "ruff"]
+
+[project.scripts]
+meshpool = "meshpool_harness.cli:main"
+
+[project.entry-points."meshpool_harness.connectors"]
+
+[tool.setuptools.packages.find]
+include = ["meshpool_harness*", "engines*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite"]

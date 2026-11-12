@@ -1,0 +1,10 @@
+# glm profile: documentation + smoke tests (phase 3).
+family: glm
+models: {planner: glm-5.3, worker: glm-5.3, verifier: glm-5.3}
+match: ["glm"]
+caching: {mode: automatic_prefix}
+tool_calling: {style: native, parallel: false, strict_schemas: true}
+edit_format: exact_replace
+sampling: {worker: {temperature: 0.2}}
+limits: {max_output_tokens: 8192}
+prompt_style: {numbered_method: true}

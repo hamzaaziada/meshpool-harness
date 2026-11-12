@@ -1,0 +1,69 @@
+# Meshpool agent: run a task on this repository and open a pull request with the result.
+# Trigger: Actions > Meshpool agent > Run workflow (type a task), or add the label "meshpool" to an issue.
+name: Meshpool agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: What should Meshpool do?
+        required: true
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  agent:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'meshpool'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Meshpool
+        env:
+          MESHPOOL_SOURCE_URL: ${{ vars.MESHPOOL_SOURCE_URL }}
+        run: |
+          curl -fsSL "$MESHPOOL_SOURCE_URL" -o "$RUNNER_TEMP/meshpool.zip"
+          unzip -q "$RUNNER_TEMP/meshpool.zip" -d "$RUNNER_TEMP/mp"
+          pip install -r "$RUNNER_TEMP/mp/Meshpool/app/requirements.txt"
+
+      - name: Run the agent
+        env:
+          MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
+          PYTHONPATH: ${{ runner.temp }}/mp/Meshpool/app
+          MESHPOOL_HOME: ${{ runner.temp }}/mp-home
+          TASK_INPUT: ${{ github.event.inputs.task }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          if [ -n "$TASK_INPUT" ]; then TASK="$TASK_INPUT"; else
+            TASK="Resolve GitHub issue #$ISSUE_NUMBER: $ISSUE_TITLE
+
+          $ISSUE_BODY
+
+          Make the change, run the tests, and summarize what you did."; fi
+          printf '%s' "$TASK" > "$RUNNER_TEMP/task.txt"
+          python -m meshpool_harness -p "$TASK" --auto --no-mcp | tee "$RUNNER_TEMP/summary.md"
+
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "meshpool[bot]"
+          git config user.email "meshpool-bot@users.noreply.github.com"
+          git checkout -b "meshpool/run-${{ github.run_id }}"
+          git add -A
+          if git diff --cached --quiet; then echo "The agent made no changes."; exit 0; fi
+          git commit -m "Meshpool: $(head -c 60 "$RUNNER_TEMP/task.txt" | tr '\n' ' ')"
+          git push origin HEAD
+          gh pr create --title "Meshpool: $(head -c 60 "$RUNNER_TEMP/task.txt" | tr '\n' ' ')" --body-file "$RUNNER_TEMP/summary.md"

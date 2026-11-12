@@ -1,0 +1,2 @@
+Hermes Agent by Nous Research, MIT License (see LICENSE). Bundled from https://github.com/NousResearch/hermes-agent at commit b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a (v0.21.2).
+Meshpool changes: two small fixes in acp_adapter/server.py, each marked "Meshpool patch" (a cancelled turn no longer leaves the session busy; a message sent after a stop is treated as the new instruction).

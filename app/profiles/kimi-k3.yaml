@@ -1,0 +1,10 @@
+# kimi-k3 profile: documentation + smoke tests (phase 3).
+family: kimi
+models: {planner: kimi-k3, worker: kimi-k3, verifier: kimi-k3}
+match: ["kimi"]
+caching: {mode: automatic_prefix}
+tool_calling: {style: native, parallel: true, strict_schemas: true}
+edit_format: exact_replace
+sampling: {worker: {temperature: null}, planner: {temperature: null}, verifier: {temperature: null}}   # meshpool: kimi-k3 rejects temperature (400)
+limits: {max_output_tokens: 8192}
+prompt_style: {numbered_method: true}
