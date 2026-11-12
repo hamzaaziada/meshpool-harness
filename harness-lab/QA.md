@@ -18,7 +18,7 @@ fakehome/
 - Pi: `npm install @earendil-works/pi-coding-agent@1.5.2`, then link its `node_modules` as `app/vendor/pi/node_modules`.
 - Hermes 0.21.2: tag `v2026.9.11` of NousResearch/hermes-agent. Apply `packaging/hermes-acp-server.patch`, then link
   it as `app/vendor/hermes`.
-- Its dependencies: the `dependencies` and `acp` extra from its `pyproject.toml`. The package itself is not built;
+- Its dependencies: the `dependencies` and the `acp` and `mcp` extras from its `pyproject.toml`. Without `mcp`, Hermes connects to no MCP servers. The package itself is not built;
   the app runs Hermes from source.
 - `app/vendor/` is git-ignored.
 

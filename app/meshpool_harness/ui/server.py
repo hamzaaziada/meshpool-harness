@@ -723,7 +723,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.open_editor(self._json().get("path", "")))
             if u.path == "/api/open-path":
                 from meshpool_harness.ui.desktop import reveal
-                reveal(W.check_root(self._json().get("path", "")))
+                target = W.check_root(self._json().get("path", ""))
+                try:
+                    reveal(target)
+                except OSError as e:                      # no file manager here (e.g. a headless Linux machine)
+                    return self._send(400, {"error": f"Could not open the folder on this computer ({e.strerror or e}). "
+                                                     f"It is at: {target}"})
                 return self._send(200, {"ok": True})
             if u.path == "/api/term":
                 b = self._json()

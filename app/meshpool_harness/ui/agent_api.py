@@ -174,7 +174,16 @@ class Session:
     def _start_mcp(self):
         self.emit({"type": "status", "text": "Starting MCP servers..."})
         try:
-            self.mcp = M.Manager(roots=[self.workdir]).start(timeout=float(os.environ.get("MH_MCP_START_S", "45")))
+            extra = {}
+            if getattr(self.agent, "profile", "") == "work":
+                # Meshpool Work gets the office server Hermes and Pi get: Word documents (make_document), PDFs,
+                # conversions and document reading. Its own office_task covers slides, sheets and data only.
+                from meshpool_harness.harnesses.acp import office_server
+                spec = office_server([self.workdir])
+                extra = {spec["name"]: {"command": spec["command"], "args": spec["args"],
+                                        "env": {e["name"]: e["value"] for e in spec["env"]}}}
+            self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
+                timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
