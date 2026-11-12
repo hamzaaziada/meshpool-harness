@@ -124,3 +124,16 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   needs an `image` field). Smoke run: v5 used 18 calls in 80 s, the app agent 25 calls in 135 s; no full misses.
 - Fairness: on MiniWoB the browser tool is part of the test setup. Round 2 adds Codex and pi with the fixed tool
   (`codex5`, `pi5`), so a v5 win can be split into harness and tool.
+
+## 2026-11-12, cycle 9: results so far, and observability tools (`MH_OBSERVE`, off by default)
+
+- Ablation, Verified dev, 10 tasks: v5 8/10. Dropping the todo list, same-turn finish and the scope prompt each
+  solved 7/10, so all three are dropped. Dropping the todo list cut calls by 22% but lost a task.
+- Terminal-Bench dev, 4 tasks: v5 3/4, app agent 2/4, Codex 1/4, Pi 1/4. On sqlite-db-truncate, Codex and Pi
+  crashed on the gateway's hex filter (our withhold handles it). When v5 hits the wall cap it loses its usage report;
+  to fix.
+- App: harness descriptions now say what each is best at, from measured results; the browser fixes are on in the
+  app's browser tool.
+- findings/007: the model edits nearly blind (0.5 repro runs before the first edit), then iterates (27 calls after).
+  Built `probe` and `trace` (core/observe.py) in both loops, with a prompt line. Tested on real pytest and script
+  runs. Next: A/B on Verified dev after the test set finishes.

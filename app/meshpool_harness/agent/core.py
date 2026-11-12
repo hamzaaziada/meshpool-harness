@@ -47,6 +47,8 @@ BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many
 V3 = os.environ.get("MH_AGENT_V3", "1") != "0"
 if not V3:
     BUILTIN.remove("bash_many")
+if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug before editing (core/observe.py)
+    BUILTIN[BUILTIN.index("bash") + 1:BUILTIN.index("bash") + 1] = ["probe", "trace"]
 WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
@@ -295,6 +297,10 @@ class Agent:
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
         if V3:
             text += V3_RULES
+        if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
+            text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
+                     "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
+                     "which project functions run. After an edit, use probe to see what still fails.")
         for name in PROJECT_FILES:
             p = self.root / name
             if p.is_file():
@@ -654,7 +660,7 @@ class Agent:
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
-        group = "edit" if name in ("edit", "write_file") else "bash" if name == "bash_many" else name
+        group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
         if group in self.always:
             return True, ""
         if not self.approve:
@@ -752,6 +758,8 @@ class Agent:
                     ok = bool(m) and m.group(1) == "0"
                 elif name == "bash_many":
                     ok = "[exit " in out and not re.search(r"\[exit [1-9]", out)
+                elif name in ("probe", "trace"):
+                    ok = out.startswith("[exit 0]")
         except ToolError as e:
             out, ok = f"ERROR: {e}", False
         except (Interrupted, KeyboardInterrupt):
