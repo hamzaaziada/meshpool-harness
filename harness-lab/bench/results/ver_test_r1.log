@@ -1,2 +1,6 @@
 key spend at start: $65.89304276669998
 app:x 156.4s $0.0100 | pi:OK 44.1s $0.0044 | codex:x 105.3s $0.0105 | v5:OK 55.6s $0.0052 <- django__django-11532
+app:OK 82.7s $0.0034 | pi:OK 84.3s $0.0057 | codex:OK 88.7s $0.0057 | v5:OK 124.0s $0.0056 <- pydata__xarray-4695
+app:OK 240.0s $0.0030 | pi:OK 113.2s $0.0033 | codex:OK 71.5s $0.0049 | v5:OK 285.1s $0.0040 <- sympy__sympy-16450
+app:OK 30.5s $0.0041 | pi:OK 98.6s $0.0090 | codex:OK 46.2s $0.0057 | v5:OK 169.2s $0.0165 <- django__django-13821
+app:OK 225.8s $0.0166 | pi:OK 336.6s $0.0225 | codex:x 95.2s $0.0000 | v5:x 476.2s $0.0194 <- scikit-learn__scikit-learn-25102
