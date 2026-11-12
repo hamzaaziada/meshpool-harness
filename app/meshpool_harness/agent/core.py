@@ -717,6 +717,8 @@ class Agent:
 
     # ---------- sessions ---------------------------------------------------------------------------------------
     def save(self):
+        if getattr(self, "deleted", False):           # the user deleted this thread; never bring it back
+            return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             (self.dir / "session.json").write_text(json.dumps({

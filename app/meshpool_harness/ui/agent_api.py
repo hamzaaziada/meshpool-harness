@@ -17,6 +17,7 @@ from meshpool_harness.harnesses.pi_rpc import PiAgent
 
 LIVE: dict[str, "Session"] = {}
 LOCK = threading.Lock()
+DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
 
 def events_from_messages(messages: list) -> list:
@@ -65,6 +66,9 @@ def read_meta(sid: str) -> dict:
 
 
 def write_meta(sid: str, **kw) -> dict:
+    s = LIVE.get(sid)
+    if s is None and not (SESSIONS / sid).is_dir():
+        return {}                                     # deleted thread: do not recreate its folder
     m = read_meta(sid)
     m.update({k: v for k, v in kw.items() if v is not None})
     _meta_path(sid).parent.mkdir(parents=True, exist_ok=True)
@@ -428,6 +432,8 @@ def create(body: dict) -> dict:
 
 
 def get(sid: str) -> Session:
+    if sid in DELETED:
+        raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
     if s:
@@ -458,6 +464,8 @@ def listing() -> list:
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
     for r in rows.values():
+        if r["id"] in DELETED:
+            continue
         m = read_meta(r["id"])
         if m.get("deleted"):
             continue
@@ -478,9 +486,15 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, archived=act == "archive")
     elif act == "delete":
         with LOCK:
+            DELETED.add(sid)
             s = LIVE.pop(sid, None)
         if s:
+            s.deleted = True
+            s.agent.deleted = True                    # its last save after stopping must not recreate the thread
             s.close()
+            end = time.time() + 6
+            while s.state in ("working", "waiting") and time.time() < end:
+                time.sleep(0.1)
         import shutil
         d = SESSIONS / sid
         if d.is_dir() and d.parent == SESSIONS:

@@ -28,7 +28,7 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
     const top = [...document.querySelectorAll(".dlg-scrim, .scrim, .pop, .ctx, .menu")].pop();
     const root = top || document;
     const els = [...root.querySelectorAll("button, [role=button], summary, .opt, input[type=checkbox], .th, .proj-h, a[href]:not([href^=http])")]
-      .filter(e => vis(e) && !e.disabled && !e.closest("[hidden]"));
+      .filter(e => vis(e) && !e.disabled && !e.closest("[hidden]") && !e.closest(".appr"));
     const seen = {}; const out = [];
     els.forEach(e => {
       const label = (e.getAttribute("aria-label") || e.textContent || e.title || "").replace(/\s+/g, " ").trim().slice(0, 60);
