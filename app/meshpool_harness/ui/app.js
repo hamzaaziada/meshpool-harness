@@ -796,7 +796,11 @@ function applyEv(ev) {
       cur.activity = `${label}${ev.summary ? " " + ev.summary : ""}`; break; }
     case "tool_end": {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
-      const st = $(".st", d); st.className = "st " + (ev.ok ? "" : "bad"); st.textContent = ev.denied ? "denied" : ev.ok ? "" : "failed";
+      // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
+      const out = String(ev.output || ""), stopped = !ev.ok && /not run: stopped by the user|^\[exit 130\]|stopped by the user/i.test(out);
+      const planned = !ev.ok && /plan mode/i.test(out);
+      const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
+      st.textContent = ev.denied ? "denied" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
       if (ev.output && !$("pre", d)) d.insertAdjacentHTML("beforeend", `<pre>${esc(ev.output)}</pre>`);
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
@@ -1443,7 +1447,7 @@ async function importPanel(box, onDone) {
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
   if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
-  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}" ${r.exists ? "" : "checked"}><span class="tg"><b>${r.kind === "skill" ? "$" : ""}${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
+  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}" ${r.exists || r.suggested === false ? "" : "checked"}><span class="tg"><b>${r.kind === "skill" ? "$" : ""}${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
   box.innerHTML = `${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
     ${f.mcp.length ? `<h3 class="onb-h">MCP servers (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">Servers keep the keys and settings they had in the other app. They are saved only on this computer.</p>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div><div class="res" id="impRes"></div>`;

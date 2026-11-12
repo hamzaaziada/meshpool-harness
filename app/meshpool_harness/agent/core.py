@@ -701,7 +701,7 @@ class Agent:
                                       n=2, lineterm=""))
         if not before and name == "write_file":
             lines = after.splitlines()
-            return f"New file, {len(lines)} lines\n" + "\n".join("+" + x for x in lines[:60]) + \
+            return f"New file, {len(lines)} line{'' if len(lines) == 1 else 's'}\n" + "\n".join("+" + x for x in lines[:60]) + \
                 ("\n..." if len(lines) > 60 else "")
         return "\n".join(d[:200]) + ("\n..." if len(d) > 200 else "") if d else "(no change)"
 
