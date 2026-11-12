@@ -78,6 +78,16 @@ def run_harness(text, wd, flags, bport, timeout):
             "error": r.get("error"), "full_miss_calls": u.get("full_miss_calls", 0)}
 
 
+def _save_raw(agent, wd, out):
+    """Keep each baseline's raw event stream (results/raw/), so a missing usage report can be checked later."""
+    try:
+        d = Path(__file__).resolve().parent / "results" / "raw"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{agent}-{Path(wd).name}-{int(time.time())}.jsonl").write_text(out[-2_000_000:])
+    except OSError:
+        pass
+
+
 def run_codex(text, wd, timeout):
     home = tempfile.mkdtemp(prefix="cx_")
     (Path(home) / "config.toml").write_text(
@@ -93,6 +103,7 @@ def run_codex(text, wd, timeout):
         out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     finally:
         shutil.rmtree(home, ignore_errors=True)
+    _save_raw("codex", wd, out)
     t = {"prompt": 0, "cached": 0, "output": 0, "calls": 0}
     for l in out.splitlines():
         try:
@@ -124,6 +135,7 @@ def run_pi(text, wd, timeout):
         out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
     finally:
         shutil.rmtree(d, ignore_errors=True)
+    _save_raw("pi", wd, out)
     t = {"prompt": 0, "cached": 0, "output": 0, "calls": 0}
     for l in out.splitlines():
         try:
