@@ -170,7 +170,7 @@ class Session:
     def _start_mcp(self):
         self.emit({"type": "status", "text": "Starting MCP servers..."})
         try:
-            self.mcp = M.Manager(roots=[self.workdir]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
+            self.mcp = M.Manager(roots=[self.workdir]).start(timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
@@ -556,7 +556,7 @@ def mcp_save(body: dict) -> dict:
 def mcp_test(body: dict) -> dict:
     C.load_into_env(override=True)
     wd = (body.get("workdir") or "").strip() or str(Path.home())
-    m = M.Manager(roots=[wd if Path(wd).is_dir() else str(Path.home())]).start(timeout=90)
+    m = M.Manager(roots=[wd if Path(wd).is_dir() else str(Path.home())]).start(timeout=90, use_health=False)
     try:
         return {"status": m.status(), "error": m.config_error}
     finally:
@@ -592,6 +592,16 @@ def run_scheduled(t: dict) -> str:
                           "which ones you made, and finish with a short summary.)"))
     AS.set_thread(t["id"], s.id)
     return s.id
+
+
+def probe_mcp():
+    """At app start, start every enabled MCP server once and remember which fail, so threads skip broken ones."""
+    try:
+        time.sleep(3)
+        C.load_into_env(override=True)
+        M.Manager(roots=[str(Path.home())]).start(timeout=45, use_health=False).close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def scheduler_loop():

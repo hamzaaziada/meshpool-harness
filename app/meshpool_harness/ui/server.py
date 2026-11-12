@@ -821,6 +821,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         LAST_PING[0] = time.time()
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
+    threading.Thread(target=A.probe_mcp, daemon=True).start()
     if on_ready:
         on_ready(port)
     print("")
