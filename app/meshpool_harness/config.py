@@ -23,6 +23,9 @@ FIELDS = [
     ("MH_CACHE_KEY", "Cache key", "1", "1 = stable prompt_cache_key per conversation."),
     ("MH_WIRE", "Wire format", "chat", "chat or responses. Streaming only works with chat."),
     ("MH_BUDGET_USD", "Budget per task (USD)", "0", "Optional cap per task. 0 = off."),
+    ("MH_AUTO_SUBSCRIPTIONS", "Auto may use subscriptions", "0",
+     "1 = Meshpool Auto may pick Claude or ChatGPT on your own subscription (uses that plan's limits). "
+     "0 = Auto only picks harnesses that run on your Meshpool key."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),

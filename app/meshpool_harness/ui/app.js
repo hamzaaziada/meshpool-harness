@@ -54,6 +54,9 @@ async function api(path, opts = {}) {
   return j;
 }
 const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});
+// Shorten at a word boundary with an ellipsis (the full text stays in the tooltip).
+function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); const i = c.lastIndexOf(" "); return (i > n * 0.6 ? c.slice(0, i) : c).replace(/[,;:.]$/, "") + "…"; }
+
 function toast(text, ms = 2600) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
@@ -308,7 +311,12 @@ async function renameThread(id) {
 }
 async function pickProject() {
   try {
-    const r = await post("/api/projects", {action: "pick"});
+    let r = await post("/api/projects", {action: "pick"});
+    if (r.no_picker) {                 // no folder dialog on this computer: type or paste the path instead
+      const p = await ask({title: "Add a folder", text: "This computer has no folder picker. Type or paste the folder's full path.", value: "", ok: "Add"});
+      if (!p) return;
+      r = await post("/api/projects", {action: "add", path: p.trim()});   // a wrong path shows "Folder not found"
+    }
     S.projects = r.projects;
     if (r.picked) { S.draft.project = r.picked; store("project", r.picked); S.closedProjects.delete(r.picked); newThread(); }
     renderSide();
@@ -568,7 +576,7 @@ function harnessPop(anchor) {
   const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For cowork"], ["sub", "Your subscriptions"], [other, "Other harnesses"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
-    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name)}${h.available === false ? " (not installed)" : h.subscription && !h.signed_in ? " (sign in first)" : ""}<span class="od">${esc((h.description || "").slice(0, 140))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name)}${h.available === false ? " (not installed)" : h.subscription && !h.signed_in ? " (sign in first)" : ""}<span class="od">${esc(clip(h.description || "", 150))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
   }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage harnesses</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {

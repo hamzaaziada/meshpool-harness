@@ -11,7 +11,10 @@ start() {  # port home extra-env...
   rm -rf "$home"; mkdir -p "$home"
   printf 'MESHPOOL_BASE_URL=http://127.0.0.1:8911/v1\nMESHPOOL_API_KEY=test-key-1234\n' > "$home/meshpool.config"
   [ "$port" = 8798 ] && rm -f "$home/meshpool.config"            # fresh install: no key yet (onboarding)
-  (cd "$R/app" && env HOME="$Q/fakehome" MESHPOOL_HOME="$home" MH_BROWSER_HEADLESS=1 "$@" \
+  # Strip every credential from the environment: a subscription harness (Claude Code, Codex) would otherwise sign in
+  # with the tester's own account and make real, paid calls.
+  local unset=(); for v in $(env | cut -d= -f1 | grep -E '^(CLAUDE_|ANTHROPIC_|OPENAI_|CODEX_|AWS_|GH_|GITHUB_|GOOGLE_|AZURE_|GEMINI_)'); do unset+=(-u "$v"); done
+  (cd "$R/app" && env "${unset[@]}" HOME="$Q/fakehome" MESHPOOL_HOME="$home" MH_BROWSER_HEADLESS=1 "$@" \
      nohup "$PY" -m meshpool_harness ui --port "$port" --no-browser > "$OUT/app-$port.log" 2>&1 &)
 }
 start 8799 "$OUT/home-main"; start 8798 "$OUT/home-fresh"; start 8797 "$OUT/home-code" MH_OBSERVE=1 MH_NAV=1 MH_LINT_EDIT=1

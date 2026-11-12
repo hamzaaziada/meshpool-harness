@@ -359,6 +359,11 @@ def run() -> int:
 
 # ---------- helpers the page calls ------------------------------------------------------------------------------
 
+def has_folder_picker() -> bool:
+    """False on a machine with no native folder dialog (e.g. Linux without zenity, browser mode)."""
+    return WINDOW[0] is not None or sys.platform == "darwin" or os.name == "nt" or bool(shutil.which("zenity"))
+
+
 def choose_folder(start: str = "") -> str:
     """Native folder picker. Returns '' when cancelled or not available."""
     start = start if start and Path(start).is_dir() else str(Path.home())

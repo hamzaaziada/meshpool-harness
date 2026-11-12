@@ -55,11 +55,14 @@ Not testable in this Linux container, so checked by other means:
    runs the app.
 3. Make a fake home with one skill and one MCP server for each app the importer reads. Its layout is in
    `harness-lab/QA.md`.
-4. Start the app with:
+4. Remove every credential variable (`CLAUDE_*`, `ANTHROPIC_*`, `OPENAI_*`, cloud and GitHub tokens) from the
+   app's environment. Otherwise a subscription harness signs in with your own account and makes real, paid calls,
+   and it can write that sign-in into the fake home. `run_all.sh` does this.
+5. Start the app with:
    - `MESHPOOL_HOME` set to an empty folder that holds a `meshpool.config` pointing at the mock;
    - `HOME` set to the fake home;
    - `MH_BROWSER_HEADLESS=1`.
 
    For journey 28, start a second app with `MH_OBSERVE=1 MH_NAV=1 MH_LINT_EDIT=1`.
-5. Run, in order: `e2e_full.py`, `journeys.py`, `ui_crawl.js`, `about.js`, `intr.js`, `modes.js`, `v24.js`,
+6. Run, in order: `e2e_full.py`, `journeys.py`, `ui_crawl.js`, `about.js`, `intr.js`, `modes.js`, `v24.js`,
    `midrun.js`, `crawl_all.js`.

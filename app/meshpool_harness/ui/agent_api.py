@@ -108,6 +108,7 @@ class Session:
         self.pending: dict | None = None
         self.mcp = None
         self.agent = None
+        self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
         self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
@@ -249,6 +250,7 @@ class Session:
         interrupt=True stops the current work first and sends the message as a new turn."""
         if not text.strip() and not images:
             raise ValueError("Type a message first.")
+        self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
             self.emit({"type": "status", "text": "Interrupted. Working on your new message instead."})
             self.stop()
@@ -365,9 +367,17 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
-        n = len(r["restored"]) + len(r["deleted"])
-        self.emit({"type": "status", "text": f"Undid turn {turn} and everything after it: {n} file"
-                                             f"{'' if n == 1 else 's'} put back."})
+        def _n(k, word):
+            n = len(r.get(k) or [])
+            return f"{n} file{'' if n == 1 else 's'} {word}"
+        parts = [s for s in (_n("restored", "restored") if r.get("restored") else "",
+                             _n("deleted", "removed") if r.get("deleted") else "") if s]
+        msg = f"Undid turn {turn} and everything after it: " + (", ".join(parts) if parts else
+                                                                 "the agent changed no files in those turns")
+        if r.get("kept"):
+            names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
+            msg += f". Left as they are, because they changed after the agent: {names}"
+        self.emit({"type": "status", "text": msg + "."})
         return r
 
     def stop(self):
@@ -385,6 +395,7 @@ class Session:
         self.agent.mode = self.mode = mode if mode in MODES else "ask"
 
     def view(self, since: int) -> dict:
+        self.touched = time.time()
         with self.lock:
             evs = self.events[since:]
         a = self.agent
@@ -437,12 +448,50 @@ def create(body: dict) -> dict:
         write_meta(s.id, routed=routed["harness"])
     with LOCK:
         LIVE[s.id] = s
+    _start_reaper()
     try:
         from meshpool_harness.ui import workbench as W
         W.add_project(s.workdir)
     except Exception:  # noqa: BLE001
         pass
     return s.view(0)
+
+
+_REAPER: list = []
+
+
+def _reap_once(idle_s: float) -> list:
+    """Close threads nobody has used for idle_s seconds: not working, not waiting for an answer, not viewed. Their
+    MCP servers and harness processes end; opening the thread again resumes it from its saved state."""
+    now, closed = time.time(), []
+    with LOCK:
+        idle = [(sid, s) for sid, s in LIVE.items()
+                if s.state not in ("working", "waiting", "starting") and not s.pending and not s.queue
+                and now - getattr(s, "touched", now) > idle_s]
+        for sid, _ in idle:
+            LIVE.pop(sid, None)
+    for sid, s in idle:
+        try:
+            s.close()
+        except Exception:  # noqa: BLE001 - a helper that is already gone is fine
+            pass
+        closed.append(sid)
+    return closed
+
+
+def _start_reaper():
+    """MH_IDLE_CLOSE_S (default 900; 0 = never): how long an unused thread keeps its helper processes."""
+    idle_s = float(os.environ.get("MH_IDLE_CLOSE_S", "900") or 0)
+    if _REAPER or idle_s <= 0:
+        return
+
+    def loop():
+        while True:
+            time.sleep(min(60.0, max(5.0, idle_s / 4)))
+            _reap_once(idle_s)
+    th = threading.Thread(target=loop, daemon=True, name="meshpool-reaper")
+    _REAPER.append(th)
+    th.start()
 
 
 def get(sid: str) -> Session:
@@ -536,11 +585,28 @@ def search(q: str) -> list:
             d = json.loads(raw)
         except ValueError:
             continue
-        if read_meta(d["id"]).get("deleted"):
+        if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
-        snippet = raw[max(0, i - 60): i + 100].replace("\\n", " ").replace("\n", " ")
-        hits.append({"id": d["id"], "title": read_meta(d["id"]).get("title") or d.get("title") or "New thread",
-                     "workdir": d.get("workdir"), "updated": d.get("updated", 0), "snippet": snippet})
+        title = read_meta(d["id"]).get("title") or d.get("title") or "New thread"
+        # Search what the user reads (titles, messages, replies), not the saved JSON around it.
+        texts = [title]
+        for m in d.get("messages") or []:
+            c = m.get("content") if isinstance(m, dict) else None
+            if isinstance(c, list):
+                c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+            if isinstance(c, str) and m.get("role") in ("user", "assistant"):
+                texts.append(c.split("\n\n\u200b")[0])
+        for e in d.get("events") or []:
+            if isinstance(e, dict) and e.get("type") in ("user", "assistant") and isinstance(e.get("text"), str):
+                texts.append(e["text"])
+        hit = next((s for s in texts if q in s.lower()), None)
+        if hit is None:
+            continue
+        j = hit.lower().find(q)
+        snippet = " ".join(hit[max(0, j - 60): j + 100].split())
+        snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
+        hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),
+                     "snippet": snippet})
     return sorted(hits, key=lambda r: -r["updated"])[:50]
 
 
