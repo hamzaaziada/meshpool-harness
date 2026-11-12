@@ -260,13 +260,14 @@ def _drop_images(messages: list, keep: int = 0) -> None:
 
 class Agent:
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
-                 session_id: str | None = None, max_steps: int = 80, profile: str = "code"):
+                 session_id: str | None = None, max_steps: int = 80, profile: str = "code",
+                 sessions_dir: str | None = None):
         self.profile = "work" if profile == "work" else "code"
         self.root = Path(workdir).expanduser().resolve()
         if not self.root.is_dir():
             raise ValueError(f"Project folder not found: {workdir}")
         self.id = session_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-        self.dir = SESSIONS / self.id
+        self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
         self.mcp = mcp
@@ -376,7 +377,8 @@ class Agent:
         turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         final = ""
         self._todo_touched = False
-        g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "last": 0, "todo_nudged": False}
+        g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
+             "todo_nudged": False}
         if V3 and len(self.messages) <= 2 and not self.plan:
             snap = _env_snapshot(self.root)
             if snap and isinstance(self.messages[-1].get("content"), str):
@@ -398,6 +400,14 @@ class Agent:
                     final = content
                     if self._inbox:                 # the user added something while this reply was written
                         continue
+                    if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan
+                            and self.ws.edits > g["edits0"] and not g.get("scope_shown")):
+                        g["scope_shown"] = True     # once per request: the same check as the benchmark loop's finish
+                        from meshpool_harness.core.finishing import scope_report
+                        rep = scope_report(self.ws, done="reply")
+                        if rep:
+                            self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
+                            continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
                     if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
@@ -580,6 +590,10 @@ class Agent:
         for k, v in d.items():
             turn[k] += v
             self.usage[k] += v
+        if not hasattr(self, "_meter"):
+            from meshpool_harness.core.metrics import CacheMeter
+            self._meter = CacheMeter()
+        self._meter.observe(u, self.usage)                 # full_miss_calls / full_miss_tokens, as in the benchmark loop
         self.emit({"type": "usage", **d})
         msg = (resp.get("choices") or [{}])[0].get("message") or {}
         return msg, streamed

@@ -34,3 +34,19 @@ Options:
 
 Recommendation: 2, then 1. Shared helpers first, so a kept change lands in both loops at once. Then benchmark the
 app's agent as the product number.
+
+## Status (cycle 7)
+
+Option 2 is done for the pieces that apply to both loops:
+
+- `core/webfix.py`: the four browser fixes, used by the benchmark browser tool and the app's browser tool.
+- `core/metrics.py`: the full cache-miss meter, used by both loops (`full_miss_calls`, `full_miss_tokens`).
+- `core/finishing.py`: the scope check. The benchmark loop runs it at finish. The app agent runs it when it ends a
+  reply after editing files.
+
+Option 1 has its entry point: `run_task(text, workdir=..., engine="agent")` (or `"agent-work"`) runs the app's chat
+agent headless. Every tool is allowed, there are no MCP servers, its session files go inside the workdir, and it
+returns the same keys as the other engines.
+
+Not shared, on purpose: same-turn finish and keep-warm. The app agent has no finish tool, and it already waits
+120 s for a stream, so it does not have the cut-off problem.

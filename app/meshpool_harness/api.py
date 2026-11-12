@@ -24,7 +24,7 @@ import os
 import time
 import traceback
 
-ENGINES = ("code", "browser", "data", "sheets", "slides")
+ENGINES = ("code", "browser", "data", "sheets", "slides", "agent", "agent-work")
 
 
 def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | None = None,
@@ -44,11 +44,14 @@ def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | No
             if preset not in PRESETS:
                 raise ValueError(f"unknown preset {preset!r}; choose one of {', '.join(PRESETS)}")
             apply(preset)
-        mod = importlib.import_module(f"engines.{engine}.engine")
-        out = mod.solve(task, workdir=workdir, task_id=task_id or f"app-{int(t0)}", client=client, **kw)
+        if engine in ("agent", "agent-work"):           # the app's own chat agent, headless (what users run)
+            out = _run_agent(task, workdir, "work" if engine == "agent-work" else "code", **kw)
+        else:
+            mod = importlib.import_module(f"engines.{engine}.engine")
+            out = mod.solve(task, workdir=workdir, task_id=task_id or f"app-{int(t0)}", client=client, **kw)
         res = dict(base, **(out if isinstance(out, dict) else {"answer": str(out)}))
         res["ok"] = bool(res.get("ok"))
-        res["error"] = None
+        res["error"] = out.get("error") if engine in ("agent", "agent-work") and isinstance(out, dict) else None
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:                          # noqa: BLE001 - the whole point: never crash the host app
@@ -56,3 +59,28 @@ def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | No
                    detail="".join(traceback.format_exception(type(e), e, e.__traceback__))[-2000:])
     res["wall_s"] = round(time.time() - t0, 1)
     return res
+
+
+def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model: str | None = None, **_) -> dict:
+    """Run the app's chat agent (agent/core.py) on one task with no person in the loop: every tool is allowed
+    (permission mode "auto"), no MCP servers, and its session files go to workdir/.run/agent. The result has the same
+    keys as the engines, so benchmarks can score the agent users actually run."""
+    from meshpool_harness.agent.core import Agent
+    events: list = []
+    a = Agent(workdir, mode="auto", max_steps=max_steps, profile=profile, emit=events.append,
+              sessions_dir=os.path.join(workdir, ".run", "agent"))
+    if model:
+        a.model = model
+    answer = a.send(task)
+    errors = [e.get("text", "") for e in events if e.get("type") == "error"]
+    steps = sum(1 for e in events if e.get("type") == "assistant")
+    capped = any("Stopped after" in x for x in errors)
+    reason = "turn cap" if capped else ("error" if errors else "finished")
+    usage = {"prompt_tokens": a.usage.get("in", 0), "cached_tokens": a.usage.get("cached", 0),
+             "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
+             **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
+    out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
+           "usage": usage}
+    if errors and not capped:
+        out["error"] = errors[-1][:500]
+    return out

@@ -119,47 +119,11 @@ def _fit_value(loc, text: str) -> str:
     return text
 
 
-SETTLE_JS = """(ms) => new Promise(res => { let t = setTimeout(done, 350); const end = setTimeout(done, ms);
-  const ob = new MutationObserver(() => { clearTimeout(t); t = setTimeout(done, 350); });
-  function done() { ob.disconnect(); clearTimeout(end); res(true); }
-  ob.observe(document.documentElement, {subtree: true, childList: true, attributes: true, characterData: true}); })"""
-
-SET_VALUE_JS = """(el, v) => { el.value = v; el.dispatchEvent(new Event('input', {bubbles: true}));
-  el.dispatchEvent(new Event('change', {bubbles: true})); return el.value; }"""
+from meshpool_harness.core.webfix import SETTLE_JS, smart_fill as _smart_fill  # noqa: E402
 
 
 def _fill(loc, text: str, timeout: int) -> str | None:
-    """fill(); with MH_BROWSER_READONLY=1 a read-only field (one a date or list picker fills) does not hang for the
-    whole timeout: its value is set directly with input/change events, and the returned note says so, so the model
-    can check that the page accepted it. Returns a note or None."""
-    value = _fit_value(loc, text)
-    if os.environ.get("MH_BROWSER_READONLY") == "1":
-        try:
-            ro = loc.evaluate("e => !!(e.readOnly || e.getAttribute('aria-readonly') === 'true')", timeout=2000)
-        except Exception:
-            ro = False
-        if ro:
-            got = loc.evaluate(SET_VALUE_JS, value, timeout=2000)
-            return (f"note: that field is read-only (a picker normally fills it); its value was set directly to "
-                    f"{got!r}. Check that the page shows and accepts it.")
-    loc.fill(value, timeout=timeout)
-    if os.environ.get("MH_BROWSER_KEYTYPE") == "1" and value.strip():
-        # Widgets that read key presses (terminals, some editors and search boxes) ignore a value set by fill(): the
-        # text never shows on the page. Then clear it and type real key presses instead.
-        try:
-            shown = loc.evaluate("""(e, v) => { const t = document.body.innerText || '';
-                if (t.includes(v)) return true;
-                return ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) && e.offsetHeight > 2 && e.value === v
-                       && getComputedStyle(e).opacity !== '0' && getComputedStyle(e).color !== 'transparent'; }""",
-                                 value, timeout=2000)
-        except Exception:
-            shown = True
-        if not shown:
-            loc.fill("", timeout=timeout)
-            loc.press_sequentially(value, delay=5, timeout=timeout)
-            return "note: typed as key presses (this field ignores pasted values)."
-    return None
-
+    return _smart_fill(loc, _fit_value(loc, text), timeout)
 
 def _serve():
     from playwright.sync_api import sync_playwright
@@ -300,7 +264,7 @@ def _serve():
             pass
         if os.environ.get("MH_BROWSER_SETTLE") == "1" and cmd not in ("snapshot", "goto"):
             try:                                  # pop-ups (autocomplete, menus) appear a few hundred ms later
-                page.evaluate(SETTLE_JS, 1500)
+                page.evaluate(SETTLE_JS, 1500)  # same as webfix.settle()
             except Exception:
                 pass
         if os.environ.get("MH_BROWSER_TYPED_ROLES", "1") == "1":
