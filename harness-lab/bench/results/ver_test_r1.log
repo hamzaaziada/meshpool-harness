@@ -10,3 +10,5 @@ app:x 149.6s $0.0053 | pi:x 96.1s $0.0057 | codex:x 40.0s $0.0000 | v5:x 230.3s 
 app:x 309.6s $0.0067 | pi:x 15.4s $0.0000 | codex:x 10.9s $0.0000 | v5:x 1303.8s $0.0000 <- sphinx-doc__sphinx-8621
 app:x 276.0s $0.0000 | pi:x 15.5s $0.0000 | codex:x 2.7s $0.0000 | v5:x 1304.0s $0.0000 <- django__django-13363
 app:x 276.2s $0.0000 | pi:x 15.3s $0.0000 | codex:x 1.2s $0.0000 | v5:x 1303.5s $0.0000 <- django__django-12741
+app:x 276.4s $0.0000 | pi:x 15.1s $0.0000 | codex:x 1.0s $0.0000 | v5:x 1303.2s $0.0000 <- astropy__astropy-8872
+app:x 275.8s $0.0000 | pi:x 15.1s $0.0000 | codex:x 1.0s $0.0000 | v5:x 1303.5s $0.0000 <- django__django-13516
