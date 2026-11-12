@@ -19,7 +19,8 @@ APP = M.APP
 RD = "/testbed"
 WORK = Path(os.environ.get("BENCH_WORK", "/root/ver_work"))
 V5 = {"MH_SCOPE_CHECK": "1", "MH_CODE_FINISH_SAME_TURN": "1", "MH_PARALLEL_MANY": "1"}
-ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v4", **V5}, "app": {"MH_PRESET": "v4", **V5},
+ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v5"}, "v5s": {"MH_PRESET": "v5", **V5},
+        "app": {"MH_PRESET": "v5"},
         "codex": {}, "pi": {}}
 TURNS, WALL = 60, 1800
 
@@ -105,8 +106,8 @@ def grade(iid, patch, arm, data):
     pf = d / f"{rid}.jsonl"
     pf.write_text(json.dumps({"instance_id": iid, "model_patch": patch, "model_name_or_path": arm}) + "\n")
     r = sh([sys.executable, "-m", "swebench.harness.run_evaluation", "--dataset_name", data, "--predictions_path",
-            str(pf), "--instance_ids", iid, "--run_id", rid, "--max_workers", "1", "--timeout", "1800",
-            "--cache_level", "instance"], cwd=str(d), timeout=3600)
+            str(pf), "--instance_ids", iid, "--run_id", rid, "--max_workers", "1", "--timeout", "1800"],
+           cwd=str(d), timeout=3600)
     rep = list(d.glob(f"{arm}.{rid}.json"))
     if rep:
         return iid in json.loads(rep[0].read_text()).get("resolved_ids", [])
@@ -121,7 +122,7 @@ def one(arm, inst, data):
         host, name = setup(iid, arm)
         text = instructions(inst, name)
         t0 = time.time()
-        if arm in ("v4", "v5"):
+        if arm in ("v4", "v5", "v5s"):
             r = run_engine(text, str(host), ARMS[arm], "code", f"{arm}-{iid}")
         elif arm == "app":
             r = run_engine(text, str(host), ARMS[arm], "agent", f"{arm}-{iid}")
@@ -133,6 +134,9 @@ def one(arm, inst, data):
         row.update(r)
         patch = patch_of(host)
         row["patch_lines"] = len(patch.splitlines())
+        pd = Path(__file__).resolve().parent / "results" / "patches" / arm
+        pd.mkdir(parents=True, exist_ok=True)
+        (pd / f"{iid}.patch").write_text(patch)              # kept, so a grader failure can be re-graded
         sh(["docker", "rm", "-f", name])
         name = None
         row["passed"] = grade(iid, patch, arm, data) if patch.strip() else False

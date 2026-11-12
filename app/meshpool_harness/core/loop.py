@@ -136,7 +136,8 @@ from .finishing import scope_report as _scope_report  # noqa: E402,F401  (shared
 
 class _KeepWarm:
     """MH_KEEPWARM_S=<seconds> (default off). While tools run longer than that, re-send the conversation so far with
-    max_tokens=1 every <seconds>, so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
+    max_tokens=24 every <seconds> (the gateway sends max_tokens=1 requests to a backend without this cache: findings
+    006), so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
     cache misses come after gaps over 40 s between calls (harness-lab/findings/001). A ping reads the prefix at the
     cached price (about 50 times cheaper than a miss). The prefix ends before the latest assistant message, so the
     request stays valid (no tool call without its result) and is an exact prefix of the next real request. It keeps the
@@ -156,7 +157,7 @@ class _KeepWarm:
         while not self.stop.wait(self.period) and n < int(os.environ.get("MH_KEEPWARM_MAX", "20")):
             n += 1
             try:
-                r = self.client.chat(model=self.model, messages=self.prefix, tools=self.tools, max_tokens=1,
+                r = self.client.chat(model=self.model, messages=self.prefix, tools=self.tools, max_tokens=24,
                                      task_id=self.ctx.get("task_id", ""), job_id=self.ctx.get("job_id", ""),
                                      role="keepwarm", profile=self.ctx.get("profile", "deepseek"))
             except Exception:                        # noqa: BLE001 - a failed ping must never touch the run

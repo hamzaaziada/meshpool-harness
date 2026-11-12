@@ -53,7 +53,7 @@ def test_pings_are_valid_prefixes(tmp_path, monkeypatch):
     assert r.ok
     assert 1 <= len(c.pings) <= 4 and r.usage["keepwarm_calls"] == len(c.pings)
     for p in c.pings:
-        assert p["max_tokens"] == 1
+        assert p["max_tokens"] == 24
         assert p["task_id"] == CTX["task_id"]                       # same cache key and session as the real call
         assert p["messages"][-1]["role"] != "assistant"            # no tool call left without its result
     nxt = c.requests[-1]["messages"]                                # the real request after the slow command

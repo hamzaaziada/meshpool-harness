@@ -28,6 +28,15 @@ PRESETS = {
            "MH_TERSE": "1",                      # short prose between tool calls: output tokens cost 4x input
            "MH_429_BACKOFF": "1",                # 429 with no reset time: back off 3, 6, 12 s, not a flat 65 s
            "MH_BROWSER_DERIVE": "1"},            # one line of working before acting on a value taken from the page
+    # v5 = v4 + fixes measured on 2026-11-12 in this repo (harness-lab/LOG.md, findings 004 and 006).
+    "v5": {"MH_HARNESS_PROFILE": "minimal", "MH_STREAM": "1", "MH_STALL": "1",
+           "MH_CACHE_KEY": "0",                  # a per-task prompt_cache_key made the gateway miss shared prefixes
+           "MH_TURN_NOTE": "1", "MH_TODO": "1", "MH_ENV_SNAPSHOT": "1", "MH_DOOM": "1", "MH_MULTI_CMD": "1",
+           "MH_400_WITHHOLD": "1", "MH_BROWSER_PREFETCH": "1", "MH_BROWSER_FINISH_SAME_TURN": "1",
+           "MH_STREAM_FIRST_S": "90", "MH_SESSION_HEADERS": "1", "MH_TERSE": "1", "MH_429_BACKOFF": "1",
+           "MH_BROWSER_DERIVE": "1",
+           "MH_BROWSER_READONLY": "1", "MH_BROWSER_SETTLE": "1", "MH_BROWSER_STATES": "1", "MH_BROWSER_KEYTYPE": "1",
+           "MH_PARALLEL_MANY": "1"},
 }
 
 # Experimental flags, off unless set, not in any preset until a measured run keeps them (harness-lab/LOG.md):
