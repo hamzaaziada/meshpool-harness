@@ -38,6 +38,8 @@ PRESETS = {
 #                         a conservative allow-list; any write, redirect or unknown program keeps the batch in order).
 #   MH_CODE_FINISH_SAME_TURN=1  code engine: run the final check and finish in one turn (the finish guard still
 #                         refuses it when that check fails). Saves one model call per solved task.
+#   MH_SCOPE_CHECK=1      code tasks: at the first finish, if the change touches more than one non-test file or more
+#                         than 30 non-test lines, show the per-file diff size once and ask to drop unneeded edits.
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 
