@@ -1,80 +1,32 @@
 diff --git a/django/db/backends/base/schema.py b/django/db/backends/base/schema.py
-index 61f88401ab..543400782a 100755
+index 61f88401ab..17b596c29c 100755
 --- a/django/db/backends/base/schema.py
 +++ b/django/db/backends/base/schema.py
-@@ -389,11 +389,24 @@ class BaseDatabaseSchemaEditor:
-         index_togethers must be doubly-nested, not the single-nested
-         ["foo", "bar"] format.
-         """
-+        if (
-+            self.sql_delete_index is None or
-+            not self.connection.features.allows_multiple_constraints_on_same_fields
-+        ):
-+            # Dropping an index on a set of fields on backends that don't
-+            # allow multiple constraints on the same fields would also drop
-+            # the unique constraint on those fields, if any, so do nothing.
-+            return
-         olds = {tuple(fields) for fields in old_index_together}
+@@ -377,7 +377,7 @@ class BaseDatabaseSchemaEditor:
+         news = {tuple(fields) for fields in new_unique_together}
+         # Deleted uniques
+         for fields in olds.difference(news):
+-            self._delete_composed_index(model, fields, {'unique': True}, self.sql_delete_unique)
++            self._delete_composed_index(model, fields, {'unique': True}, self._delete_unique_sql)
+         # Created uniques
+         for fields in news.difference(olds):
+             columns = [model._meta.get_field(field).column for field in fields]
+@@ -393,7 +393,7 @@ class BaseDatabaseSchemaEditor:
          news = {tuple(fields) for fields in new_index_together}
          # Deleted indexes
          for fields in olds.difference(news):
 -            self._delete_composed_index(model, fields, {'index': True}, self.sql_delete_index)
-+            self._delete_composed_index(
-+                model,
-+                fields,
-+                {'index': True, 'unique': False},
-+                self.sql_delete_index,
-+            )
++            self._delete_composed_index(model, fields, {'index': True, 'unique': False}, self._delete_index_sql)
          # Created indexes
          for field_names in news.difference(olds):
              fields = [model._meta.get_field(field) for field in field_names]
-@@ -1153,7 +1166,7 @@ class BaseDatabaseSchemaEditor:
-         result = []
-         for name, infodict in constraints.items():
-             if column_names is None or column_names == infodict['columns']:
--                if unique is not None and infodict['unique'] != unique:
-+                if unique is not None and bool(infodict['unique']) != unique:
-                     continue
-                 if primary_key is not None and infodict['primary_key'] != primary_key:
-                     continue
-diff --git a/tests/schema/tests.py b/tests/schema/tests.py
-index 9aa1e239ac..fac44b6286 100755
---- a/tests/schema/tests.py
-+++ b/tests/schema/tests.py
-@@ -2166,6 +2166,36 @@ class SchemaTests(TransactionTestCase):
-             False,
-         )
+@@ -413,7 +413,8 @@ class BaseDatabaseSchemaEditor:
+                 model._meta.db_table,
+                 ", ".join(columns),
+             ))
+-        self.execute(self._delete_constraint_sql(sql, model, constraint_names[0]))
++        for constraint_name in constraint_names:
++            self.execute(sql(model, constraint_name))
  
-+    def test_index_together_with_unique_together(self):
-+        """
-+        Removing an index_together on fields that are also part of a
-+        unique_together only removes the index, without touching the unique
-+        constraint.
-+        """
-+        # Create the table
-+        with connection.schema_editor() as editor:
-+            new_field2 = SlugField(unique=True)
-+            new_field2.set_attributes_from_name("slug")
-+            editor.create_model(Tag)
-+            editor.alter_unique_together(Tag, [], [('slug', 'title')])
-+
-+        def constraints_on_fields():
-+            return [
-+                constraint
-+                for constraint in self.get_constraints(Tag._meta.db_table).values()
-+                if constraint['columns'] == ['slug', 'title']
-+            ]
-+
-+        self.assertEqual(len(constraints_on_fields()), 1)
-+        with connection.schema_editor() as editor:
-+            editor.alter_index_together(Tag, [], [('slug', 'title')])
-+        self.assertEqual(len(constraints_on_fields()), 2)
-+        with connection.schema_editor() as editor:
-+            editor.alter_index_together(Tag, [('slug', 'title')], [])
-+        constraints = constraints_on_fields()
-+        self.assertEqual(len(constraints), 1)
-+        self.assertIs(constraints[0]['unique'], True)
-+
-     def test_index_together_with_fk(self):
-         """
-         Tests removing and adding index_together constraints that include
+     def alter_db_table(self, model, old_db_table, new_db_table):
+         """Rename the table a model points to."""
