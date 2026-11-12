@@ -38,3 +38,14 @@ def test_failure_log_survives_read_only_location(tmp_path, monkeypatch):
     from meshpool_harness.core.guards import log_failure
     monkeypatch.setenv("MH_FAILURES_LOG", str(tmp_path / "no_such_dir" / "failures.csv"))
     log_failure({"task_id": "t"}, "time_cap", False, "x")          # must not raise
+
+
+def test_run_dir_deleted_mid_task_does_not_crash(tmp_path):
+    """A task that runs `git clean -fdx` removes .run; the next command must still work (seen on sphinx-10449)."""
+    import shutil
+    from meshpool_harness.core.tools import Workspace
+    ws = Workspace(str(tmp_path), str(tmp_path / ".run"))
+    ws.bash("echo one")
+    shutil.rmtree(tmp_path / ".run")
+    assert "two" in ws.bash("echo two")
+    assert "x" in ws.bash("python3 -c \"print('x' * 20000)\"")       # capped output file path too

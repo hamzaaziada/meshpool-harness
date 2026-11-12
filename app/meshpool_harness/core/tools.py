@@ -195,7 +195,11 @@ class Workspace:
             self._n += 1
             n = self._n
         f = self.run_dir / f"out_{n:03d}_{label}.txt"
-        f.write_text(text)
+        try:                                     # the task may delete .run (e.g. git clean): recreate it
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text)
+        except OSError:
+            return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
         return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
                 + text[-TAIL:])
 
@@ -442,8 +446,12 @@ class Workspace:
             return self._cap(out or "no matches", kind), code
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
                               "secs": round(time.time() - t0, 1), "tail": out[-600:]})
-        with (self.run_dir / "commands.log").open("a") as f:   # full outputs: evidence for number tracing
-            f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+        try:                                     # full outputs: evidence for number tracing; the task may have
+            self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
+            with (self.run_dir / "commands.log").open("a") as f:
+                f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+        except OSError:
+            pass
         return self._cap(f"[exit {code}]\n{out}", kind), code
 
     def bash(self, command, timeout_s=None):
