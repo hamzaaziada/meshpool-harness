@@ -76,6 +76,13 @@ SNAP_JS = """(mark) => {
     let extra = '';
     if (tag === 'input' && !['checkbox','radio','submit','button'].includes(type) && e.value) extra = ' value="' + e.value.slice(0, 40) + '"';
     if (type === 'checkbox' || type === 'radio') extra = e.checked ? ' (checked)' : ' (unchecked)';
+    if (window.__mhStates) {   // what a person sees: a red outline, a greyed-out button, a field only a picker fills
+      const cls = typeof e.className === 'string' ? e.className : '';
+      if (e.getAttribute('aria-invalid') === 'true' || /(^|[-_ ])(error|invalid|has-error|is-invalid)([-_ ]|$)/i.test(cls)
+          || (e.validity && !e.validity.valid && e.value)) extra += ' (invalid)';
+      if (e.disabled || e.getAttribute('aria-disabled') === 'true') extra += ' (disabled)';
+      if ((tag === 'input' || tag === 'textarea') && e.readOnly) extra += ' (read-only)';
+    }
     out.push('[' + n + '] ' + role + ' "' + name + '"' + extra);
   }
   const text = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 3000);
@@ -110,6 +117,48 @@ def _fit_value(loc, text: str) -> str:
         if m:
             return f"{m.group(2)}-{int(m.group(1)):02d}"
     return text
+
+
+SETTLE_JS = """(ms) => new Promise(res => { let t = setTimeout(done, 350); const end = setTimeout(done, ms);
+  const ob = new MutationObserver(() => { clearTimeout(t); t = setTimeout(done, 350); });
+  function done() { ob.disconnect(); clearTimeout(end); res(true); }
+  ob.observe(document.documentElement, {subtree: true, childList: true, attributes: true, characterData: true}); })"""
+
+SET_VALUE_JS = """(el, v) => { el.value = v; el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true})); return el.value; }"""
+
+
+def _fill(loc, text: str, timeout: int) -> str | None:
+    """fill(); with MH_BROWSER_READONLY=1 a read-only field (one a date or list picker fills) does not hang for the
+    whole timeout: its value is set directly with input/change events, and the returned note says so, so the model
+    can check that the page accepted it. Returns a note or None."""
+    value = _fit_value(loc, text)
+    if os.environ.get("MH_BROWSER_READONLY") == "1":
+        try:
+            ro = loc.evaluate("e => !!(e.readOnly || e.getAttribute('aria-readonly') === 'true')", timeout=2000)
+        except Exception:
+            ro = False
+        if ro:
+            got = loc.evaluate(SET_VALUE_JS, value, timeout=2000)
+            return (f"note: that field is read-only (a picker normally fills it); its value was set directly to "
+                    f"{got!r}. Check that the page shows and accepts it.")
+    loc.fill(value, timeout=timeout)
+    if os.environ.get("MH_BROWSER_KEYTYPE") == "1" and value.strip():
+        # Widgets that read key presses (terminals, some editors and search boxes) ignore a value set by fill(): the
+        # text never shows on the page. Then clear it and type real key presses instead.
+        try:
+            shown = loc.evaluate("""(e, v) => { const t = document.body.innerText || '';
+                if (t.includes(v)) return true;
+                return ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.tagName) && e.offsetHeight > 2 && e.value === v
+                       && getComputedStyle(e).opacity !== '0' && getComputedStyle(e).color !== 'transparent'; }""",
+                                 value, timeout=2000)
+        except Exception:
+            shown = True
+        if not shown:
+            loc.fill("", timeout=timeout)
+            loc.press_sequentially(value, delay=5, timeout=timeout)
+            return "note: typed as key presses (this field ignores pasted values)."
+    return None
 
 
 def _serve():
@@ -176,7 +225,7 @@ def _serve():
                     getattr(locate(s["target"]), op)(timeout=5000)
                 elif op == "type":
                     loc = locate(s["target"])
-                    loc.fill(_fit_value(loc, str(s.get("text", ""))), timeout=5000)
+                    _fill(loc, str(s.get("text", "")), 5000)
                 elif op == "select":
                     locate(s["target"]).select_option(label=str(s["option"]), timeout=5000)
                 elif op == "press":
@@ -211,7 +260,7 @@ def _serve():
             ref(args[0]).click(timeout=10000)
         elif cmd == "type":
             loc = ref(args[0])
-            loc.fill(_fit_value(loc, " ".join(args[1:])), timeout=10000)
+            state["note"] = _fill(loc, " ".join(args[1:]), 10000)
         elif cmd == "hover":
             ref(args[0]).hover(timeout=10000)
         elif cmd == "click_text":                 # smallest visible element whose text is exactly this
@@ -249,12 +298,22 @@ def _serve():
             page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
+        if os.environ.get("MH_BROWSER_SETTLE") == "1" and cmd not in ("snapshot", "goto"):
+            try:                                  # pop-ups (autocomplete, menus) appear a few hundred ms later
+                page.evaluate(SETTLE_JS, 1500)
+            except Exception:
+                pass
         if os.environ.get("MH_BROWSER_TYPED_ROLES", "1") == "1":
             page.evaluate("() => { window.__mhTyped = true; }")
+        if os.environ.get("MH_BROWSER_STATES") == "1":       # (invalid) / (disabled) / (read-only) markers
+            page.evaluate("() => { window.__mhStates = true; }")
         snap = page.evaluate(SNAP_JS, MARK)
         prev = state.get("last")
         state["last"] = snap
         b = state.pop("batch", None) if cmd == "batch_done" else None
+        note = state.pop("note", None)
+        if note:
+            snap = dict(snap, note=note)
         if cmd in ("snapshot", "goto") or os.environ.get("MH_BROWSER_DIFF", "0") != "1" or not prev or prev["url"] != snap["url"]:
             return {**snap, **({"batch": b} if b else {})}
         # after an action on the same page: send only what changed (fewer tokens per step)
@@ -264,6 +323,8 @@ def _serve():
         out["elements"] = snap["elements"] if snap["elements"] != prev["elements"] else None
         if b:
             out["batch"] = b
+        if note:
+            out["note"] = note
         return out
 
     class H(BaseHTTPRequestHandler):
@@ -310,6 +371,8 @@ def render(res: dict) -> str:
         b = res["batch"]
         head = ("batch: all steps ok" if b["ok"] else "batch STOPPED at a failed step") + "\n" + "\n".join(b["steps"])
         return head + "\n" + render({k: v for k, v in res.items() if k != "batch"})
+    if res.get("note"):                            # e.g. a read-only field set directly (MH_BROWSER_READONLY)
+        return res["note"] + "\n" + render({k: v for k, v in res.items() if k != "note"})
     if "text_changed" in res:                      # diff after an action
         els = ("\n".join(res["elements"]) if res.get("elements") else "(elements unchanged; same numbers)")
         return f"{res['title']} | {res['url']}\n{els}\n--- new text ---\n{res['text_changed']}"

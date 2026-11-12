@@ -75,3 +75,14 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   by default).
 - Paid confirmation: Verified dev split, v4 against v4 plus this flag. Keep under the pre-registered rule, with no
   new wrong finishes.
+
+## 2026-11-12, cycle 6: MiniWoB long tail and the two loops
+
+- Built `mw_probe.py`: drives our browser tool by hand on real MiniWoB pages, with no model.
+- findings/004: book-flight and terminal (about 40% of a round's turns for every agent) fail on four tool problems:
+  read-only fields hang 10 s, autocomplete menus are not listed yet, red-outline errors are invisible, and
+  key-driven widgets ignore set values. Four flags fix them. Both tasks reach reward 1 by hand. Normal inputs and
+  textareas keep the fast path. Tested on a local page with real Chromium (`test_browser_flags.py`).
+- findings/005: the app's chat agents run their own loop (`agent/core.py`), so the benchmark measures a sibling of
+  what users run. Recommendation: shared helpers for finish checks and cache counters, then benchmark the app agent.
+- Python Playwright installed in this container for the probe; Chromium is preinstalled.
