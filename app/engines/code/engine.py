@@ -58,6 +58,15 @@ def feature(name: str) -> bool:
     return os.environ.get(name, mini if os.environ.get("MH_HARNESS_PROFILE") == "minimal" else v1) == "1"
 
 
+def f2p_evidence(ws) -> bool:
+    """Proof that a fix works, from the agent's own log: a check that failed before the first edit passes after the
+    last edit (the same command). Costs nothing to compute."""
+    cmds = getattr(ws, "commands", [])
+    failed_before = {c["cmd"] for c in cmds if c.get("code") not in (0, None) and c.get("after_edit") == 0}
+    return any(c["cmd"] in failed_before and c.get("code") == 0 and c.get("after_edit") == ws.edits and ws.edits
+               for c in cmds)
+
+
 def checks_green(ws) -> bool:
     """v2: attempt 1 ran out of budget but its last check after the last edit passed: keep it, do not restart."""
     if not getattr(ws, "edits", 0):
@@ -154,12 +163,31 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     import time as _time
     import subprocess as _sp
     t0 = _time.time()
+    if os.environ.get("MH_ENV_SNAPSHOT") == "1":            # v3: saves the first exploration turns (Meta-Harness, Droid)
+        try:
+            snap, _ = ws._run("pwd; ls -la 2>/dev/null | head -40; echo '---'; "
+                              "(python3 --version; pip --version; node --version; gcc --version | head -1; go version; "
+                              "cargo --version; java -version) 2>&1 | grep -v 'not found' | head -12; echo '---'; "
+                              "df -h . 2>/dev/null | tail -1; free -m 2>/dev/null | sed -n 2p", 30, "bash", record=False)
+            task += "\n\n<environment_snapshot>\n" + snap[-2500:] + "\n</environment_snapshot>"
+        except Exception:
+            pass
     minimal = os.environ.get("MH_HARNESS_PROFILE") == "minimal"
     if os.environ.get("MH_TEMPERATURE") is not None:          # "" = the model's own default
         temperature = float(os.environ["MH_TEMPERATURE"]) if os.environ["MH_TEMPERATURE"] else None
     elif minimal:
         temperature = None                                      # minimal: model default, like the plain baseline
     system = SYSTEM_MIN if (minimal and os.environ.get("MH_SYSTEM") != "full") or os.environ.get("MH_SYSTEM") == "short" else SYSTEM
+    if os.environ.get("MH_MULTI_CMD") == "1":
+        system += ("\nTurns are limited. When you need several independent facts (file ranges, greps, versions, listings), "
+                   "get them in ONE bash_many call instead of one command per turn.")
+    if os.environ.get("MH_TERSE") == "1":              # v4: output tokens cost 4x input; keep prose between calls short
+        system += ("\nBetween tool calls write at most one short sentence. Put the work in tool arguments, not in "
+                   "prose, and do not repeat file contents or command output back.")
+    if os.environ.get("MH_TODO") == "1":
+        system += ("\nFor any task with more than one step, first call todo with the task's concrete requirements "
+                   "(files, paths, names, formats, outputs, behaviours) and your steps. Update it as you go. finish is "
+                   "refused while items are not done, so list only what the task really needs.")
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=system,
             caps=Caps(max_turns=max_turns), temperature=temperature, finish_check=finish_check)
     usage = dict(r.usage)
@@ -200,6 +228,40 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
                     cwd=workdir, capture_output=True)
         else:
             r, ws = r2, ws2
+    # v3 evidence-driven second attempt (MH_EVIDENCE_RETRY=1): attempt 1 finished but its log has no
+    # failing-then-passing check. Spend only the turns it left unused (total stays within the cap) on a second attempt
+    # that must reproduce first; keep it only if it shows that proof, otherwise restore attempt 1 unchanged.
+    turns_left = max_turns - turns
+    remaining = (limit - (_time.time() - t0)) if limit else 1800
+    if (os.environ.get("MH_EVIDENCE_RETRY") == "1" and r.ok and attempts == 1 and (cont is None or mounted) and is_git
+            and turns_left >= 15 and remaining > 300 and not f2p_evidence(ws)):
+        ex = [":!.run", ":!.junie"]
+        _sp.run(["git", "add", "-A", "--", ".", *ex], cwd=workdir, capture_output=True)
+        first = _sp.run(["git", "diff", "--cached", "--binary", "--", ".", *ex], cwd=workdir, capture_output=True,
+                        text=True).stdout
+        _sp.run(["git", "reset", "-q"], cwd=workdir, capture_output=True)
+        Path(workdir, ".run", "attempt1.patch").write_text(first)
+        _sp.run(["git", "checkout", "--", "."], cwd=workdir, capture_output=True)
+        _sp.run(["git", "clean", "-fdq", "-e", ".run", "-e", ".junie"], cwd=workdir, capture_output=True)
+        ws2 = Workspace(workdir, os.path.join(workdir, ".run"), container=cont, container_dir=cdir, mounted=mounted)
+        task2 = task + ("\n\n<note>Before changing any code, reproduce the problem: write or run a test or script "
+                        "that FAILS on the current code because of the issue. Then fix the root cause and rerun the "
+                        "same command until it passes. Finish only after that same command passes.</note>")
+        r2 = run(task2, client=client, model=model, profile=None, ws=ws2, ctx=dict(ctx, task_id=task_id + "-ev"),
+                 system_text=system, caps=Caps(max_turns=turns_left, max_seconds=int(remaining)),
+                 temperature=temperature, finish_check=finish_check)
+        attempts = 2
+        for k in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+            usage[k] = usage.get(k, 0) + r2.usage.get(k, 0)
+        turns += r2.turns
+        if r2.ok and f2p_evidence(ws2):
+            r, ws = r2, ws2
+        else:                                              # no proof: put attempt 1 back exactly
+            _sp.run(["git", "checkout", "--", "."], cwd=workdir, capture_output=True)
+            _sp.run(["git", "clean", "-fdq", "-e", ".run", "-e", ".junie"], cwd=workdir, capture_output=True)
+            if first.strip():
+                _sp.run(["git", "apply", "--whitespace=nowarn", str(Path(workdir, ".run", "attempt1.patch"))],
+                        cwd=workdir, capture_output=True)
     return {"ok": r.ok, "answer": r.answer, "evidence": r.evidence, "turns": turns, "reason": r.reason,
             "usage": usage, "prefix_sha": r.prefix_sha, "commands": len(ws.commands), "edits": ws.edits,
             "attempts": attempts}

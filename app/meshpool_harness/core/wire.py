@@ -71,6 +71,19 @@ def log_usage_line(tag: str, model: str, usage: dict) -> None:
 
 
 
+def _first_then_idle(r, idle):
+    """Yield SSE lines; after the first one, cut the socket timeout to the idle cutoff."""
+    first = True
+    for line in r:
+        yield line
+        if first:
+            first = False
+            try:
+                r.fp.raw._sock.settimeout(idle)
+            except Exception:                            # noqa: BLE001 - best effort
+                pass
+
+
 def sse_to_chat(lines) -> dict:
     """Assemble a streamed chat-completions reply (SSE lines) into the non-streamed response shape: content,
     tool calls (deltas merged by index), reasoning text and the final usage chunk."""
@@ -141,18 +154,24 @@ class SimpleLedger:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
             timeout = int(os.environ.get("MH_STREAM_IDLE_S", "20"))
+            idle = timeout
+            if os.environ.get("MH_STREAM_FIRST_S"):    # longer wait for the first token, then the idle cutoff
+                timeout = int(os.environ["MH_STREAM_FIRST_S"])
         if wire == "responses":
             body = to_responses(body)
         req = urllib.request.Request(f"{self.base_url}/{'responses' if wire == 'responses' else 'chat/completions'}",
                                      data=json.dumps(body).encode(), method="POST",
                                      headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": task_id})
+                                              "X-Harness-Task-Id": task_id,
+                                              **({"session_id": task_id.split("-esc")[0]}
+                                                 if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
         status, raw = 0, b""
         for attempt in range(retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as r:
                     status = r.status
-                    raw = json.dumps(sse_to_chat(r)).encode() if stream and status == 200 else r.read()
+                    raw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and status == 200
+                           else r.read())
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:

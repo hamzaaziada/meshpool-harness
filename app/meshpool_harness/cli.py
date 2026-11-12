@@ -77,10 +77,17 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         kw = {"files": inputs} if name == "data" else {}
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
             kw["model"] = os.environ["MH_MODEL"]
+        saved = dict(os.environ)
+        if name in ("code", "browser") and not os.environ.get("MH_PRESET"):
+            from meshpool_harness.presets import apply as _preset
+            _preset("v3")                         # the benchmarked harness for code and browser tasks (run C)
         try:
             res = _engine(name).solve(task, workdir=wd, task_id=f"{task_id}-{name}", client=client, **kw)
         except Exception as e:   # one clean message instead of a traceback
             res = {"ok": False, "answer": "", "reason": f"{type(e).__name__}: {e}", "artifacts": []}
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)              # office engines keep their own tested settings
         res["engine"] = name
         results.append(res)
         if not res.get("ok"):

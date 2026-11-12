@@ -44,12 +44,21 @@ SCHEMAS = {
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
     "bash": _fn("bash", "Run a shell command in the workdir. Output is capped; full output is saved to a file.",
                 {"command": S, "timeout_s": I}, ["command"]),
+    "bash_many": _fn("bash_many", "Run several independent shell commands in ONE call (for example: read 3-5 file "
+                                  "ranges, grep several patterns, check versions). Each runs on its own, even if an "
+                                  "earlier one fails; you get every output, labelled.",
+                     {"commands": {"type": "array", "items": S}, "timeout_s": I}, ["commands"]),
     "run_tests": _fn("run_tests", "Run a test or check command. Its exit code counts as evidence for finish.",
                      {"command": S, "timeout_s": I}, ["command"]),
     "finish": _fn("finish", "Finish the task. `evidence` must name checks you actually ran in this session "
                             "(the exact command) that passed after your last edit.",
                   {"answer": S, "evidence": {"type": "array", "items": S}, "artifacts": {"type": "array", "items": S}},
                   ["answer", "evidence"]),
+    "todo": _fn("todo", "Write or update your todo list for this task: the concrete requirements and steps, each with "
+                        "done true/false. Call it again to update. finish is refused while items are not done.",
+                {"items": {"type": "array", "items": {"type": "object", "properties": {"text": S, "done": {"type": "boolean"}},
+                                                      "required": ["text", "done"], "additionalProperties": False}}},
+                ["items"]),
     "load_skill": _fn("load_skill", "Load detailed instructions for a skill listed in the skill index.",
                       {"name": S}, ["name"]),
     "need_context": _fn("need_context", "Ask the orchestrator for files or information outside your job packet "
@@ -394,12 +403,33 @@ class Workspace:
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
 
+    def bash_many(self, commands, timeout_s=None):
+        """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style)."""
+        parts = []
+        for cmd in [c for c in commands if isinstance(c, str) and c.strip()][:8]:
+            if self.should_stop and self.should_stop():
+                parts.append(f"$ {cmd}\n[not run: stopped by the user]")
+                continue
+            out, code = self._run(cmd, timeout_s, "bash")
+            body = out.split("\n", 1)[1] if out.startswith("[exit ") else out
+            if len(body) > 2500:
+                body = body[:1200] + f"\n... [{len(body) - 2400} chars cut; run it alone for the full output] ...\n" + body[-1200:]
+            parts.append(f"$ {cmd}\n[exit {code}]\n{body}")
+        return "\n\n".join(parts) or "no commands given"
+
     def run_tests(self, command, timeout_s=None):
         return self._run(command, timeout_s, "check")[0]
 
     def all_output(self) -> str:
         p = self.run_dir / "commands.log"
         return p.read_text(errors="replace") if p.exists() else ""
+
+    def todo(self, items):
+        self.todos = [{"text": str(i.get("text", ""))[:200], "done": bool(i.get("done"))} for i in items
+                      if isinstance(i, dict)][:30]
+        left = [t for t in self.todos if not t["done"]]
+        return ("todo saved: " + f"{len(self.todos) - len(left)}/{len(self.todos)} done" + "".join(
+            f"\n- [{'x' if t['done'] else ' '}] {t['text']}" for t in self.todos))
 
     def load_skill(self, name):
         if name not in self.skills:

@@ -14,7 +14,8 @@ BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
      "description": "Meshpool's coding agent. It reads and edits your code, runs commands and tests, and uses your "
-                    "MCP servers. Benchmarked on SWE-bench Verified and Terminal-Bench."},
+                    "MCP servers. Runs Meshpool Harness v3: 18 of 20 on SWE-bench Verified and 97 of 102 on "
+                    "computer use in Meshpool's benchmark."},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
      "description": "Built-in work agent for research, writing, spreadsheets, decks and data analysis. It uses "
                     "Meshpool's office engines and needs nothing else installed."},
