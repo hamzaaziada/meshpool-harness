@@ -137,3 +137,14 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - findings/007: the model edits nearly blind (0.5 repro runs before the first edit), then iterates (27 calls after).
   Built `probe` and `trace` (core/observe.py) in both loops, with a prompt line. Tested on real pytest and script
   runs. Next: A/B on Verified dev after the test set finishes.
+
+## 2026-11-12, cycle 10: compiler-style feedback and code navigation (owner's idea; off by default)
+
+- `MH_LINT_EDIT`: after each edit or write to a Python file, Ruff's error rules (syntax, undefined names,
+  redefinitions; no style rules) run on the file before and after. Only the problems the edit introduced are added to
+  the edit result, plus the files changed so far. Python's compile() is the fallback without Ruff.
+- `MH_NAV`: `symbol <name>` returns a Python name's definition, signature and every use, via Jedi. On our own app
+  package: 46 uses of `Workspace` in 0.8 s.
+- Ruff and Jedi are MIT. They are used as tools, not copied, and listed as the optional extra `code-intel`.
+- Tests: `test_diagnose.py` (new error reported, old ones not repeated, fallback, definition and uses). 137 pass.
+- The queued A/B now has five arms: v5, v5 + observe, v5 + all three tools, app, app + all three.

@@ -97,6 +97,10 @@ SCHEMAS = {
                           "(library frames dropped). Use it to see the bug before you edit, and after an edit to see "
                           "what still fails. Counts as a check for finish.",
                  {"command": S, "timeout_s": I}, ["command"]),
+    "symbol": _fn("symbol", "Find where a Python function, class or variable is defined (file, line, signature) and "
+                            "every place it is used in this project, in one call. Optional `path`: the file that "
+                            "defines it, when the name is common.",
+                  {"name": S, "path": S}, ["name"]),
     "trace": _fn("trace", "Run a Python test or script (python file.py, python -m mod, pytest ...) and list the "
                           "project's own functions that ran, in first-call order with call counts, then the output "
                           "tail. Use it to find where to edit before you change anything.",
@@ -325,12 +329,12 @@ class Workspace:
             n = text.count(old)
             if n != 1:
                 raise ToolError(f"`old` text {'not found' if n == 0 else f'occurs {n} times'} in {path}; copy it exactly / add context")
-            text = text.replace(old, new, 1)
+            before, text = text, text.replace(old, new, 1)
             self._cwrite(path, text)
             self.seen[key] = self._hash(text)
             self.edits += 1
             self.written.add(key)
-            return f"edited {path}"
+            return f"edited {path}" + self._edit_feedback(Path(key), before, text)
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
@@ -352,11 +356,11 @@ class Workspace:
             raise ToolError(f"edit rejected: it would make {path} invalid Python ({bad}). The file is unchanged. "
                             f"Fix indentation/brackets in `new` and retry.")
         p.write_text(new_text)
-        text = new_text
+        before, text = text, new_text
         self.seen[key] = self._hash(text)
         self.edits += 1
         self.written.add(key)
-        return f"edited {path}"
+        return f"edited {path}" + self._edit_feedback(p, before, text)
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:
@@ -371,15 +375,40 @@ class Workspace:
         if not p.exists():
             self.created.add(str(p))
         p.parent.mkdir(parents=True, exist_ok=True)
+        before = p.read_text(errors="replace") if p.exists() else None
         if append and p.exists():
             with p.open("a") as f:
                 f.write(content)
         else:
             p.write_text(content)
-        self.seen[str(p)] = self._hash(p.read_text(errors="replace"))
+        after = p.read_text(errors="replace")
+        self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
-        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})"
+        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + self._edit_feedback(
+            p, before, after)
+
+    def _edit_feedback(self, p: Path, before, after) -> str:
+        """MH_LINT_EDIT: problems this change introduced (core/diagnose.py) and the files changed so far."""
+        if os.environ.get("MH_LINT_EDIT") != "1":
+            return ""
+        from .diagnose import new_problems
+        msg = new_problems(p, before, after)
+        names = []
+        for w in sorted(self.written):
+            try:
+                names.append(str(Path(w).relative_to(self.root)))
+            except ValueError:
+                names.append(w)
+        changed = f"\nFiles changed so far: {', '.join(names[:12])}" + (" ..." if len(names) > 12 else "")
+        return ("\n" + msg if msg else "\nNo new errors in this file.") + changed
+
+    def symbol(self, name, path=None):
+        """MH_NAV: definitions and uses of a Python name (core/diagnose.py, Jedi)."""
+        if self.container and not self.mounted:
+            raise ToolError("symbol needs the project files on this machine; use grep inside the container")
+        from .diagnose import symbol
+        return self._cap(symbol(str(self.root), str(name), path), "symbol")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
 

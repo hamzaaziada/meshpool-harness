@@ -221,6 +221,8 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_OBSERVE") == "1" and "bash" in tool_names and "probe" not in tool_names:
         i = tool_names.index("bash") + 1                                     # see the bug before editing it
         tool_names = tool_names[:i] + ["probe", "trace"] + tool_names[i:]
+    if os.environ.get("MH_NAV") == "1" and "grep" in tool_names and "symbol" not in tool_names:
+        tool_names = tool_names[:tool_names.index("grep") + 1] + ["symbol"] + tool_names[tool_names.index("grep") + 1:]
     if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # v3: required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)

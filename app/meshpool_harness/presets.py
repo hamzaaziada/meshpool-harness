@@ -56,6 +56,9 @@ PRESETS = {
 #   MH_OBSERVE=1          probe (failure digest: failing tests, project frames, local values) and trace (project
 #                         functions that ran, in order) for code tasks, in both loops, plus a prompt line to reproduce
 #                         with probe before the first edit (harness-lab/findings/007).
+#   MH_LINT_EDIT=1        after an edit to a Python file, report only the errors the edit introduced (Ruff error
+#                         rules: syntax, undefined names, redefinitions), and the files changed so far.
+#   MH_NAV=1              symbol tool: a Python name's definition, signature and every use, in one call (Jedi).
 # Always on (diagnostic only): usage counts full_miss_calls / full_miss_tokens (calls where under half of the
 # previous prompt was cached).
 
