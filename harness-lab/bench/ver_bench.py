@@ -21,6 +21,8 @@ WORK = Path(os.environ.get("BENCH_WORK", "/root/ver_work"))
 V5 = {"MH_SCOPE_CHECK": "1", "MH_CODE_FINISH_SAME_TURN": "1", "MH_PARALLEL_MANY": "1"}
 ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v5"}, "v5s": {"MH_PRESET": "v5", **V5},
         "app": {"MH_PRESET": "v5"},
+        "v5nt": {"MH_PRESET": "v5", "MH_TODO": "0"}, "v5ft": {"MH_PRESET": "v5", "MH_CODE_FINISH_SAME_TURN": "1"},
+        "v5sp": {"MH_PRESET": "v5", "MH_SCOPE_PROMPT": "1"},
         "codex": {}, "pi": {}}
 TURNS, WALL = 60, 1800
 
@@ -35,10 +37,15 @@ def image(iid):
 
 def setup(iid, arm):
     img = image(iid)
-    if sh(["docker", "image", "inspect", img]).returncode:
+    for attempt in range(4):                              # registry hiccups: retry before calling it infra
+        if not sh(["docker", "image", "inspect", img]).returncode:
+            break
         r = sh(["docker", "pull", img], timeout=1800)
-        if r.returncode:
-            raise RuntimeError("pull failed: " + r.stderr[-300:])
+        if not r.returncode:
+            break
+        time.sleep(20 * (attempt + 1))
+    else:
+        raise RuntimeError("pull failed: " + r.stderr[-300:])
     host = WORK / f"{iid}_{arm}"
     shutil.rmtree(host, ignore_errors=True)
     host.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +129,7 @@ def one(arm, inst, data):
         host, name = setup(iid, arm)
         text = instructions(inst, name)
         t0 = time.time()
-        if arm in ("v4", "v5", "v5s"):
+        if arm.startswith("v"):
             r = run_engine(text, str(host), ARMS[arm], "code", f"{arm}-{iid}")
         elif arm == "app":
             r = run_engine(text, str(host), ARMS[arm], "agent", f"{arm}-{iid}")
@@ -146,6 +153,11 @@ def one(arm, inst, data):
     finally:
         if name:
             sh(["docker", "rm", "-f", name])
+        if host and (host / ".run").is_dir():            # keep our transcripts (small) for call-by-call analysis
+            td = Path(__file__).resolve().parent / "results" / "transcripts" / arm
+            td.mkdir(parents=True, exist_ok=True)
+            for f in (host / ".run").glob("transcript-*.jsonl"):
+                shutil.copy(f, td / f"{iid}.jsonl")
         if host:
             shutil.rmtree(host, ignore_errors=True)
     unc = max(row.get("prompt", 0) - row.get("cached", 0), 0)

@@ -184,6 +184,9 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     if os.environ.get("MH_TERSE") == "1":              # v4: output tokens cost 4x input; keep prose between calls short
         system += ("\nBetween tool calls write at most one short sentence. Put the work in tool arguments, not in "
                    "prose, and do not repeat file contents or command output back.")
+    if os.environ.get("MH_SCOPE_PROMPT") == "1":           # the app agent's rule: its patches stayed in scope
+        system += ("\nDo what the task asks, nothing more: no extra features, refactors, docs or changelog entries. "
+                   "Look before you change anything.")
     if os.environ.get("MH_CODE_FINISH_SAME_TURN") == "1":    # saves the last model call on a solved task
         system += ("\nWhen you expect your check to pass, call it and finish together in the same turn, citing that "
                    "check. If the check fails, the finish is refused and you see the output.")
