@@ -101,3 +101,26 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   (`full_miss_calls`, `full_miss_tokens`) in the saved session usage.
 - Checked by hand: the app's browser tool on a local page shows (read-only) and (invalid), and sets a picker field
   at once.
+
+## 2026-11-12, cycle 8: first real benchmarks (owner approved benchmarking)
+
+- Built `bench/mw_bench.py`, `bench/ver_bench.py`, `bench/report.py` and `bench/spend.py`: same-time runs on
+  `deepseek-v4.1-flash` through the gateway. Every agent gets the same task text and caps, grading is official, and
+  a spend stop reads the key's spend header. Codex CLI 0.167.2 and pi 1.5.2 were installed here.
+- MiniWoB sentinel round 1 (10 tasks, seed 1, all at the same time):
+
+  | Agent | Solved | $/solved | s/solved |
+  |---|---|---|---|
+  | v5 (v4 + browser fixes) | 10/10 | 0.0016 | 17.1 |
+  | pi | 10/10 | 0.0013 | 20.6 |
+  | v4 | 9/10 | 0.0022 | 27.5 |
+  | Codex | 10/10 | 0.0035 | 36.8 |
+
+  v5 is fastest. terminal took 12 s against 84–114 s for the others, and book-flight 33 s against 47–156 s. pi is
+  cheaper because v5 cached only 54% of its input, against pi's 87%.
+- Cause found (findings/006): our per-task `prompt_cache_key` made the gateway miss shared prefixes. New `v5` preset:
+  v4 with the key off, plus the browser fixes and parallel read-only batches. Keep-warm pings now use max_tokens=24.
+- Verified runner checked: the official reference patch for pytest-7490 resolves (swebench pinned to 4.0.4; 5.x
+  needs an `image` field). Smoke run: v5 used 18 calls in 80 s, the app agent 25 calls in 135 s; no full misses.
+- Fairness: on MiniWoB the browser tool is part of the test setup. Round 2 adds Codex and pi with the fixed tool
+  (`codex5`, `pi5`), so a v5 win can be split into harness and tool.

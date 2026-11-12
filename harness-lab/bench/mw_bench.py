@@ -20,7 +20,8 @@ SETUP = """() => { Math.seedrandom('%s'); core.EPISODE_MAX_TIME = 3600000; var o
   core.endEpisode = function (r, t, w) { if (window.__mh === undefined) { window.__mh = {raw: r}; } return o(r, t, w); };
   core.startEpisodeReal(); return core.getUtterance(); }"""
 V5 = {"MH_BROWSER_READONLY": "1", "MH_BROWSER_SETTLE": "1", "MH_BROWSER_STATES": "1", "MH_BROWSER_KEYTYPE": "1"}
-ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v4", **V5}, "codex": {}, "pi": {}}
+ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v5"}, "codex": {}, "pi": {},
+        "codex5": dict(V5), "pi5": dict(V5)}     # codex5/pi5: the other agents with the fixed browser tool
 
 
 def port():
@@ -155,7 +156,7 @@ def one(arm, task, seed, hport, timeout):
         t0 = time.time()
         if arm in ("v4", "v5"):
             r = run_harness(text, wd, flags, bport, timeout)
-        elif arm == "codex":
+        elif arm.startswith("codex"):
             r = run_codex(text, wd, timeout)
         else:
             r = run_pi(text, wd, timeout)
