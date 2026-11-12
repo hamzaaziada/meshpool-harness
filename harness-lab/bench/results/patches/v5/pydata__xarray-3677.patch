@@ -1,65 +1,76 @@
 diff --git a/doc/whats-new.rst b/doc/whats-new.rst
-index 5a9f2497..52af9416 100644
+index 5a9f2497..aad820a2 100644
 --- a/doc/whats-new.rst
 +++ b/doc/whats-new.rst
-@@ -70,6 +70,8 @@ Bug fixes
+@@ -70,6 +70,9 @@ Bug fixes
    By `Justus Magin <https://github.com/keewis>`_.
  - :py:meth:`Dataset.rename`, :py:meth:`DataArray.rename` now check for conflicts with
    MultiIndex level names.
-+- :py:meth:`Dataset.merge` now accepts a :py:class:`DataArray` as its ``other``
-+  argument, matching the behaviour of :py:func:`xarray.merge` (:issue:`3678`).
++- Fix :py:meth:`Dataset.merge` and :py:meth:`Dataset.update` to accept a
++  :py:class:`DataArray` directly, for consistency with :py:func:`xarray.merge`
++  (:issue:`3598`).
  
  Documentation
  ~~~~~~~~~~~~~
-diff --git a/xarray/core/dataset.py b/xarray/core/dataset.py
-index ac0a923d..b39c02a1 100644
---- a/xarray/core/dataset.py
-+++ b/xarray/core/dataset.py
-@@ -3563,8 +3563,8 @@ class Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):
- 
-         Parameters
-         ----------
--        other : Dataset or castable to Dataset
--            Dataset or variables to merge with this dataset.
-+        other : Dataset or DataArray or castable to Dataset
-+            Dataset, DataArray or variables to merge with this dataset.
-         overwrite_vars : Hashable or iterable of Hashable, optional
-             If provided, update variables of these name(s) without checking for
-             conflicts in this dataset.
 diff --git a/xarray/core/merge.py b/xarray/core/merge.py
-index 10c7804d..1275cade 100644
+index 10c7804d..3d75fb9f 100644
 --- a/xarray/core/merge.py
 +++ b/xarray/core/merge.py
-@@ -805,10 +805,15 @@ def dataset_merge_method(
+@@ -805,6 +805,17 @@ def dataset_merge_method(
  ) -> _MergeResult:
      """Guts of the Dataset.merge method.
      """
 +    from .dataarray import DataArray
++    from .dataset import Dataset
++
++    if isinstance(other, DataArray):
++        if other.name is None:
++            raise ValueError(
++                "Cannot merge a DataArray without a name. "
++                "Assign a name with `DataArray.rename` or pass a Dataset or dict."
++            )
++        other = other.to_dataset()
 +
      # we are locked into supporting overwrite_vars for the Dataset.merge
      # method due for backwards compatibility
      # TODO: consider deprecating it?
+@@ -848,6 +859,14 @@ def dataset_update_method(
+     from .dataarray import DataArray
+     from .dataset import Dataset
  
 +    if isinstance(other, DataArray):
++        if other.name is None:
++            raise ValueError(
++                "Cannot update a Dataset with an unnamed DataArray. "
++                "Assign a name with `DataArray.rename` or pass a Dataset or dict."
++            )
 +        other = other.to_dataset()
 +
-     if isinstance(overwrite_vars, Iterable) and not isinstance(overwrite_vars, str):
-         overwrite_vars = set(overwrite_vars)
-     else:
+     if not isinstance(other, Dataset):
+         other = dict(other)
+         for key, value in other.items():
 diff --git a/xarray/tests/test_merge.py b/xarray/tests/test_merge.py
-index c1e6c7a5..b6981732 100644
+index c1e6c7a5..00886bb8 100644
 --- a/xarray/tests/test_merge.py
 +++ b/xarray/tests/test_merge.py
-@@ -159,6 +159,12 @@ class TestMergeMethod:
-         with raises_regex(ValueError, "should be coordinates or not"):
-             data.merge(data.reset_coords())
+@@ -48,6 +48,20 @@ class TestMergeFunction:
+         with raises_regex(ValueError, "without providing an explicit name"):
+             xr.merge([data])
  
-+    def test_merge_dataarray(self):
++    def test_merge_method_dataarray(self):
++        # regression test for GH3598
 +        ds = xr.Dataset({"a": 0})
 +        da = xr.DataArray(1, name="b")
-+        actual = ds.merge(da)
-+        assert actual.variables["b"] == 1
++        expected = xr.merge([ds, da])
 +
-     def test_merge_broadcast_equals(self):
-         ds1 = xr.Dataset({"x": 0})
-         ds2 = xr.Dataset({"x": ("y", [0, 0])})
++        actual = ds.merge(da)
++        assert actual.identical(expected)
++        assert actual.identical(ds.merge(da.to_dataset()))
++
++        # DataArray without a name
++        with raises_regex(ValueError, "without a name"):
++            ds.merge(xr.DataArray(1))
++
+     def test_merge_dicts_simple(self):
+         actual = xr.merge([{"foo": 0}, {"bar": "one"}, {"baz": 3.5}])
+         expected = xr.Dataset({"foo": 0, "bar": "one", "baz": 3.5})

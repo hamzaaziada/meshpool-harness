@@ -8,3 +8,5 @@ v5:OK 122.3s $0.0132 | v5nt:x 149.9s $0.0124 | v5ft:OK 70.3s $0.0094 | v5sp:OK 4
 v5:OK 81.3s $0.0063 | v5nt:OK 49.8s $0.0056 | v5ft:OK 34.0s $0.0045 | v5sp:OK 41.7s $0.0027 <- scikit-learn__scikit-learn-15100
 v5:OK 36.1s $0.0045 | v5nt:OK 128.4s $0.0183 | v5ft:OK 84.2s $0.0082 | v5sp:OK 183.7s $0.0196 <- django__django-11066
 v5:OK 225.1s $0.0243 | v5nt:OK 179.1s $0.0178 | v5ft:OK 188.8s $0.0246 | v5sp:OK 197.9s $0.0234 <- django__django-12708
+v5:OK 159.9s $0.0146 | v5nt:OK 140.2s $0.0092 | v5ft:OK 74.5s $0.0069 | v5sp:OK 109.5s $0.0062 <- pydata__xarray-3677
+key spend at end: $65.89220600669998 (this run: $1.45)
