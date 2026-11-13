@@ -121,6 +121,8 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
                 r = subprocess.run([fc, "-f", "%{family}\t%{file}", q], capture_output=True, text=True, timeout=10)
                 fam, _, path = r.stdout.partition("\t")
                 if path and name.lower() in fam.lower():
+                    if bold and "bold" not in path.lower() and _is_variable(path):
+                        path += "|Bold"
                     return path, exact
             except Exception:
                 pass
@@ -130,10 +132,27 @@ def font_file(family: str, bold: bool = False, italic: bool = False, metric_map:
     return None, False
 
 
+@lru_cache(maxsize=64)
+def _is_variable(path: str) -> bool:
+    try:
+        from PIL import ImageFont
+        return bool(ImageFont.truetype(path, 10).get_variation_names())
+    except Exception:
+        return False
+
+
 @lru_cache(maxsize=512)
 def _pil_font(path: str, size_pt: float):
+    """`path` may carry '|Bold' (or another named instance) for variable fonts such as Gelasio."""
     from PIL import ImageFont
-    return ImageFont.truetype(path, max(1, int(round(size_pt * 10))))
+    path, _, inst = path.partition("|")
+    f = ImageFont.truetype(path, max(1, int(round(size_pt * 10))))
+    if inst:
+        try:
+            f.set_variation_by_name(inst)
+        except Exception:
+            pass
+    return f
 
 
 def text_width_in(text: str, size_pt: float, path: str | None) -> float:
@@ -157,3 +176,15 @@ def wrap_lines(text: str, width_in: float, size_pt: float, path: str | None, saf
                 cur = word
         n += lines
     return n
+
+
+def positive_axis_ids(chart):
+    """python-pptx's chart templates use negative axis ids; the schema says unsignedInt. Map them to positive ids."""
+    C = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+    cs = chart._chartSpace
+    seen = {}
+    for el in cs.iter(f"{C}axId", f"{C}crossAx"):
+        v = el.get("val")
+        if v and v.startswith("-"):
+            el.set("val", seen.setdefault(v, str(50000 + 1000 * len(seen) + abs(int(v)) % 1000)))
+

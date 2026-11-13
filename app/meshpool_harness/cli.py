@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 from meshpool_harness import config as _config  # noqa: E402
 
-ENGINES = ("code", "data", "sheets", "slides", "general", "browser")
+ENGINES = ("code", "data", "sheets", "slides", "forge", "general", "browser")
 
 
 def _engine(name):

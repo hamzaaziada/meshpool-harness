@@ -1,7 +1,8 @@
 """Forge tools for Meshpool Work (Cowork): exposed through the meshpool-office MCP server.
 
-check_deck(path, slide_count?)   -> P1-P18 report with repair messages
-check_workbook(path)             -> X1-X13 report after a headless recalculation
+check_deck(path, slide_count?)   -> P0-P19 report with repair messages (P0: opens in PowerPoint without repair)
+check_workbook(path)             -> X0-X13 report after a headless recalculation (X0: opens in Excel without repair)
+check_document(path)             -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
 measure_office_file(path)        -> anatomy of a .pptx, .xlsx or .pdf (how it is built), with evidence IDs
 Each returns (text, is_error). The text is short enough for a model to act on. The tools only read: they never
 write next to the user's files, so the agent can run them without asking.
@@ -42,6 +43,20 @@ def check_workbook(path: str) -> tuple[str, bool]:
     return report_text(res, 30), False
 
 
+def check_document(path: str) -> tuple[str, bool]:
+    from .ooxml_check import check
+    p = Path(path)
+    if not p.exists():
+        return f"File not found: {path}", True
+    r = check(str(p))
+    if r["ok"]:
+        how = "schema-valid and" if r["schema_validation"] == "run" else "package checks only (schemas not installed);"
+        return f"{p.name}: {how} no problems found in {r['parts_validated']} parts; Office should open it without repair.", False
+    lines = [f"{p.name}: {len(r['problems'])} problem(s) that would make Office offer to repair the file:"]
+    lines += [f"- {x['part']} ({x['check']}): {x['detail']}" for x in r["problems"][:20]]
+    return "\n".join(lines), False
+
+
 def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]:
     p = Path(path)
     if not p.exists():
@@ -72,6 +87,12 @@ def qa_summary(files: list[str]) -> str:
             elif f.endswith(".xlsx"):
                 from .validate_xlsx import validate
                 r = validate(f)
+            elif f.endswith(".docx"):
+                from .ooxml_check import check
+                d = check(f)
+                lines.append(f"- {Path(f).name}: " + ("opens without repair" if d["ok"] else
+                             f"{len(d['problems'])} problem(s) Office would repair (run check_document)"))
+                continue
             else:
                 continue
             bad = [k for k, v in r["rules"].items() if v == "fail"]
@@ -84,17 +105,22 @@ def qa_summary(files: list[str]) -> str:
 
 S = {"type": "string"}
 TOOLS = {
-    "check_deck": (check_deck, "Check a PowerPoint deck (.pptx) against Meshpool's 18 consulting-quality rules: native "
+    "check_deck": (check_deck, "Check a PowerPoint deck (.pptx) against Meshpool's 20 consulting-quality rules: opens "
+                   "in PowerPoint without a repair prompt (every XML part against the Office schemas), native "
                    "charts and tables, theme fonts and colours, text fit, grid, density, action titles, storyline, "
                    "sourced numbers, text matching the charts, archetypes, slide count, editability, alt text. Returns "
                    "each failure as a fix instruction (e.g. 'Slide 4, Body 2: text overflows by 3 lines at 14pt; cut "
                    "to 45 words'). `slide_count` is the count the brief asked for.",
                    {"path": S, "slide_count": {"type": "integer"}}, ["path"]),
-    "check_workbook": (check_workbook, "Check an Excel workbook (.xlsx) against Meshpool's 13 financial-model rules "
-                       "after recalculating it: no hardcoded numbers in calculations, no numbers buried in formulas, no "
+    "check_workbook": (check_workbook, "Check an Excel workbook (.xlsx) against Meshpool's 14 financial-model rules "
+                       "after recalculating it: opens in Excel without a repair prompt, no hardcoded numbers in calculations, no numbers buried in formulas, no "
                        "balancing plugs, historicals tie, no #REF!/#NAME? errors, no circular references, consistent "
                        "formulas across periods, formatting conventions, a checks sheet with a master flag, no external "
                        "links or macros.", {"path": S}, ["path"]),
+    "check_document": (check_document, "Check that a Word, PowerPoint or Excel file (.docx/.pptx/.xlsx) opens in "
+                       "Microsoft Office without the 'found a problem with content ... repair' prompt: every XML part "
+                       "against the Office schemas, relationships, content types and shape ids. Returns each problem "
+                       "with the part it is in.", {"path": S}, ["path"]),
     "measure_office_file": (measure_office_file, "Measure how a .pptx, .xlsx or .pdf deck is built: generator, masters "
                             "and layouts, theme colours vs hardcoded colours, fonts and type scale, grid, native charts "
                             "and tables, text density, title style, source lines (decks); formulas vs constants, links, "

@@ -263,6 +263,8 @@ def s_chart(prs, s, n):
         data.add_series(se["name"], [float(v) for v in se["values"]])
     gf = sl.shapes.add_chart(CHART_MAP[c["type"]], Inches(T.MARGIN_X), Inches(T.BODY_TOP),
                              Inches(cw), Inches(h), data)
+    from engines.forge.common import positive_axis_ids
+    positive_axis_ids(gf.chart)
     gf.name = "Chart"
     ch = gf.chart
     ch.has_title = False

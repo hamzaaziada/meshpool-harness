@@ -1,6 +1,6 @@
 # Forge engine spec: decks and workbooks with model-agnostic quality rules
 
-Forge is the part of Meshpool Work (Cowork) that builds and checks consulting-grade PowerPoint and Excel files. This
+Forge is the part of the Meshpool agent that builds and checks consulting-grade PowerPoint and Excel files. The visual design system is in `design-grammar.md`. This
 spec defines what the model writes, what the renderer guarantees, and the rules that decide whether a file ships.
 Hebbia's output is the bar to measure against. The hard rules below are the floor. Where a measured reference breaks
 a rule, the rule stands, and the measurement goes into the findings ledger.
@@ -136,6 +136,7 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 
 | Rule | Complaint fixed | Check (threshold key) |
 |---|---|---|
+| P0 | "PowerPoint found a problem with content … repair" | every XML part valid against the ECMA-376 Transitional schemas (Office's own forms accepted where [MS-OI29500] differs); relationships resolve; content types; unique shape and slide ids; table rows match the grid; embedded chart workbooks checked too (`ooxml_check.py`) |
 | P1 | export breaks layouts | LibreOffice render; every rendered text span inside a text box (`render.box_tolerance_in` 0.08) |
 | P2 | charts become images | chart parts with embedded workbook; series refs resolve; cache = cells; no chart-named pictures |
 | P3 | tables become images | native `a:tbl`; no table-named pictures; OCR of images when an OCR engine is configured |
@@ -160,6 +161,7 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 
 | Rule | Check |
 |---|---|
+| X0 | the file opens in Excel without a repair prompt (same check as P0) |
 | X1 | zero typed-in numbers on calc/output/check sheets (period headers excepted; input-styled cells allowed) |
 | X2 | formula literals ⊆ {0, 1, 2, 4, 12, 52, 100, 365, 1e3, 1e6, 1e9} |
 | X3 | no plug-labelled lines; assets − liabilities − equity = 0 in every period |

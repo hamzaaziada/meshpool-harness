@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 warnings.filterwarnings("ignore")
 
-from engines.forge.common import find_soffice, load_rules  # noqa: E402
+from engines.forge.common import find_soffice, load_rules, positive_axis_ids  # noqa: E402
+from engines.forge import ooxml_check as OX  # noqa: E402
 from engines.forge import validate_pptx as VP, validate_xlsx as VX  # noqa: E402
 
 HAS_LO = find_soffice() is not None
+HAS_XSD = OX._schema_dir() is not None
 
 
 # ------------------------------------------------------------------ fixtures
@@ -48,6 +50,7 @@ def _good_deck(path):
     cd.add_series("Revenue ($M)", (100, 120))
     gf = s2.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(0.5), Inches(1.6),
                              Inches(edge(5) + col - 0.5), Inches(4.6), cd)
+    positive_axis_ids(gf.chart)
     gf._element.find(".//{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr").set(
         "descr", "Column chart: revenue rose from $100M in 2024 to $120M in 2025")
     src = s2.shapes.add_textbox(Inches(0.5), Inches(6.6), Inches(9.0), Inches(0.4))
@@ -179,6 +182,12 @@ def test_failures_are_machine_readable(decks):
     json.dumps({k: v for k, v in r.items() if k != "measurement"}, default=str)
 
 
+def test_verb_heuristic_knows_chart_verbs():
+    for t in ("Deal value jumped 36% to $4.8T in 2025E", "Margins slipped as costs surged", "Asia overtook Europe"):
+        assert VP._has_verb(t), t
+    assert not VP._has_verb("Deal value by region, 2020-2025")
+
+
 def test_verb_heuristic():
     assert VP._has_verb("Revenue grew 20% as pricing offset lower volume")
     assert VP._has_verb("Margins are under pressure in Europe")
@@ -234,3 +243,63 @@ def test_p19_catches_inconsistent_titles(tmp_path):
     msgs = [f["message"] for f in r["failures"] if f["rule"] == "P19"]
     assert r["rules"]["P19"] == "fail"
     assert any("Titles use 2 sizes" in m for m in msgs) and any("Title left edge" in m for m in msgs)
+
+
+# ------------------------------------------------------------------ P0: opens in Office without repair
+def _rewrite(src, dst, part, fn):
+    import zipfile
+    with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:
+        for item in zi.infolist():
+            data = zi.read(item.filename)
+            zo.writestr(item, fn(data) if item.filename == part else data)
+
+
+def test_p0_catches_broken_relationship_and_duplicate_ids(decks, tmp_path):
+    good, _, _ = decks
+    assert OX.check(str(good))["problems"] == [] or HAS_XSD
+    bad = tmp_path / "broken.pptx"
+    _rewrite(good, bad, "ppt/slides/_rels/slide2.xml.rels",
+             lambda b: b.replace(b"../charts/chart", b"../charts/missing"))
+    r = VP.validate(str(bad), render=False)
+    assert r["rules"]["P0"] == "fail"
+    assert any(f["check"] == "broken_relationship" for f in r["failures"] if f["rule"] == "P0")
+    dup = tmp_path / "dup.pptx"
+    _rewrite(good, dup, "ppt/slides/slide2.xml", lambda b: b.replace(b'id="3"', b'id="2"'))
+    assert any(p["check"] == "duplicate_shape_id" for p in OX.check(str(dup))["problems"])
+
+
+@pytest.mark.skipif(not HAS_XSD, reason="ECMA-376 schemas not installed (ooxml_check --install-schemas)")
+def test_p0_schema_catches_what_powerpoint_repairs(decks, tmp_path):
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    good, _, _ = decks
+    assert OX.check(str(good))["ok"], OX.check(str(good))["problems"]
+    prs = Presentation()                                   # a raw python-pptx chart: negative axis ids
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    cd = CategoryChartData()
+    cd.categories = ["a", "b"]
+    cd.add_series("s", (1, 2))
+    s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(4), Inches(3), cd)
+    raw = tmp_path / "raw.pptx"
+    prs.save(raw)
+    assert any("axId" in p["detail"] for p in OX.check(str(raw))["problems"])
+    order = tmp_path / "order.pptx"                        # child elements out of schema order
+    _rewrite(good, order, "ppt/slides/slide2.xml", lambda b: b.replace(b"<p:spTree>", b"<p:spTree><p:extLst/>", 1))
+    assert VP.validate(str(order), render=False)["rules"]["P0"] == "fail"
+
+
+def test_forge_render_opens_cleanly(tmp_path):
+    from engines.forge.render import render
+    slides = [
+        {"archetype": "cover", "title": "Regional growth plan", "subtitle": "Board review"},
+        {"archetype": "chart_takeaway", "title": "Revenue grew 20% as pricing offset lower volume",
+         "chart": {"kind": "column", "categories": ["2023", "2024", "2025"],
+                   "series": [{"name": "Revenue ($M)", "values": [100, 110, 120]}]},
+         "takeaways": ["Price rose in every region", "Volume fell 4%"], "source": "Company accounts"},
+    ]
+    out = tmp_path / "d.pptx"
+    render(slides, str(out))
+    r = OX.check(str(out))
+    assert r["ok"], r["problems"]

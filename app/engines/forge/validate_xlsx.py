@@ -25,8 +25,9 @@ from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 
 from .common import evidence_id, load_rules, sha256, soffice_convert, summarize
 from .common import failure as F
+from .ooxml_check import check as ooxml_check
 
-RULES = [f"X{i}" for i in range(1, 14)]
+RULES = [f"X{i}" for i in range(0, 14)]
 CELL_RE = re.compile(r"^\$?([A-Z]{1,3})\$?(\d+)$")
 YEAR_RE = re.compile(r"^(fy|cy)?\s*'?(\d{2}|\d{4})\s*([aebfp]|act|actual|est|budget|forecast)?$", re.I)
 
@@ -243,12 +244,29 @@ def diff(before: str, after: str) -> list[dict]:
     return out
 
 
+def _opens_cleanly(path, failures):
+    """X0: the file opens in Office without a repair prompt (schema + cross-part checks, ooxml_check.py)."""
+    try:
+        r = ooxml_check(path)
+    except Exception as e:  # a file we cannot even unzip
+        failures.append(F("X0", "package", f"Not a readable Office package: {e}", fix_scope="renderer"))
+        return
+    for pr in r["problems"][:20]:
+        failures.append(F("X0", pr["check"], f"{pr['part']}: {pr['detail']}. Office would offer to repair "
+                          "this file.", fix_scope="renderer"))
+    if r["schema_validation"] == "not_run":
+        failures.append(F("X0", "schema", "Office schemas not installed; only package and relationship checks "
+                          "ran (python -m engines.forge.ooxml_check --install-schemas).", status="not_run",
+                          severity="info", fix_scope="renderer"))
+
+
 def validate(path: str, rules: dict | None = None, recompute: dict | None = None, before: str | None = None,
              do_recalc: bool | None = None) -> dict:
     rules = rules or load_rules()
     R = rules["xlsx"]
     file_sha = sha256(path)
     failures: list[dict] = []
+    _opens_cleanly(path, failures)
     wb = load_workbook(path, data_only=False)
     sheets = set(wb.sheetnames)
     names_raw = _defined_names(wb)
