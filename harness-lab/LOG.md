@@ -201,3 +201,8 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Regression on the mock: e2e 124/124, journeys 20/20, ui_crawl 45/45, midrun 99/99, crawl_all 31/31 (579 clicks),
   stop_check 28/28, jitter 20/20 (twice), update_flow 7/7, modes/about/intr/v24 no page errors, unit 150.
 - Not tested here: the real Mac and Windows windows (this container is Linux; Safari's engine cannot be installed).
+
+## 2026-11-13: merged as 0.1.0 beta
+
+- Independent UX audits: 6.3, 6.6, 7.2, 7.2. All findings of the first three fixed. Audit 4 findings are open in
+  harness-lab/UX_OPEN_ISSUES.md (3 history/data issues first). Merged at the owner's request.
