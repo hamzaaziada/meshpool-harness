@@ -38,7 +38,8 @@ SAFE_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_assistant__list_scheduled_tasks", "mcp__meshpool_assistant__search_chats",
             "mcp__meshpool_assistant__run_subtasks", "mcp__meshpool_office__read_document",
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
-            "mcp__meshpool_tools__calculate"}
+            "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
+            "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill"]
 BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
            "web_research", "todo_write", "use_skill"]
@@ -143,9 +144,12 @@ How to work
 web_search, read pages and PDFs with fetch_url, and use connected apps (mcp__ tools) when they fit. For a big \
 research job, split it into parts, research each, then write up.
 4. Produce real deliverables as files in the working folder. For decks, spreadsheets, models and data analysis use \
-office_task: it returns a finished, checked file. For notes, memos and reports write Markdown with write_file. Use \
-Python through bash for quick calculations.
-5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish.
+office_task: it returns a finished, checked file. For memos, reports, letters and proposals make a Word document \
+(.docx) with the make_document tool (or python-docx through bash for edits to an existing .docx); write Markdown only \
+when the user asks for it. Use Python through bash for quick calculations.
+5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish. \
+Run check_deck on every .pptx and check_workbook on every .xlsx you deliver; fix each failure it lists (content \
+failures by changing the words or numbers, then rebuild) and tell the user about any that remain.
 6. Finish with a short reply: what you made, where the files are, and anything the user should check. Do not call \
 a tool in that reply.
 
