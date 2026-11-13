@@ -438,6 +438,37 @@ def _why(bk: Book, ws, row: int) -> str:
     return ""
 
 
+def lbo_page(bk: Book) -> dict | None:
+    irr, moic = bk.name("lbo_irr"), bk.name("lbo_moic")
+    lo, hi = bk.name("lbo_floor_low"), bk.name("lbo_floor_high")
+    hit = bk.find("Purchase enterprise value ($m)")
+    if _num(irr) is None or not hit:
+        return None
+    ws, r0, _ = hit
+    rows = []
+    r = r0
+    while ws.cell(row=r, column=1).value and not str(ws.cell(row=r, column=1).value).startswith("Total debt /"):
+        lab, v = str(ws.cell(row=r, column=1).value), _num(ws.cell(row=r, column=2).value)
+        rows.append([lab.replace(" ($m)", ""), _usd(v)])
+        r += 1
+    lev = _num(ws.cell(row=r, column=2).value)
+    rows.append(["Total debt / LTM EBITDA", _x(lev)])
+    rows.append(["IRR / money multiple", f"{_pct(irr)} / {_x(moic)}"])
+    rows.append(["Price a sponsor could pay ($ per share)", f"{fmt_value(_num(lo), '$')}-{fmt_value(_num(hi), '$')}"])
+    prov = [bk.fact(f"LBO: IRR {_pct(irr)}, money multiple {_x(moic)}; a sponsor could pay "
+                    f"{fmt_value(_num(lo), '$')}-{fmt_value(_num(hi), '$')} per share", "lbo_irr, lbo_floor_low/high")]
+    return {"archetype": "table_focus", "fixed": True,
+            "title": f"A sponsor earns {_pct(irr)} at this price and could pay up to {fmt_value(_num(hi), '$')} per share",
+            "title_prov": prov, "table": {"columns": ["Sources and uses, returns", "$m"], "rows": rows,
+                                          "highlight_rows": [len(rows) - 1], "keep_table": True},
+            "takeaway": {"text": "The LBO sets the floor a financial buyer would pay"},
+            "bullets": [{"text": f"IRR {_pct(irr)} and a {_x(moic)} money multiple over the holding period"},
+                        {"text": f"At the hurdle returns a sponsor could pay {fmt_value(_num(lo), '$')}-"
+                                 f"{fmt_value(_num(hi), '$')} per share"},
+                        {"text": f"Entry leverage of {_x(lev)} LTM EBITDA, repaid from cash flow in seniority order"}],
+            "source": {"text": f"{FIRM_SRC} (LBO tab, operating forecast from the integrated statements)", "prov": prov}}
+
+
 def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     """Banker pages in deck order (financial summary, football field, weighting, DCF outputs, DCF sensitivity,
     scenarios, comps, precedents)
@@ -445,7 +476,7 @@ def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     bk = Book(path)
     pages = []
     for fn in (financial_summary, football_field, weighting_table, dcf_outputs, dcf_sensitivity, scenario_chart,
-               comps, lambda b: comps(b, "prec_", "Precedent transactions")):
+               comps, lambda b: comps(b, "prec_", "Precedent transactions"), lbo_page):
         try:
             p = fn(bk)
         except Exception:                                      # noqa: BLE001 - one unreadable table skips its page
@@ -466,6 +497,7 @@ def finance_workbook(paths: list[str]) -> str | None:
             names = {k.lower() for k in load_workbook(p, read_only=False).defined_names.keys()}
         except Exception:                                      # noqa: BLE001
             continue
-        if names & {"dcf_per_share", "comps_ev_ebitda_median", "weighted_value_per_share", "ts_revenue_final"}:
+        if names & {"dcf_per_share", "comps_ev_ebitda_median", "weighted_value_per_share", "ts_revenue_final",
+                    "lbo_irr"}:
             return str(p)
     return None

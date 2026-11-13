@@ -1706,3 +1706,158 @@ def alerts(wb, model: dict, dcf: dict | None = None, sheet: str = "Alerts") -> d
     ws.column_dimensions["C"].width = 10
     ws.column_dimensions["D"].width = 70
     return {"sheet": sheet, "status": out}
+
+
+# --------------------------------------------------------------------------- LBO: returns and the sponsor floor
+LBO_NAMES = {"entry_multiple": "lbo_entry_multiple", "ltm_ebitda": "lbo_ltm_ebitda", "fees": "lbo_fees_pct",
+             "exit_multiple": "lbo_exit_multiple", "irr_low": "lbo_irr_low", "irr_high": "lbo_irr_high",
+             "tax": "tax_rate", "debt": "total_debt", "cash": "cash", "shares": "diluted_shares"}
+
+
+def lbo(ws, row, model: dict, tranches: list[dict], names: dict | None = None, title_text="LBO") -> dict:
+    """Leveraged buyout on the integrated model's operating forecast (EBITDA, depreciation, capex and working
+    capital linked from it).
+
+    tranches (senior first): [{"label": "Term Loan A", "multiple": "tla_x", "rate": "tla_rate",
+      "amort": "tla_amort" (share of the original amount repaid each year, optional), "sweep": True}, ...]; each value
+      is a named input. Sources & uses: purchase EV = entry multiple x LTM EBITDA, fees on EV; debt = multiple x LTM
+      EBITDA per tranche; sponsor equity funds the rest. Each year: interest on opening balances (no circularity),
+      cash taxes on EBIT less interest, levered free cash flow, mandatory amortisation, then a cash sweep down the
+      tranches in order. Exit at the exit multiple on final-year EBITDA; IRR and MOIC with no interim dividends.
+    Ability to pay: the most a sponsor could pay for the target to earn irr_high / irr_low (the LBO floor range),
+    as EV and value per share after the target's net debt. Names: lbo_irr, lbo_moic, lbo_max_ev_low/high,
+    lbo_floor_low / lbo_floor_high ($ per share). Needs the names in LBO_NAMES (override with names=)."""
+    wb = ws.parent
+    N = {**LBO_NAMES, **(names or {})}
+    have = _names_in(wb)
+    need = [v for v in N.values()] + [t[k] for t in tranches for k in ("multiple", "rate", "amort") if t.get(k)]
+    missing = [x for x in need if x.lower() not in have]
+    if missing:
+        raise ValueError(f"lbo: define these named inputs first: {', '.join(missing)}")
+    msh, mrow, cols = model["sheet"], model["rows"], model["cols"]
+    labels = model["labels"]
+    F0, L = cols[0], cols[-1]
+    width = len(cols) + 2
+    link = lambda k, c: f"'{msh}'!{c}{mrow[k]}"  # noqa: E731
+    r = row
+    rows: dict[str, int] = {}
+
+    def one(key, label, expr, fmt="usd", total=False):
+        nonlocal r
+        rows[key] = r
+        ws.cell(row=r, column=1, value=label)
+        _f(ws, f"B{r}", expr, fmt, total=total)
+        r += 1
+        return f"B{rows[key]}"
+
+    def line(key, label, fn, fmt="usd", total=False):
+        nonlocal r
+        rows[key] = r
+        ws.cell(row=r, column=1, value=label)
+        for i, c in enumerate(cols):
+            _f(ws, f"{c}{r}", fn(c, cols[i - 1] if i else None), fmt, total=total)
+        r += 1
+    section(ws, r, f"{title_text}: sources and uses at entry", 4)
+    r += 1
+    ev = one("ev", "Purchase enterprise value ($m)", f"={N['entry_multiple']}*{N['ltm_ebitda']}")
+    fees = one("fees", "Transaction and financing fees ($m)", f"={ev}*{N['fees']}")
+    uses = one("uses", "Total uses ($m)", f"={ev}+{fees}", total=True)
+    debt_cells = []
+    for i, t in enumerate(tranches):
+        debt_cells.append(one(f"src_{i}", f"{t['label']} ($m)", f"={t['multiple']}*{N['ltm_ebitda']}"))
+    eq = one("equity", "Sponsor equity ($m)", f"={uses}-" + "-".join(debt_cells) if debt_cells else f"={uses}")
+    one("sources", "Total sources ($m)", "=" + "+".join(debt_cells + [eq]), total=True)
+    one("lev", "Total debt / LTM EBITDA (x)", "=(" + "+".join(debt_cells or ["0"]) + f")/{N['ltm_ebitda']}", "x")
+    one("eq_share", "Sponsor equity share of sources (%)", f"={eq}/{uses}", "pct")
+    r += 1
+    section(ws, r, f"{title_text}: cash flow and debt paydown", width)
+    r += 1
+    hdr = r
+    header(ws, hdr, ["Line item", "Entry"] + labels)
+    r += 1
+    line("ebitda", "EBITDA ($m)", lambda c, p: f"={link('ebitda', c)}")
+    bal_open = {}                                             # opening balances first (interest reads them)
+    for i, t in enumerate(tranches):
+        bal_open[i] = r
+        ws.cell(row=r, column=1, value=f"{t['label']}: opening balance ($m)")
+        r += 1
+    line("interest", "Cash interest on opening balances ($m, negative)",
+         lambda c, p: "=-(" + "+".join(f"{c}{bal_open[i]}*{t['rate']}" for i, t in enumerate(tranches)) + ")"
+         if tranches else "=0")
+    line("tax", "Cash taxes on EBIT less interest ($m, negative)",
+         lambda c, p: f"=-MAX(0,{c}{rows['ebitda']}-{link('dep', c)}+{c}{rows['interest']})*{N['tax']}")
+    line("capex", "Capital expenditure ($m, negative)", lambda c, p: f"=-{link('additions', c)}")
+    line("nwc", "(Increase) / decrease in working capital ($m)", lambda c, p: f"={link('cf_nwc', c)}")
+    line("fcf", "Levered free cash flow ($m)", lambda c, p: "=" + "+".join(f"{c}{rows[k]}" for k in
+                                                                          ("ebitda", "interest", "tax", "capex", "nwc")),
+         total=True)
+    mand = {}
+    for i, t in enumerate(tranches):
+        if t.get("amort"):
+            mand[i] = r
+            line(f"mand_{i}", f"{t['label']}: scheduled repayment ($m, negative)",
+                 lambda c, p, i=i, t=t: f"=-MIN({c}{bal_open[i]},$B${rows[f'src_{i}']}*{t['amort']})")
+    line("avail", "Cash available for the sweep ($m)",
+         lambda c, p: f"=MAX(0,{c}{rows['fcf']}" + "".join(f"+{c}{mand[i]}" for i in mand) + ")")
+    sweep, closing = {}, {}
+    used = []
+    for i, t in enumerate(tranches):
+        if not t.get("sweep"):
+            continue
+        sweep[i] = r
+        prior = "".join(f"+{{c}}{sweep[j]}" for j in used)
+        line(f"sweep_{i}", f"{t['label']}: cash sweep ($m, negative)",
+             lambda c, p, i=i, prior=prior: f"=-MIN({c}{bal_open[i]}" + (f"+{c}{mand[i]}" if i in mand else "") +
+             f",{c}{rows['avail']}" + prior.format(c=c) + ")")
+        used.append(i)
+    for i, t in enumerate(tranches):
+        closing[i] = r
+        line(f"close_{i}", f"{t['label']}: closing balance ($m)",
+             lambda c, p, i=i: f"={c}{bal_open[i]}" + (f"+{c}{mand[i]}" if i in mand else "") +
+             (f"+{c}{sweep[i]}" if i in sweep else ""))
+    line("cash", "Cash build after debt service ($m)", lambda c, p: "=0")       # written below (cumulative)
+    cash_row = rows["cash"]
+    for i, t in enumerate(tranches):                           # opening balances: entry amount, then prior closing
+        ws.cell(row=bal_open[i], column=1, value=f"{t['label']}: opening balance ($m)")
+        for j, c in enumerate(cols):
+            _f(ws, f"{c}{bal_open[i]}", f"=$B${rows[f'src_{i}']}" if j == 0 else f"={cols[j - 1]}{closing[i]}", "usd")
+    # cash build: cumulative (fix the self-reference written above)
+    for j, c in enumerate(cols):
+        e = f"={c}{rows['fcf']}" + "".join(f"+{c}{mand[i]}" for i in mand) + "".join(f"+{c}{sweep[i]}" for i in sweep)
+        if j:
+            e += f"+{cols[j - 1]}{cash_row}"
+        _f(ws, f"{c}{cash_row}", e, "usd")
+    line("total_debt", "Total debt, closing ($m)", lambda c, p: "=" + "+".join(f"{c}{closing[i]}" for i in closing)
+         if closing else "=0", total=True)
+    line("lev_t", "Total debt / EBITDA (x)", lambda c, p: f'=IF({c}{rows["ebitda"]}<=0,"NM",{c}{rows["total_debt"]}/'
+         f'{c}{rows["ebitda"]})', "x")
+    r += 1
+    section(ws, r, f"{title_text}: exit, returns and ability to pay", 4)
+    r += 1
+    yrs = one("years", "Holding period (years)", f"=COLUMNS(${F0}${hdr}:${L}${hdr})", "num")
+    xev = one("exit_ev", "Exit enterprise value ($m)", f"={N['exit_multiple']}*{L}{rows['ebitda']}")
+    xeq = one("exit_eq", "Exit equity value ($m)", f"={xev}-{L}{rows['total_debt']}+{L}{cash_row}", total=True)
+    moic = one("moic", "Money multiple (MOIC, x)", f'=IF({eq}<=0,"NM",{xeq}/{eq})', "x")
+    one("irr", "IRR (%)", f'=IF(OR({eq}<=0,{xeq}<=0),"NM",({xeq}/{eq})^(1/{yrs})-1)', "pct", total=True)
+    define_name(wb, "lbo_moic", _abs(ws, moic))
+    define_name(wb, "lbo_irr", _abs(ws, f"B{rows['irr']}"))
+    debt0 = "(" + "+".join(debt_cells or ["0"]) + ")"
+    for key, irr, lab in (("low", N["irr_high"], "higher"), ("high", N["irr_low"], "lower")):
+        # most the sponsor can pay: equity today at the hurdle, plus the debt raised, net of fees on EV
+        mx = one(f"max_ev_{key}", f"Maximum purchase EV at the {lab} hurdle IRR ($m)",
+                 f"=({xeq}/(1+{irr})^{yrs}+{debt0})/(1+{N['fees']})")
+        define_name(wb, f"lbo_max_ev_{key}", _abs(ws, mx))
+        ps = one(f"floor_{key}", f"Value per share a sponsor could pay at the {lab} hurdle IRR ($)",
+                 f"=IF({N['shares']}=0,0,({mx}-{N['debt']}+{N['cash']})/{N['shares']})", "usd2")
+        define_name(wb, f"lbo_floor_{key}", _abs(ws, ps))
+    if "Checks" in wb.sheetnames:
+        add_check(wb, f"{title_text}: sources equal uses", f"='{ws.title}'!B{rows['sources']}-'{ws.title}'!B{rows['uses']}")
+        add_check(wb, f"{title_text}: no tranche below zero",
+                  "=" + "+".join(f"SUMPRODUCT(--('{ws.title}'!{F0}{closing[i]}:{L}{closing[i]}<0))" for i in closing)
+                  if closing else "=0")
+    if ws.freeze_panes is None:
+        freeze(ws, f"B{hdr + 1}")
+    ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 56)
+    return {"rows": rows, "cols": cols, "header_row": hdr, "opening": bal_open, "closing": closing,
+            "names": {"irr": "lbo_irr", "moic": "lbo_moic", "floor_low": "lbo_floor_low",
+                      "floor_high": "lbo_floor_high"}, "next_row": r + 1}

@@ -152,6 +152,11 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       back in operating cash flow and credits equity (not added back in unlevered FCF).
   B.diluted_shares(ws, row, basic="basic_shares", price="share_price", options=[("opt_n", "opt_strike")],
       rsus="rsus", converts=[("conv_shares", "conv_price")])     # treasury stock method; defines diluted_shares
+  lb = B.lbo(wb["LBO"], 3, m, [{{"label": "Term Loan A", "multiple": "tla_x", "rate": "tla_rate", "amort": "tla_amort",
+      "sweep": True}}, {{"label": "Term Loan B", ...}}, {{"label": "Senior notes", "multiple": "notes_x",
+      "rate": "notes_rate"}}])   # sources & uses, sweep, IRR / MOIC, and lbo_floor_low / lbo_floor_high ($ per share
+      a sponsor could pay at lbo_irr_high / lbo_irr_low): use them as the LBO bar in valuation_summary
+      (needs lbo_entry_multiple, lbo_ltm_ebitda, lbo_fees_pct, lbo_exit_multiple, lbo_irr_low, lbo_irr_high)
   B.alerts(wb, m, d)               # Alerts tab: growth fades, capex vs depreciation, growth and margin both rising,
       cash shortfall, terminal value share, terminal growth vs risk-free; explain every REVIEW in your answer
   d = B.dcf_from_statements(wb["DCF"], 3, m)   # names risk_free, beta_unlevered, equity_risk_premium, cost_of_debt,

@@ -98,3 +98,92 @@ def test_sbc_share_count_bridge_and_alerts(tmp_path):
     tv = named("dcf_tv_share")
     assert status["Terminal value share of enterprise value (%)"] == ("OK" if tv <= 0.75 else "REVIEW")
     assert status["Terminal growth minus the risk-free rate (pp)"] == "OK"                      # 2.5% < 4.2%
+
+
+def lbo_recompute(rec, x):
+    """Independent LBO: tranches [(multiple, rate, amort share, sweep)], senior first."""
+    import test_sheets_statements as TS
+    ltm = x["ltm"]
+    ev = x["entry"] * ltm
+    fees = ev * x["fees"]
+    debt0 = [m * ltm for m, _, _, _ in x["tr"]]
+    eq = ev + fees - sum(debt0)
+    bal, cash = list(debt0), 0.0
+    for t in range(len(TS.YEARS)):
+        ebitda, dep, capex, nwc = rec["ebitda"][t], rec["dep"][t], rec["additions"][t], rec["cf_nwc"][t]
+        interest = sum(b * r for b, (_, r, _, _) in zip(bal, x["tr"]))
+        tax = max(0, ebitda - dep - interest) * x["tax"]
+        fcf = ebitda - interest - tax - capex + nwc
+        mand = [min(b, d0 * a) if a else 0 for b, d0, (_, _, a, _) in zip(bal, debt0, x["tr"])]
+        avail = max(0, fcf - sum(mand))
+        sweeps = []
+        for i, (b, (_, _, _, sw)) in enumerate(zip(bal, x["tr"])):
+            s_ = min(b - mand[i], avail - sum(sweeps)) if sw else 0
+            sweeps.append(s_)
+        bal = [b - m - s_ for b, m, s_ in zip(bal, mand, sweeps)]
+        cash += fcf - sum(mand) - sum(sweeps)
+    n = len(TS.YEARS)
+    xeq = x["exit"] * rec["ebitda"][-1] - sum(bal) + cash
+    irr = (xeq / eq) ** (1 / n) - 1
+    floor = {}
+    for key, h in (("low", x["irr_high"]), ("high", x["irr_low"])):
+        mx = (xeq / (1 + h) ** n + sum(debt0)) / (1 + x["fees"])
+        floor[key] = (mx - x["debt"] + x["cash"]) / x["shares"]
+    return {"equity": eq, "irr": irr, "moic": xeq / eq, "floor": floor, "bal": bal}
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")
+def test_lbo_returns_and_floor_match_recompute(tmp_path):
+    import test_sheets_statements as TS
+    wb = B.banker_workbook("LBO", "Sponsor returns", "T", "2026-11-13", middle=("Inputs", "Model", "LBO"))
+    sb = B.scenario_book(wb["Inputs"], 3)
+    for k, (b, u, d, f) in TS.CASES.items():
+        sb.add(k, b, u, d, f, k, source="Test")
+    for k, v in {**TS.OPEN, **TS.VAL}.items():
+        sb.add(k, v, fmt="num", name=k, source="Test")
+    x = {"ltm": 400.0, "entry": 9.0, "fees": 0.03, "exit": 9.0, "irr_low": 0.20, "irr_high": 0.25, "tax": 0.25,
+         "debt": 310.0, "cash": 80.0, "shares": 50.0,
+         "tr": [(2.0, 0.07, 0.10, True), (2.5, 0.08, 0.01, True), (1.0, 0.10, 0.0, False)]}
+    for k, v in {"lbo_ltm_ebitda": 400.0, "lbo_entry_multiple": 9.0, "lbo_fees_pct": 0.03, "lbo_exit_multiple": 9.0,
+                 "lbo_irr_low": 0.20, "lbo_irr_high": 0.25, "total_debt": 310.0,
+                 "tla_x": 2.0, "tla_rate": 0.07, "tla_amort": 0.10, "tlb_x": 2.5, "tlb_rate": 0.08, "tlb_amort": 0.01,
+                 "notes_x": 1.0, "notes_rate": 0.10}.items():
+        sb.add(k, v, fmt="num", name=k, source="Test")
+    m = B.three_statement(wb["Model"], 3, **TS.MODEL_ARGS)
+    lb = B.lbo(wb["LBO"], 3, m, [
+        {"label": "Term Loan A", "multiple": "tla_x", "rate": "tla_rate", "amort": "tla_amort", "sweep": True},
+        {"label": "Term Loan B", "multiple": "tlb_x", "rate": "tlb_rate", "amort": "tlb_amort", "sweep": True},
+        {"label": "Senior notes", "multiple": "notes_x", "rate": "notes_rate"}], names={"cash": "cash_open"})
+    p = tmp_path / "lbo.xlsx"
+    wb.save(p)
+    rc = load_workbook(qa.recalc(str(p), str(tmp_path / "rc")), data_only=True)
+
+    def named(n):
+        sh, _, c = str(rc.defined_names[n].attr_text).rpartition("!")
+        return rc[sh.strip("'")][c.replace("$", "")].value
+    want = lbo_recompute(TS.recompute("base"), x)
+    assert named("lbo_irr") == pytest.approx(want["irr"], rel=1e-9)
+    assert named("lbo_moic") == pytest.approx(want["moic"], rel=1e-9)
+    assert named("lbo_floor_low") == pytest.approx(want["floor"]["low"], rel=1e-9)
+    assert named("lbo_floor_high") == pytest.approx(want["floor"]["high"], rel=1e-9)
+    assert named("lbo_floor_low") < named("lbo_floor_high")                         # higher hurdle, lower price
+    L = rc["LBO"]
+    closing = [L[f"{m['cols'][-1]}{lb['closing'][i]}"].value for i in range(3)]
+    assert closing == pytest.approx(want["bal"], rel=1e-9, abs=1e-9)
+    assert rc["Checks"]["F3"].value == "OK"
+    from engines.forge import validate_xlsx as VX
+    r = VX.validate(str(p))
+    assert {k: v for k, v in r["rules"].items() if v not in ("pass", "not_run")} == {}, \
+        [f["message"] for f in r["failures"] if f["status"] == "fail"][:6]
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")
+def test_lbo_page_from_the_workbook(tmp_path, monkeypatch):
+    test_lbo_returns_and_floor_match_recompute(tmp_path)
+    from engines.forge.finance_pages import pages_from_workbook
+    pages, facts = pages_from_workbook(str(tmp_path / "lbo.xlsx"))
+    pg = next(p for p in pages if p["title"].startswith("A sponsor earns"))
+    labels = [r[0] for r in pg["table"]["rows"]]
+    assert labels[:3] == ["Purchase enterprise value", "Transaction and financing fees", "Total uses"]
+    assert "Sponsor equity" in labels and pg["table"]["rows"][-1][1].startswith("$")
+    assert any("LBO: IRR" in f["text"] for f in facts)
