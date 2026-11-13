@@ -212,3 +212,9 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   cells keep the model's detail. DC sample: 4 failing slides -> 1 (thin content, left to the repair loop); Bain
   sample: 5 -> 0. Opening/closing slides the brief asks for are planned, enforced and checked (P16); new cover
   design and a `closing` (next steps) archetype. Unit tests 158 passed, 8 skipped.
+- Empty space, second pass (user review of slides 2, 3, 6, 7, 8): the first fix hid thin content by stretching
+  table rows, bars and gaps. Now the renderer never fakes fullness (natural row heights, set bar thickness, type up
+  before gaps), the layout follows the content (short tables and small charts beside their argument, small numeric
+  tables drawn as charts, takeaway column width from its text, so-what band on text slides), P20 also catches
+  stretched rows and slab bars, and thin slides go back to the content model before and after rendering with the
+  whole fact base. Repair stops after two rounds without progress. Unit tests 160 passed, 8 skipped.
