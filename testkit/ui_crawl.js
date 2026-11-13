@@ -33,7 +33,7 @@ async function watch(p) {
     check("key accepted, permissions step shown", true);
     await p.screenshot({path: out + "/u1-perms.png"});
     await p.click("[data-scope=later]"); await p.waitForTimeout(300);
-    check("folder choice responds", /choose a folder/i.test(await p.textContent("#oScope")));
+    check("folder choice responds", /Meshpool Projects/i.test(await p.textContent("#oScope")));
     await p.click("[data-scope=home]"); await p.waitForTimeout(800);
     check("home folder choice adds a project", /home folder/i.test(await p.textContent("#oScope")));
     await p.click("#oDone");
