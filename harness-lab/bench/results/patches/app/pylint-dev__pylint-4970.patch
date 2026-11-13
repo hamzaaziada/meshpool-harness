@@ -1,0 +1,63 @@
+diff --git a/ChangeLog b/ChangeLog
+index 97af302a..e10426b4 100644
+--- a/ChangeLog
++++ b/ChangeLog
+@@ -40,6 +40,11 @@ Release date: TBA
+ 
+   Closes #4751
+ 
++* Setting ``min-similarity-lines`` to ``0`` now disables the duplicate code check
++  instead of reporting every line as duplicated.
++
++  Closes #214
++
+ * https is now prefered in the documentation and http://pylint.pycqa.org correctly redirect to https://pylint.pycqa.org
+ 
+   Closes #3802
+diff --git a/pylint/checkers/similar.py b/pylint/checkers/similar.py
+index c65b1c89..0bd92afc 100644
+--- a/pylint/checkers/similar.py
++++ b/pylint/checkers/similar.py
+@@ -396,6 +396,9 @@ class Similar:
+         """compute similarities in appended files"""
+         no_duplicates: Dict[int, List[Set[LinesChunkLimits_T]]] = defaultdict(list)
+ 
++        if self.min_lines <= 0:
++            return []
++
+         for commonality in self._iter_sims():
+             num = commonality.cmn_lines_nb
+             lineset1 = commonality.fst_lset
+@@ -739,7 +742,7 @@ class SimilarChecker(BaseChecker, Similar, MapReduceMixin):
+                 "default": DEFAULT_MIN_SIMILARITY_LINE,
+                 "type": "int",
+                 "metavar": "<int>",
+-                "help": "Minimum lines number of a similarity.",
++                "help": "Minimum lines number of a similarity. Set to 0 to disable the check.",
+             },
+         ),
+         (
+diff --git a/tests/checkers/unittest_similar.py b/tests/checkers/unittest_similar.py
+index 4ddf2029..35a34765 100644
+--- a/tests/checkers/unittest_similar.py
++++ b/tests/checkers/unittest_similar.py
+@@ -339,6 +339,19 @@ TOTAL lines=62 duplicates=5 percent=8.06
+     )
+ 
+ 
++def test_set_duplicate_lines_to_zero() -> None:
++    output = StringIO()
++    with redirect_stdout(output), pytest.raises(SystemExit) as ex:
++        similar.Run(["--duplicates=0", SIMILAR1, SIMILAR2])
++    assert ex.value.code == 0
++    assert (
++        output.getvalue().strip()
++        == """
++TOTAL lines=62 duplicates=0 percent=0.00
++""".strip()
++    )
++
++
+ def test_lines_without_meaningful_content_do_not_trigger_similarity() -> None:
+     output = StringIO()
+     with redirect_stdout(output), pytest.raises(SystemExit) as ex:

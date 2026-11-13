@@ -1,0 +1,35 @@
+diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py
+index 32b24ef1..6316afd5 100644
+--- a/xarray/core/dataarray.py
++++ b/xarray/core/dataarray.py
+@@ -196,7 +196,7 @@ class _LocIndexer:
+             # expand the indexer so we can handle Ellipsis
+             labels = indexing.expanded_indexer(key, self.data_array.ndim)
+             key = dict(zip(self.data_array.dims, labels))
+-        return self.data_array.sel(**key)
++        return self.data_array.sel(key)
+ 
+     def __setitem__(self, key, value) -> None:
+         if not utils.is_dict_like(key):
+diff --git a/xarray/tests/test_dataarray.py b/xarray/tests/test_dataarray.py
+index a8c62a2c..152d5cdc 100644
+--- a/xarray/tests/test_dataarray.py
++++ b/xarray/tests/test_dataarray.py
+@@ -1096,6 +1096,17 @@ class TestDataArray:
+         array = DataArray(np.ones(t.shape), dims=("time",), coords=(t,))
+         assert_identical(array.loc[{"time": t[0]}], array[0])
+ 
++    def test_loc_dim_name_collides_with_sel_kwargs(self):
++        # regression test for https://github.com/pydata/xarray/issues/3181
++        da = DataArray(
++            np.zeros((2, 2)),
++            dims=["dim1", "method"],
++            coords={"dim1": ["x", "y"], "method": ["a", "b"]},
++        )
++        actual = da.loc[{"dim1": "x", "method": "a"}]
++        expected = da.sel({"dim1": "x", "method": "a"})
++        assert_identical(actual, expected)
++
+     def test_loc_assign(self):
+         self.ds["x"] = ("x", np.array(list("abcdefghij")))
+         da = self.ds["foo"]

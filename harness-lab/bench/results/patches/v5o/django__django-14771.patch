@@ -1,0 +1,38 @@
+diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
+index cc65c043ab..4863700810 100644
+--- a/django/utils/autoreload.py
++++ b/django/utils/autoreload.py
+@@ -220,6 +220,8 @@ def get_child_arguments():
+     py_script = Path(sys.argv[0])
+ 
+     args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
++    if sys.implementation.name == 'cpython':
++        args += ['-X%s' % o for o in sys._xoptions.values()]
+     # __spec__ is set when the server was started with the `-m` option,
+     # see https://docs.python.org/3/reference/import.html#main-spec
+     # __spec__ may not exist, e.g. when running in a Conda env.
+diff --git a/tests/utils_tests/test_autoreload.py b/tests/utils_tests/test_autoreload.py
+index 7c28a9d4d0..dabbfd8844 100644
+--- a/tests/utils_tests/test_autoreload.py
++++ b/tests/utils_tests/test_autoreload.py
+@@ -246,6 +246,20 @@ class TestChildArguments(SimpleTestCase):
+                 [sys.executable, __file__, 'runserver']
+             )
+ 
++    @mock.patch('__main__.__spec__', None)
++    @mock.patch('sys.argv', [__file__, 'runserver'])
++    @mock.patch('sys.warnoptions', [])
++    def test_xoptions(self):
++        opts = {'utf8': '0', 'no_debug_ranges': True}
++        with mock.patch.object(sys, '_xoptions', opts), mock.patch.object(
++            sys, 'implementation'
++        ) as mock_impl:
++            mock_impl.name = 'cpython'
++            self.assertEqual(
++                autoreload.get_child_arguments(),
++                [sys.executable, *['-X%s' % o for o in opts.values()], __file__, 'runserver'],
++            )
++
+ 
+ class TestUtilities(SimpleTestCase):
+     def test_is_django_module(self):

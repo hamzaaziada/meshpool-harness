@@ -184,6 +184,16 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     if os.environ.get("MH_TERSE") == "1":              # v4: output tokens cost 4x input; keep prose between calls short
         system += ("\nBetween tool calls write at most one short sentence. Put the work in tool arguments, not in "
                    "prose, and do not repeat file contents or command output back.")
+    if os.environ.get("MH_OBSERVE") == "1":               # see the bug before editing it (findings 007)
+        system += ("\nBefore your first edit, reproduce the problem with probe (a failing test or a short script) "
+                   "and read its diagnosis. If the cause is not clear, run trace on the same command to see which "
+                   "project functions run. After an edit, use probe to see what still fails.")
+    if os.environ.get("MH_SCOPE_PROMPT") == "1":           # the app agent's rule: its patches stayed in scope
+        system += ("\nDo what the task asks, nothing more: no extra features, refactors, docs or changelog entries. "
+                   "Look before you change anything.")
+    if os.environ.get("MH_CODE_FINISH_SAME_TURN") == "1":    # saves the last model call on a solved task
+        system += ("\nWhen you expect your check to pass, call it and finish together in the same turn, citing that "
+                   "check. If the check fails, the finish is refused and you see the output.")
     if os.environ.get("MH_TODO") == "1":
         system += ("\nFor any task with more than one step, first call todo with the task's concrete requirements "
                    "(files, paths, names, formats, outputs, behaviours) and your steps. Update it as you go. finish is "

@@ -1,0 +1,58 @@
+diff --git a/changelog/7487.bugfix.rst b/changelog/7487.bugfix.rst
+new file mode 100644
+index 000000000..a8b866ea3
+--- /dev/null
++++ b/changelog/7487.bugfix.rst
+@@ -0,0 +1 @@
++Fix ``request.node.add_marker()`` being ignored when an ``xfail`` marker is added dynamically during the test run: the xfail evaluation is now refreshed when the test report is created.
+diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
+index 335e10996..acddfc246 100755
+--- a/src/_pytest/skipping.py
++++ b/src/_pytest/skipping.py
+@@ -261,7 +261,18 @@ def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
+ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+     outcome = yield
+     rep = outcome.get_result()
++    # check if a mark was added during the test execution
++    # (e.g. via request.node.add_marker).
+     xfailed = item._store.get(xfailed_key, None)
++    if xfailed is None:
++        try:
++            xfailed = evaluate_xfail_marks(item)
++        except BaseException:
++            # The evaluation of the xfail mark already failed during setup,
++            # where the error is reported properly, so ignore it here.
++            pass
++        item._store[xfailed_key] = xfailed
++
+     # unittest special case, see setting of unexpectedsuccess_key
+     if unexpectedsuccess_key in item._store and rep.when == "call":
+         reason = item._store[unexpectedsuccess_key]
+diff --git a/testing/test_skipping.py b/testing/test_skipping.py
+index 8fceb37aa..e2a6fe0c6 100755
+--- a/testing/test_skipping.py
++++ b/testing/test_skipping.py
+@@ -359,6 +359,23 @@ class TestXFail:
+         result = testdir.runpytest(p, "--runxfail")
+         result.stdout.fnmatch_lines(["*1 pass*"])
+ 
++    def test_xfail_dynamic_mark_added_inside_test(self, testdir):
++        """A xfail marker added during the test run is honored (#7487)."""
++        p = testdir.makepyfile(
++            """
++            import pytest
++
++            def test_this(request):
++                mark = pytest.mark.xfail(reason="xfail")
++                request.node.add_marker(mark)
++                assert 0
++        """
++        )
++        result = testdir.runpytest(p)
++        result.stdout.fnmatch_lines(["*1 xfailed*"])
++        result = testdir.runpytest(p, "-rx")
++        result.stdout.fnmatch_lines(["*XFAIL*test_this*", "*xfail*"])
++
+     def test_xfail_imperative_in_setup_function(self, testdir):
+         p = testdir.makepyfile(
+             """

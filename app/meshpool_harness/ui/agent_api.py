@@ -3,6 +3,7 @@ The page polls for events and answers approval requests."""
 from __future__ import annotations
 
 import json
+import re
 import os
 import threading
 import time
@@ -93,6 +94,34 @@ def _image_text(images: list) -> str:
         return ""
 
 
+_FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|i need you to|i'd like you to)\s+",
+                     re.I)
+
+
+def nice_title(text: str) -> str:
+    """A short thread title from the first message: the first sentence, without greetings, skill names, links,
+    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
+    t = str(text or "").split("\u200b")[0].strip()
+    if not t or t in ("New thread", "Session"):
+        return t or "New thread"
+    t = t.splitlines()[0]
+    t = re.sub(r"https?://\S+", "", t)
+    t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
+    t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
+    full = t
+    for _ in range(3):
+        t = _FILLER.sub("", t).strip()
+    if len(t.split()) < 2:                     # "hi there" stays "Hi there", not "There"
+        t = full
+    t = re.sub(r"\s+", " ", t)
+    if not t:
+        return "New thread"
+    if len(t) > 48:
+        cut = t[:48].rsplit(" ", 1)[0]
+        t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
+    return t[0].upper() + t[1:]
+
+
 class Session:
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
@@ -108,6 +137,7 @@ class Session:
         self.pending: dict | None = None
         self.mcp = None
         self.agent = None
+        self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
         self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
@@ -174,7 +204,16 @@ class Session:
     def _start_mcp(self):
         self.emit({"type": "status", "text": "Starting MCP servers..."})
         try:
-            self.mcp = M.Manager(roots=[self.workdir]).start(timeout=float(os.environ.get("MH_MCP_START_S", "45")))
+            extra = {}
+            if getattr(self.agent, "profile", "") == "work":
+                # Meshpool Work gets the office server Hermes and Pi get: Word documents (make_document), PDFs,
+                # conversions and document reading. Its own office_task covers slides, sheets and data only.
+                from meshpool_harness.harnesses.acp import office_server
+                spec = office_server([self.workdir])
+                extra = {spec["name"]: {"command": spec["command"], "args": spec["args"],
+                                        "env": {e["name"]: e["value"] for e in spec["env"]}}}
+            self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
+                timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
@@ -190,6 +229,9 @@ class Session:
             self.state = "idle"
 
     def emit(self, ev: dict):
+        if ev.get("type") == "interrupted" and getattr(self, "_interrupting", False):
+            self._interrupting = False               # the new message is being answered: do not say "send a message"
+            ev = dict(ev, text="Stopped the previous request.")
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
@@ -210,7 +252,8 @@ class Session:
                 break
         self.pending = None
         self.state = "working"
-        self.emit({"type": "approval_done", "id": p["id"], "decision": p["decision"]})
+        shown = p["decision"] if p.get("answered") else "stopped"
+        self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
         return p["decision"], p["note"]
 
     def answer(self, aid: int, decision: str, note: str = ""):
@@ -220,6 +263,7 @@ class Session:
         allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
         p["note"] = note
+        p["answered"] = True
         p["ev"].set()
 
     def _body(self, text: str, images: list | None) -> str:
@@ -240,12 +284,32 @@ class Session:
         interrupt=True stops the current work first and sends the message as a new turn."""
         if not text.strip() and not images:
             raise ValueError("Type a message first.")
+        self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
-            self.emit({"type": "status", "text": "Interrupted. Working on your new message instead."})
+            self._interrupting = True
+            with self.lock:                          # messages waiting in the queue go with the new one, not lost
+                queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
+                qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
+            if queued:
+                text = "\n\n".join([*queued, text])
+                images = [*qimgs, *(images or [])] or None
             self.stop()
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:
                 time.sleep(0.1)
+            if self.harness.get("type") == "acp":
+                # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and carry
+                # on with the old task. Say plainly that it was stopped; the note is hidden in the chat (after \u200b).
+                text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                               "answer this message instead.")
+        if (getattr(self, "_was_stopped", False) and not interrupt and self.harness.get("type") == "acp"
+                and self.state not in ("working", "waiting")):
+            # After Stop, ACP agents (Hermes, the subscriptions) can pick the stopped request back up. Say plainly
+            # that it was stopped; the note is hidden in the chat (after \u200b).
+            text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                           "answer this message instead.")
+        if self.state not in ("working", "waiting"):
+            self._was_stopped = False
         if self.state in ("working", "waiting"):
             if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
                 self.agent.steer(self._body(text, images), images=images)
@@ -276,6 +340,24 @@ class Session:
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
+                from meshpool_harness import pace as PACE
+                quick = (not self.plan and not self.scheduled
+                         and PACE.classify(text, bool(images)) == "quick")
+                if quick:
+                    body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
+                    if hasattr(self.agent, "pace_deadline"):
+                        self.agent.pace_deadline = time.time() + PACE.QUICK_S
+                    elif self.harness["type"] == "pi" and hasattr(self.agent, "steer"):
+                        def wrap(agent=self.agent, turn=self.t_turn):
+                            time.sleep(PACE.QUICK_S + 10)
+                            if self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False):
+                                try:
+                                    agent.steer(PACE.WRAP)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        threading.Thread(target=wrap, daemon=True).start()
+                elif hasattr(self.agent, "pace_deadline"):
+                    self.agent.pace_deadline = 0
                 if self.ctx_pending:
                     self.ctx_pending = False
                     try:
@@ -351,12 +433,22 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
-        n = len(r["restored"]) + len(r["deleted"])
-        self.emit({"type": "status", "text": f"Undid turn {turn} and everything after it: {n} file"
-                                             f"{'' if n == 1 else 's'} put back."})
+        def _n(k, word):
+            n = len(r.get(k) or [])
+            return f"{n} file{'' if n == 1 else 's'} {word}"
+        parts = [s for s in (_n("restored", "restored") if r.get("restored") else "",
+                             _n("deleted", "removed") if r.get("deleted") else "") if s]
+        msg = "Undone. " + ("Files are back to how they were: " + ", ".join(parts) if parts else
+                            "No files had changed")
+        if r.get("kept"):
+            names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
+            msg += f". Kept as they are, because you changed them afterwards: {names}"
+        self.emit({"type": "status", "text": msg + "."})
         return r
 
     def stop(self):
+        if self.state in ("working", "waiting"):
+            self._was_stopped = True             # a request really was cut short
         with self.lock:
             had = bool(self.queue)
             self.queue = []
@@ -369,15 +461,22 @@ class Session:
 
     def set_mode(self, mode: str):
         self.agent.mode = self.mode = mode if mode in MODES else "ask"
+        if hasattr(self.agent, "apply_mode"):
+            try:
+                self.agent.apply_mode()
+            except Exception:  # noqa: BLE001
+                pass
 
     def view(self, since: int) -> dict:
+        self.touched = time.time()
         with self.lock:
             evs = self.events[since:]
         a = self.agent
         acp = self.harness["type"] in ("acp", "pi")
         meta = read_meta(self.id)
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
-                "title": meta.get("title") or a.title, "pinned": bool(meta.get("pinned")),
+                "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
+                "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models")},
                 "model": (a.current_model() if hasattr(a, "current_model") else
@@ -423,12 +522,50 @@ def create(body: dict) -> dict:
         write_meta(s.id, routed=routed["harness"])
     with LOCK:
         LIVE[s.id] = s
+    _start_reaper()
     try:
         from meshpool_harness.ui import workbench as W
         W.add_project(s.workdir)
     except Exception:  # noqa: BLE001
         pass
     return s.view(0)
+
+
+_REAPER: list = []
+
+
+def _reap_once(idle_s: float) -> list:
+    """Close threads nobody has used for idle_s seconds: not working, not waiting for an answer, not viewed. Their
+    MCP servers and harness processes end; opening the thread again resumes it from its saved state."""
+    now, closed = time.time(), []
+    with LOCK:
+        idle = [(sid, s) for sid, s in LIVE.items()
+                if s.state not in ("working", "waiting", "starting") and not s.pending and not s.queue
+                and now - getattr(s, "touched", now) > idle_s]
+        for sid, _ in idle:
+            LIVE.pop(sid, None)
+    for sid, s in idle:
+        try:
+            s.close()
+        except Exception:  # noqa: BLE001 - a helper that is already gone is fine
+            pass
+        closed.append(sid)
+    return closed
+
+
+def _start_reaper():
+    """MH_IDLE_CLOSE_S (default 900; 0 = never): how long an unused thread keeps its helper processes."""
+    idle_s = float(os.environ.get("MH_IDLE_CLOSE_S", "900") or 0)
+    if _REAPER or idle_s <= 0:
+        return
+
+    def loop():
+        while True:
+            time.sleep(min(60.0, max(5.0, idle_s / 4)))
+            _reap_once(idle_s)
+    th = threading.Thread(target=loop, daemon=True, name="meshpool-reaper")
+    _REAPER.append(th)
+    th.start()
 
 
 def get(sid: str) -> Session:
@@ -454,12 +591,12 @@ def listing() -> list:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            rows[d["id"]] = {"id": d["id"], "title": d.get("title") or "New thread", "workdir": d.get("workdir"),
+            rows[d["id"]] = {"id": d["id"], "title": nice_title(d.get("title") or "New thread"), "workdir": d.get("workdir"),
                              "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
                              "harness": d.get("harness") or "meshpool-code", "model": d.get("model")}
     with LOCK:
         for sid, s in LIVE.items():
-            rows[sid] = {"id": sid, "title": s.agent.title or "New thread", "workdir": s.workdir,
+            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New thread"), "workdir": s.workdir,
                          "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
@@ -522,11 +659,28 @@ def search(q: str) -> list:
             d = json.loads(raw)
         except ValueError:
             continue
-        if read_meta(d["id"]).get("deleted"):
+        if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
-        snippet = raw[max(0, i - 60): i + 100].replace("\\n", " ").replace("\n", " ")
-        hits.append({"id": d["id"], "title": read_meta(d["id"]).get("title") or d.get("title") or "New thread",
-                     "workdir": d.get("workdir"), "updated": d.get("updated", 0), "snippet": snippet})
+        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New thread")
+        # Search what the user reads (titles, messages, replies), not the saved JSON around it.
+        texts = [title]
+        for m in d.get("messages") or []:
+            c = m.get("content") if isinstance(m, dict) else None
+            if isinstance(c, list):
+                c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+            if isinstance(c, str) and m.get("role") in ("user", "assistant"):
+                texts.append(c.split("\n\n\u200b")[0])
+        for e in d.get("events") or []:
+            if isinstance(e, dict) and e.get("type") in ("user", "assistant") and isinstance(e.get("text"), str):
+                texts.append(e["text"])
+        hit = next((s for s in texts if q in s.lower()), None)
+        if hit is None:
+            continue
+        j = hit.lower().find(q)
+        snippet = " ".join(hit[max(0, j - 60): j + 100].split())
+        snippet = ("…" if j > 60 else "") + snippet + ("…" if j + 100 < len(hit) else "")
+        hits.append({"id": d["id"], "title": title, "workdir": d.get("workdir"), "updated": d.get("updated", 0),
+                     "snippet": snippet})
     return sorted(hits, key=lambda r: -r["updated"])[:50]
 
 

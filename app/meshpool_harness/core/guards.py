@@ -16,14 +16,24 @@ ERR_LINE = re.compile(r"(Error|Exception|error:|FAILED|FAIL:|AssertionError|Trac
 
 
 def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
-    new = not FAILURES.exists()
-    with FAILURES.open("a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
-        if new:
-            w.writeheader()
-        w.writerow({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "model": ctx.get("model", ""),
-                    "profile": ctx.get("profile", ""), "task_id": ctx.get("task_id", ""), "category": category,
-                    "caught": caught, "detail": detail[:300]})
+    """Append one row to the failure catalog. Logging must never stop a run: in an app the package folder can be
+    read-only, so any file error is ignored. MH_FAILURES_LOG moves the file; MH_FAILURES_LOG=off disables it."""
+    import os
+    dest = os.environ.get("MH_FAILURES_LOG")
+    if dest == "off":
+        return
+    path = Path(dest) if dest else FAILURES
+    try:
+        new = not path.exists()
+        with path.open("a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "model": ctx.get("model", ""),
+                        "profile": ctx.get("profile", ""), "task_id": ctx.get("task_id", ""), "category": category,
+                        "caught": caught, "detail": detail[:300]})
+    except OSError:
+        pass
 
 
 # Every guard can be switched off for ablation. MH_GUARDS=all|none|comma list overrides the profile default.

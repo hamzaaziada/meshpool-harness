@@ -1,0 +1,34 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+index e6cbf8c64f..862930f709 100644
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -143,6 +143,9 @@ class OutputWrapper(TextIOBase):
+     def isatty(self):
+         return hasattr(self._out, 'isatty') and self._out.isatty()
+ 
++    def flush(self):
++        self._out.flush()
++
+     def write(self, msg='', style_func=None, ending=None):
+         ending = self.ending if ending is None else ending
+         if ending and not msg.endswith(ending):
+diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py
+index 62c6f485aa..c0f2181db2 100644
+--- a/tests/admin_scripts/tests.py
++++ b/tests/admin_scripts/tests.py
+@@ -1556,6 +1556,15 @@ class CommandTypes(AdminScriptTestCase):
+         self.assertEqual(out.getvalue(), "")
+         self.assertEqual(new_out.getvalue(), "Hello, World!\n")
+ 
++    def test_outputwrapper_flush(self):
++        out = StringIO()
++        with mock.patch.object(out, 'flush') as mocked_flush:
++            command = BaseCommand(stdout=out)
++            command.stdout.write('Hello, World!')
++            self.assertIs(out.flush, mocked_flush)
++            command.stdout.flush()
++            mocked_flush.assert_called_once()
++
+     def test_custom_stderr(self):
+         class Command(BaseCommand):
+             requires_system_checks = []

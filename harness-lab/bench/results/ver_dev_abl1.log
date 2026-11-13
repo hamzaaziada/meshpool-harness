@@ -1,0 +1,12 @@
+key spend at start: $64.4394768747
+v5:OK 223.8s $0.0353 | v5nt:OK 234.5s $0.0000 | v5ft:x 262.5s $0.0233 | v5sp:x 195.3s $0.0279 <- sphinx-doc__sphinx-10449
+v5:x 66.6s $0.0119 | v5nt:OK 139.6s $0.0154 | v5ft:OK 88.4s $0.0130 | v5sp:OK 116.4s $0.0183 <- pytest-dev__pytest-7490
+v5:x 192.8s $0.0275 | v5nt:x 224.3s $0.0276 | v5ft:x 175.4s $0.0328 | v5sp:x 196.6s $0.0261 <- django__django-15098
+v5:OK 158.6s $0.0135 | v5nt:x 82.8s $0.0088 | v5ft:x 63.5s $0.0059 | v5sp:x 95.5s $0.0091 <- django__django-14771
+v5:OK 53.8s $0.0072 | v5nt:OK 41.2s $0.0077 | v5ft:OK 70.8s $0.0097 | v5sp:OK 34.9s $0.0063 <- scikit-learn__scikit-learn-10297
+v5:OK 122.3s $0.0132 | v5nt:x 149.9s $0.0124 | v5ft:OK 70.3s $0.0094 | v5sp:OK 40.8s $0.0059 <- django__django-12774
+v5:OK 81.3s $0.0063 | v5nt:OK 49.8s $0.0056 | v5ft:OK 34.0s $0.0045 | v5sp:OK 41.7s $0.0027 <- scikit-learn__scikit-learn-15100
+v5:OK 36.1s $0.0045 | v5nt:OK 128.4s $0.0183 | v5ft:OK 84.2s $0.0082 | v5sp:OK 183.7s $0.0196 <- django__django-11066
+v5:OK 225.1s $0.0243 | v5nt:OK 179.1s $0.0178 | v5ft:OK 188.8s $0.0246 | v5sp:OK 197.9s $0.0234 <- django__django-12708
+v5:OK 159.9s $0.0146 | v5nt:OK 140.2s $0.0092 | v5ft:OK 74.5s $0.0069 | v5sp:OK 109.5s $0.0062 <- pydata__xarray-3677
+key spend at end: $65.89220600669998 (this run: $1.45)

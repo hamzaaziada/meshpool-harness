@@ -1,0 +1,113 @@
+diff --git a/django/db/backends/base/schema.py b/django/db/backends/base/schema.py
+index 61f88401ab..279fbb3297 100755
+--- a/django/db/backends/base/schema.py
++++ b/django/db/backends/base/schema.py
+@@ -377,7 +377,12 @@ class BaseDatabaseSchemaEditor:
+         news = {tuple(fields) for fields in new_unique_together}
+         # Deleted uniques
+         for fields in olds.difference(news):
+-            self._delete_composed_index(model, fields, {'unique': True}, self.sql_delete_unique)
++            self._delete_composed_index(
++                model,
++                fields,
++                {"unique": True},
++                self.sql_delete_unique,
++            )
+         # Created uniques
+         for fields in news.difference(olds):
+             columns = [model._meta.get_field(field).column for field in fields]
+@@ -393,7 +398,12 @@ class BaseDatabaseSchemaEditor:
+         news = {tuple(fields) for fields in new_index_together}
+         # Deleted indexes
+         for fields in olds.difference(news):
+-            self._delete_composed_index(model, fields, {'index': True}, self.sql_delete_index)
++            self._delete_composed_index(
++                model,
++                fields,
++                {"index": True, "unique": False},
++                self.sql_delete_index,
++            )
+         # Created indexes
+         for field_names in news.difference(olds):
+             fields = [model._meta.get_field(field) for field in field_names]
+diff --git a/tests/schema/models.py b/tests/schema/models.py
+index 6d4465807a..fd528a6394 100755
+--- a/tests/schema/models.py
++++ b/tests/schema/models.py
+@@ -80,6 +80,16 @@ class AuthorWithUniqueNameAndBirthday(models.Model):
+         unique_together = [['name', 'birthday']]
+ 
+ 
++class AuthorWithUniqueNameAndIndexedBirthday(models.Model):
++    name = models.CharField(max_length=255)
++    birthday = models.DateField()
++
++    class Meta:
++        apps = new_apps
++        unique_together = [['name', 'birthday']]
++        index_together = [['name', 'birthday']]
++
++
+ class Book(models.Model):
+     author = models.ForeignKey(Author, models.CASCADE)
+     title = models.CharField(max_length=100, db_index=True)
+diff --git a/tests/schema/tests.py b/tests/schema/tests.py
+index 9aa1e239ac..233e86da1a 100755
+--- a/tests/schema/tests.py
++++ b/tests/schema/tests.py
+@@ -29,7 +29,8 @@ from .models import (
+     Author, AuthorCharFieldWithIndex, AuthorTextFieldWithIndex,
+     AuthorWithDefaultHeight, AuthorWithEvenLongerName, AuthorWithIndexedName,
+     AuthorWithIndexedNameAndBirthday, AuthorWithUniqueName,
+-    AuthorWithUniqueNameAndBirthday, Book, BookForeignObj, BookWeak,
++    AuthorWithUniqueNameAndBirthday, AuthorWithUniqueNameAndIndexedBirthday,
++    Book, BookForeignObj, BookWeak,
+     BookWithLongName, BookWithO2O, BookWithoutAuthor, BookWithSlug, IntegerPK,
+     Node, Note, NoteRename, Tag, TagIndexed, TagM2MTest, TagUniqueRename,
+     Thing, UniqueTest, new_apps,
+@@ -2184,6 +2185,45 @@ class SchemaTests(TransactionTestCase):
+         with connection.schema_editor() as editor:
+             editor.alter_index_together(Book, [['author', 'title']], [])
+ 
++    @skipUnlessDBFeature('allows_multiple_constraints_on_same_fields')
++    def test_remove_index_together_does_not_remove_unique_together(self):
++        with connection.schema_editor() as editor:
++            editor.create_model(AuthorWithUniqueNameAndIndexedBirthday)
++        # Ensure the unique constraint and the index exist.
++        constraints = self.get_constraints(
++            AuthorWithUniqueNameAndIndexedBirthday._meta.db_table
++        )
++        unique_constraints = [
++            name for name, details in constraints.items()
++            if details['columns'] == ['name', 'birthday'] and details['unique']
++        ]
++        self.assertEqual(len(unique_constraints), 1)
++        index_constraints = [
++            name for name, details in constraints.items()
++            if details['columns'] == ['name', 'birthday'] and details['index'] and not details['unique']
++        ]
++        self.assertEqual(len(index_constraints), 1)
++        # Remove index_together, the unique_together must be kept.
++        with connection.schema_editor() as editor:
++            editor.alter_index_together(
++                AuthorWithUniqueNameAndIndexedBirthday,
++                [['name', 'birthday']],
++                [],
++            )
++        constraints = self.get_constraints(
++            AuthorWithUniqueNameAndIndexedBirthday._meta.db_table
++        )
++        unique_constraints = [
++            name for name, details in constraints.items()
++            if details['columns'] == ['name', 'birthday'] and details['unique']
++        ]
++        self.assertEqual(len(unique_constraints), 1)
++        index_constraints = [
++            name for name, details in constraints.items()
++            if details['columns'] == ['name', 'birthday'] and details['index'] and not details['unique']
++        ]
++        self.assertEqual(len(index_constraints), 0)
++
+     def test_create_index_together(self):
+         """
+         Tests creating models with index_together already defined

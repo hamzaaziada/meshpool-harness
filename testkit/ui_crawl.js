@@ -33,7 +33,7 @@ async function watch(p) {
     check("key accepted, permissions step shown", true);
     await p.screenshot({path: out + "/u1-perms.png"});
     await p.click("[data-scope=later]"); await p.waitForTimeout(300);
-    check("folder choice responds", /choose a folder/i.test(await p.textContent("#oScope")));
+    check("folder choice responds", /Meshpool Projects/i.test(await p.textContent("#oScope")));
     await p.click("[data-scope=home]"); await p.waitForTimeout(800);
     check("home folder choice adds a project", /home folder/i.test(await p.textContent("#oScope")));
     await p.click("#oDone");
@@ -45,9 +45,11 @@ async function watch(p) {
     check("setup step lists both subscriptions", (await p.$$eval("#oSubs li", x => x.length)) === 2);
     await p.screenshot({path: out + "/u2-setup.png"});
     await p.click("#impNone"); await p.click("#impAll");
-    await p.click("#impGo"); await p.waitForFunction(() => /Imported/.test(document.querySelector("#impRes")?.textContent || ""), null, {timeout: 30000});
-    check("import from onboarding works", /Imported \d+ skills? and \d+ MCP/.test(await p.textContent("#impRes")), await p.textContent("#impRes"));
-    await p.click("#oFinish"); await p.waitForTimeout(800);
+    // Start imports what is ticked (there is no separate Import button in onboarding)
+    await p.click("#oFinish"); await p.waitForFunction(() => !document.querySelector("#onb"), null, {timeout: 30000}).catch(() => {});
+    const imp = await p.evaluate(() => api("/api/skills").then(r => r.skills.map(s => s.name)));
+    check("import from onboarding works (Start imports the ticked items)", imp.includes("claude-skill") && imp.includes("codex-skill"), imp.join(","));
+    await p.waitForTimeout(800);
     check("onboarding closes into the app", !(await p.$("#onb")) && !!(await p.$(".hero")));
     check("onboarding: no page errors", !errs.length, errs.join(" | "));
     await p.close();
@@ -74,7 +76,9 @@ async function watch(p) {
       if (!(await p.$(".scrim"))) { await p.click("#openSettings"); await p.click(`.mnav [data-s=${sec}]`); await p.waitForTimeout(500); }
     }
     await p.screenshot({path: `${out}/s-${sec}.png`});
-    check(`settings: ${sec} (${clicked} buttons) without errors`, errs.length === before, errs.slice(before).join(" | "));
+    // 400s are validation messages (e.g. "No GitHub login found on this computer"), as in the whole-app check below.
+    const pageErrs = errs.slice(before).filter(e => !/status of 400/.test(e));
+    check(`settings: ${sec} (${clicked} buttons) without errors`, !pageErrs.length, pageErrs.join(" | "));
   }
   // specific settings flows
   await p.click(`.mnav [data-s=personal]`); await p.waitForTimeout(600);

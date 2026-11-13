@@ -76,6 +76,13 @@ SNAP_JS = """(mark) => {
     let extra = '';
     if (tag === 'input' && !['checkbox','radio','submit','button'].includes(type) && e.value) extra = ' value="' + e.value.slice(0, 40) + '"';
     if (type === 'checkbox' || type === 'radio') extra = e.checked ? ' (checked)' : ' (unchecked)';
+    if (window.__mhStates) {   // what a person sees: a red outline, a greyed-out button, a field only a picker fills
+      const cls = typeof e.className === 'string' ? e.className : '';
+      if (e.getAttribute('aria-invalid') === 'true' || /(^|[-_ ])(error|invalid|has-error|is-invalid)([-_ ]|$)/i.test(cls)
+          || (e.validity && !e.validity.valid && e.value)) extra += ' (invalid)';
+      if (e.disabled || e.getAttribute('aria-disabled') === 'true') extra += ' (disabled)';
+      if ((tag === 'input' || tag === 'textarea') && e.readOnly) extra += ' (read-only)';
+    }
     out.push('[' + n + '] ' + role + ' "' + name + '"' + extra);
   }
   const text = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 3000);
@@ -111,6 +118,12 @@ def _fit_value(loc, text: str) -> str:
             return f"{m.group(2)}-{int(m.group(1)):02d}"
     return text
 
+
+from meshpool_harness.core.webfix import SETTLE_JS, smart_fill as _smart_fill  # noqa: E402
+
+
+def _fill(loc, text: str, timeout: int) -> str | None:
+    return _smart_fill(loc, _fit_value(loc, text), timeout)
 
 def _serve():
     from playwright.sync_api import sync_playwright
@@ -176,7 +189,7 @@ def _serve():
                     getattr(locate(s["target"]), op)(timeout=5000)
                 elif op == "type":
                     loc = locate(s["target"])
-                    loc.fill(_fit_value(loc, str(s.get("text", ""))), timeout=5000)
+                    _fill(loc, str(s.get("text", "")), 5000)
                 elif op == "select":
                     locate(s["target"]).select_option(label=str(s["option"]), timeout=5000)
                 elif op == "press":
@@ -211,7 +224,7 @@ def _serve():
             ref(args[0]).click(timeout=10000)
         elif cmd == "type":
             loc = ref(args[0])
-            loc.fill(_fit_value(loc, " ".join(args[1:])), timeout=10000)
+            state["note"] = _fill(loc, " ".join(args[1:]), 10000)
         elif cmd == "hover":
             ref(args[0]).hover(timeout=10000)
         elif cmd == "click_text":                 # smallest visible element whose text is exactly this
@@ -249,12 +262,22 @@ def _serve():
             page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
+        if os.environ.get("MH_BROWSER_SETTLE") == "1" and cmd not in ("snapshot", "goto"):
+            try:                                  # pop-ups (autocomplete, menus) appear a few hundred ms later
+                page.evaluate(SETTLE_JS, 1500)  # same as webfix.settle()
+            except Exception:
+                pass
         if os.environ.get("MH_BROWSER_TYPED_ROLES", "1") == "1":
             page.evaluate("() => { window.__mhTyped = true; }")
+        if os.environ.get("MH_BROWSER_STATES") == "1":       # (invalid) / (disabled) / (read-only) markers
+            page.evaluate("() => { window.__mhStates = true; }")
         snap = page.evaluate(SNAP_JS, MARK)
         prev = state.get("last")
         state["last"] = snap
         b = state.pop("batch", None) if cmd == "batch_done" else None
+        note = state.pop("note", None)
+        if note:
+            snap = dict(snap, note=note)
         if cmd in ("snapshot", "goto") or os.environ.get("MH_BROWSER_DIFF", "0") != "1" or not prev or prev["url"] != snap["url"]:
             return {**snap, **({"batch": b} if b else {})}
         # after an action on the same page: send only what changed (fewer tokens per step)
@@ -264,6 +287,8 @@ def _serve():
         out["elements"] = snap["elements"] if snap["elements"] != prev["elements"] else None
         if b:
             out["batch"] = b
+        if note:
+            out["note"] = note
         return out
 
     class H(BaseHTTPRequestHandler):
@@ -310,6 +335,8 @@ def render(res: dict) -> str:
         b = res["batch"]
         head = ("batch: all steps ok" if b["ok"] else "batch STOPPED at a failed step") + "\n" + "\n".join(b["steps"])
         return head + "\n" + render({k: v for k, v in res.items() if k != "batch"})
+    if res.get("note"):                            # e.g. a read-only field set directly (MH_BROWSER_READONLY)
+        return res["note"] + "\n" + render({k: v for k, v in res.items() if k != "note"})
     if "text_changed" in res:                      # diff after an action
         els = ("\n".join(res["elements"]) if res.get("elements") else "(elements unchanged; same numbers)")
         return f"{res['title']} | {res['url']}\n{els}\n--- new text ---\n{res['text_changed']}"

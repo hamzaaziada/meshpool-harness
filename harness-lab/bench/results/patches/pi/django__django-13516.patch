@@ -1,0 +1,33 @@
+diff --git a/django/core/management/base.py b/django/core/management/base.py
+index e6cbf8c64f..4fd5e69dd7 100644
+--- a/django/core/management/base.py
++++ b/django/core/management/base.py
+@@ -150,6 +150,9 @@ class OutputWrapper(TextIOBase):
+         style_func = style_func or self.style_func
+         self._out.write(style_func(msg))
+ 
++    def flush(self):
++        self._out.flush()
++
+ 
+ class BaseCommand:
+     """
+diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py
+index 62c6f485aa..e32171c274 100644
+--- a/tests/admin_scripts/tests.py
++++ b/tests/admin_scripts/tests.py
+@@ -1573,6 +1573,14 @@ class CommandTypes(AdminScriptTestCase):
+         self.assertEqual(err.getvalue(), "")
+         self.assertEqual(new_err.getvalue(), "Hello, World!\n")
+ 
++    def test_outputwrapper_flush(self):
++        out = StringIO()
++        command = BaseCommand(stdout=out)
++        command.stdout.write('Hi')
++        with mock.patch.object(out, 'flush') as mock_flush:
++            command.stdout.flush()
++        mock_flush.assert_called_once_with()
++
+     def test_base_command(self):
+         "User BaseCommands can execute when a label is provided"
+         args = ['base_command', 'testlabel']

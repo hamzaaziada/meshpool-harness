@@ -17,12 +17,19 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
-    ("MH_AGENT_PERMISSIONS", "Agent permissions", "ask", "ask = confirm edits and commands, auto = allow them."),
-    ("MH_HARNESS_PROFILE", "Harness profile", "minimal", "minimal = the benchmarked v2 setup. Leave empty for v1."),
-    ("MH_STREAM", "Streaming", "1", "1 = streamed calls with an idle cutoff (faster)."),
-    ("MH_CACHE_KEY", "Cache key", "1", "1 = stable prompt_cache_key per conversation."),
-    ("MH_WIRE", "Wire format", "chat", "chat or responses. Streaming only works with chat."),
-    ("MH_BUDGET_USD", "Budget per task (USD)", "0", "Optional cap per task. 0 = off."),
+    ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
+     "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
+     "before commands. Full access never asks."),
+    ("MH_HARNESS_PROFILE", "Agent setup", "minimal", "The tuned setup Meshpool uses by default. Leave it as is."),
+    ("MH_STREAM", "Show replies as they are written", "1", "On is faster and lets you see progress. Leave it on."),
+    ("MH_CACHE_KEY", "Reuse context between messages", "1", "Saves cost on long threads. Leave it on."),
+    ("MH_WIRE", "Connection type", "chat", "How Meshpool talks to the endpoint. Leave it on Standard unless "
+                                           "your provider says otherwise."),
+    ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
+    ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
+    ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your subscriptions", "0",
+     "On: Meshpool Auto may pick Claude or ChatGPT on your own plan (it uses that plan's limits). "
+     "Off: Auto only uses your Meshpool key."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),

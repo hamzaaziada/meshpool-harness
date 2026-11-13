@@ -1,0 +1,116 @@
+diff --git a/sklearn/utils/_set_output.py b/sklearn/utils/_set_output.py
+index 335773c6a..c37000769 100644
+--- a/sklearn/utils/_set_output.py
++++ b/sklearn/utils/_set_output.py
+@@ -12,6 +12,8 @@ def _wrap_in_pandas_container(
+     *,
+     columns,
+     index=None,
++    dtypes=None,
++    original_input=None,
+ ):
+     """Create a Pandas DataFrame.
+ 
+@@ -36,6 +38,12 @@ def _wrap_in_pandas_container(
+     index : array-like, default=None
+         Index for data.
+ 
++    dtypes : dict-like or None, default=None
++        The dtypes of the original input, indexed by the original column names.
++        A dtype is only applied to an output column when doing so does not modify
++        the values of that column, so that transformer outputs whose values differ
++        from the input are left untouched.
++
+     Returns
+     -------
+     dataframe : DataFrame
+@@ -57,11 +65,50 @@ def _wrap_in_pandas_container(
+             data_to_wrap.columns = columns
+         if index is not None:
+             data_to_wrap.index = index
++        if dtypes is not None:
++            data_to_wrap = _astype_unchanged_columns(data_to_wrap, dtypes)
+         return data_to_wrap
+ 
+     return pd.DataFrame(data_to_wrap, index=index, columns=columns)
+ 
+ 
++def _astype_unchanged_columns(df, dtypes):
++    """Cast `df` columns to `dtypes` when doing so does not change their values.
++
++    Transformers may modify the values of their input (e.g. encoders replace
++    categorical values by integer codes, scalers rescale numeric values). Casting
++    such a column back to the input dtype would silently corrupt the data, so a
++    dtype is only restored when the casted values are identical to the output
++    values.
++
++    Parameters
++    ----------
++    df : DataFrame
++        The DataFrame output of a transformer.
++
++    dtypes : dict-like
++        Mapping from column name to the dtype of the original input column.
++
++    Returns
++    -------
++    df : DataFrame
++        `df` with the dtypes restored where this is lossless.
++    """
++    for col in df.columns:
++        if col not in dtypes:
++            continue
++        dtype = dtypes[col]
++        if df[col].dtype == dtype:
++            continue
++        try:
++            casted = df[col].astype(dtype)
++        except (ValueError, TypeError):
++            continue
++        if casted.astype(object).equals(df[col].astype(object)):
++            df[col] = casted
++    return df
++
++
+ def _get_output_config(method, estimator=None):
+     """Get output config based on estimator and global configuration.
+ 
+@@ -131,6 +178,7 @@ def _wrap_data_with_container(method, data_to_wrap, original_input, estimator):
+         data_to_wrap=data_to_wrap,
+         index=getattr(original_input, "index", None),
+         columns=estimator.get_feature_names_out,
++        dtypes=getattr(original_input, "dtypes", None),
+     )
+ 
+ 
+diff --git a/sklearn/utils/tests/test_set_output.py b/sklearn/utils/tests/test_set_output.py
+index ac73ca094..ef229baa2 100644
+--- a/sklearn/utils/tests/test_set_output.py
++++ b/sklearn/utils/tests/test_set_output.py
+@@ -24,6 +24,26 @@ def test__wrap_in_pandas_container_dense():
+     assert_array_equal(dense_named.index, index)
+ 
+ 
++def test__wrap_in_pandas_container_dense_preserves_dtypes():
++    """Check that `_wrap_in_pandas_container` casts to the given dtypes."""
++    pd = pytest.importorskip("pandas")
++    idx = ["a", "b", "c"]
++    X_df = pd.DataFrame(
++        {
++            "a": [1, 2, 3],
++            "b": [1.0, 2.0, 3.0],
++            "c": pd.Series(["a", "b", "c"], dtype="category"),
++        },
++        index=idx,
++    ).astype({"a": "float32", "b": "float16"})
++
++    X_wrapped = _wrap_in_pandas_container(
++        X_df[["a"]], columns=["a"], index=idx, dtypes=X_df.dtypes
++    )
++    assert X_wrapped.dtypes.to_dict() == {"a": np.dtype("float32")}
++    assert_array_equal(X_wrapped.index, idx)
++
++
+ def test__wrap_in_pandas_container_dense_update_columns_and_index():
+     """Check that _wrap_in_pandas_container overrides columns and index."""
+     pd = pytest.importorskip("pandas")

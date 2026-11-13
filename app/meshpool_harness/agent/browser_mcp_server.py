@@ -41,6 +41,7 @@ SNAPSHOT_JS = r"""() => {
       line += ` value="${String(el.value).slice(0, 60)}"`;
     if (type === 'checkbox' || type === 'radio') line += el.checked ? ' (checked)' : ' (unchecked)';
     if (tag === 'select') line += ` selected="${(el.options[el.selectedIndex] || {}).text || ''}" options=[${[...el.options].slice(0, 15).map(o => o.text.trim()).join(' | ')}]`;
+    if (window.__mpStates) line += __STATES__(el).replace(' (disabled)', '');   // MH_BROWSER_STATES
     if (el.disabled) line += ' (disabled)';
     if (r.top > innerHeight || r.bottom < 0) line += ' (scroll to see)';
     out.push(line);
@@ -50,6 +51,12 @@ SNAPSHOT_JS = r"""() => {
   return {title: document.title, url: location.href, elements: out, text: body.replace(/\n{3,}/g, '\n\n').slice(0, 7000),
           scroll: Math.round(scrollY), height: document.documentElement.scrollHeight, vh: innerHeight};
 }"""
+from meshpool_harness.core.webfix import STATES_JS  # noqa: E402
+# The app's browser runs with the fixes measured on MiniWoB++ (harness-lab/findings/004): read-only picker fields,
+# late menus, invalid/disabled/read-only markers, key-driven widgets. An explicit "0" in the environment turns one off.
+for _flag in ("MH_BROWSER_READONLY", "MH_BROWSER_SETTLE", "MH_BROWSER_STATES", "MH_BROWSER_KEYTYPE"):
+    os.environ.setdefault(_flag, "1")
+SNAPSHOT_JS = SNAPSHOT_JS.replace("__STATES__", STATES_JS)
 
 
 def _home() -> Path:
@@ -140,9 +147,13 @@ class Browser:
             self.page.wait_for_load_state("networkidle", timeout=2500)
         except Exception:  # noqa: BLE001
             pass
+        from meshpool_harness.core.webfix import settle as _settle   # MH_BROWSER_SETTLE: late menus and pop-ups
+        _settle(self.page)
 
     def snapshot(self, note: str = "") -> str:
         self.settle()
+        if os.environ.get("MH_BROWSER_STATES") == "1":
+            self.page.evaluate("() => { window.__mpStates = true; }")
         s = self.page.evaluate(SNAPSHOT_JS)
         tabs = len(self.ctx.pages)
         head = [note] if note else []
@@ -206,15 +217,17 @@ def browser_type(ref: str, text_: str = "", submit: bool = False, **kw) -> str:
     def go():
         B.ensure()
         e = B.el(ref)
+        note = ""
         try:
-            e.fill(value)
+            from meshpool_harness.core.webfix import smart_fill   # read-only and key-driven fields (MH_BROWSER_*)
+            note = smart_fill(e, value, 30000) or ""
         except Exception:  # noqa: BLE001  not a plain field (rich editors): type key by key
             e.click()
             B.page.keyboard.type(value, delay=15)
         if submit:
             e.press("Enter")
             B.page.wait_for_timeout(500)
-        return B.snapshot()
+        return B.snapshot(note)
     return B.run(go)
 
 

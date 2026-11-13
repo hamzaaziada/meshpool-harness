@@ -105,7 +105,7 @@ def start_job(body: dict) -> dict:
         kw["start_new_session"] = True
     stdout = open(jdir / "result.json", "w", encoding="utf-8")
     stderr = open(jdir / "stderr.log", "w", encoding="utf-8")
-    proc = subprocess.Popen(cmd, cwd=str(APP), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, **kw)
+    proc = subprocess.Popen(cmd, cwd=str(jdir), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, **kw)
     meta = {"id": jid, "request": request, "engine": engine or "auto", "workdir": workdir,
             "files": [Path(f).name for f in files], "model": env.get("MH_MODEL", "deepseek-v4.1-flash"),
             "started": time.time(), "ended": None, "status": "running", "exit": None, "pid": proc.pid}
@@ -234,7 +234,7 @@ def get_settings() -> dict:
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
-            "native": NATIVE[0], "platform": sys.platform,
+            "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
 
 
@@ -298,12 +298,25 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection() -> dict:
+def test_connection(values: dict | None = None) -> dict:
+    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
     C.load_into_env(override=True)
     from meshpool_harness.cli import ping
-    if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-        return {"ok": False, "detail": "No API key saved yet."}
-    return ping()
+    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")}
+    try:
+        for k, v in (values or {}).items():
+            if k in keep and str(v).strip():
+                os.environ[k] = str(v).strip()
+        if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            return {"ok": False, "detail": "No API key saved yet."}
+        return ping()
+    finally:
+        if values:
+            for k, v in keep.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 def route_preview(body: dict) -> dict:
@@ -452,10 +465,12 @@ class Handler(BaseHTTPRequestHandler):
                 import meshpool_harness as MH
 
                 def rd(name):
-                    try:
-                        return (C.APP / name).read_text(encoding="utf-8")
-                    except OSError:
-                        return ""
+                    for base in (C.APP, C.APP.parent):      # packaged: beside the app; from source: the repo root
+                        try:
+                            return (base / name).read_text(encoding="utf-8")
+                        except OSError:
+                            continue
+                    return ""
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__, "notice": rd("NOTICE"),
                                         "license": rd("LICENSE"), "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/jobs":
@@ -533,7 +548,20 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
             if u.path == "/api/test":
-                return self._send(200, test_connection())
+                return self._send(200, test_connection((self._json() or {}).get("values")))
+            if u.path == "/api/update/check":
+                from meshpool_harness import updater as UP
+                return self._send(200, UP.check(force=bool(self._json().get("force"))))
+            if u.path == "/api/update/install":
+                from meshpool_harness import updater as UP
+                if _busy():
+                    return self._send(200, {"ok": False, "error": "A task is still running. Update when it finishes."})
+                return self._send(200, UP.install())
+            if u.path == "/api/update/restart":
+                from meshpool_harness import updater as UP
+                self._send(200, {"ok": True})
+                threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                return
             if u.path == "/api/route":
                 return self._send(200, route_preview(self._json()))
             if u.path == "/api/run":
@@ -613,18 +641,31 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 act = b.get("action", "add")
                 if act == "pick":
-                    from meshpool_harness.ui.desktop import choose_folder
+                    from meshpool_harness.ui.desktop import choose_folder, has_folder_picker
+                    if not has_folder_picker():          # the UI asks the user to type or paste the path instead
+                        return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
                     path = choose_folder(b.get("start", ""))
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
                     return self._send(200, {"projects": W.projects(), "picked": str(Path(path).resolve())})
+                if act == "dirs":                     # the in-app folder browser: the folders inside one folder
+                    here = Path(b.get("path") or Path.home()).expanduser()
+                    try:
+                        here = here.resolve()
+                        dirs = sorted((d.name for d in here.iterdir() if d.is_dir() and not d.name.startswith(".")),
+                                      key=str.lower)
+                    except OSError as e:
+                        raise ValueError(f"Can't open that folder ({e.strerror or e}).")
+                    return self._send(200, {"path": str(here), "parent": str(here.parent) if here.parent != here else "",
+                                            "dirs": dirs[:500], "home": str(Path.home())})
                 if act == "home":                     # the whole home folder ("the whole computer" for one user)
                     home = str(Path.home().resolve())
                     W.add_project(home, "Home")
                     return self._send(200, {"projects": W.projects(), "picked": home})
                 if act == "add":
-                    W.add_project(b.get("path", ""), b.get("name", ""))
+                    added = W.add_project(b.get("path", ""), b.get("name", ""))
+                    return self._send(200, {"projects": W.projects(), "picked": added["path"]})
                 elif act == "remove":
                     W.remove_project(b.get("path", ""))
                 elif act == "rename":
@@ -665,7 +706,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = W._inside(W.check_root(b.get("root", "")), b.get("path", ""))
                 if not p.exists():
                     raise ValueError("That file is gone.")
-                reveal(p)
+                try:
+                    reveal(p)
+                except OSError:
+                    return self._send(400, {"error": f"There's no app on this computer to open {p.name}. It is at: {p}"})
                 return self._send(200, {"ok": True})
             if u.path == "/api/attach":
                 import base64
@@ -721,11 +765,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.open_editor(self._json().get("path", "")))
             if u.path == "/api/open-path":
                 from meshpool_harness.ui.desktop import reveal
-                reveal(W.check_root(self._json().get("path", "")))
+                target = W.check_root(self._json().get("path", ""))
+                try:
+                    reveal(target)
+                except OSError as e:                      # no file manager here (e.g. a headless Linux machine)
+                    return self._send(400, {"error": f"Could not open the folder on this computer ({e.strerror or e}). "
+                                                     f"It is at: {target}"})
                 return self._send(200, {"ok": True})
             if u.path == "/api/term":
                 b = self._json()
-                return self._send(200, W.term_run(b.get("root", ""), b.get("command", "")))
+                return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
             m = re.fullmatch(r"/api/term/(\w+)/stop", u.path)
             if m:
                 return self._send(200, W.term_stop(m.group(1)))

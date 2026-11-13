@@ -1,0 +1,215 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index 6ea18dd22f..b68c33c2d6 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -322,7 +322,9 @@ class LocalePrefixPattern:
+ 
+     def match(self, path):
+         language_prefix = self.language_prefix
+-        if path.startswith(language_prefix):
++        # Language codes are case-insensitive (RFC 5646), e.g. both 'en-us/'
++        # and 'en-US/' match the same pattern.
++        if path[:len(language_prefix)].lower() == language_prefix.lower():
+             return path[len(language_prefix):], (), {}
+         return None
+ 
+diff --git a/django/utils/translation/__init__.py b/django/utils/translation/__init__.py
+index 29ac60ad1d..0cbc0aaa0b 100644
+--- a/django/utils/translation/__init__.py
++++ b/django/utils/translation/__init__.py
+@@ -201,18 +201,23 @@ def to_language(locale):
+ 
+ def to_locale(language):
+     """Turn a language name (en-us) into a locale name (en_US)."""
+-    lang, _, country = language.lower().partition('-')
+-    if not country:
+-        return language[:3].lower() + language[3:]
+-    # A language with > 2 characters after the dash only has its first
+-    # character after the dash capitalized; e.g. sr-latn becomes sr_Latn.
+-    # A language with 2 characters after the dash has both characters
+-    # capitalized; e.g. en-us becomes en_US.
+-    country, _, tail = country.partition('-')
+-    country = country.title() if len(country) > 2 else country.upper()
+-    if tail:
+-        country += '-' + tail
+-    return lang + '_' + country
++    language = language.lower().replace('_', '-')
++    parts = language.split('-')
++    if len(parts) == 1:
++        return language
++    # A language with > 2 characters after the dash has its first character
++    # capitalized; e.g. sr-latn becomes sr_Latn. A language with 2 or 3
++    # characters after the dash has all characters capitalized; e.g. en-us
++    # becomes en_US and es-419 becomes es_419.
++    parts[0] = parts[0].lower()
++    parts[1] = parts[1].title() if len(parts[1]) > 2 else parts[1].upper()
++    if len(parts) > 2:
++        # A subsequent subtag is a region (2 or 3 characters) or a variant.
++        # Regions are uppercased, variants and extensions keep their original
++        # casing (e.g. sr_latn_rs or nl_nl-x-informal).
++        if len(parts[2]) in (2, 3) and parts[2].isalpha() or parts[2].isdigit():
++            parts[2] = parts[2].upper()
++    return '_'.join(parts[:2]) + ('-' + '-'.join(parts[2:]) if len(parts) > 2 else '')
+ 
+ 
+ def get_language_from_request(request, check_path=False):
+diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
+index 7dcc77b46c..3915ac36a7 100644
+--- a/django/utils/translation/trans_real.py
++++ b/django/utils/translation/trans_real.py
+@@ -43,7 +43,7 @@ language_code_re = _lazy_re_compile(
+     re.IGNORECASE
+ )
+ 
+-language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
++language_code_prefix_re = _lazy_re_compile(r'^/([a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+){0,2})(/|$)')
+ 
+ 
+ @receiver(setting_changed)
+@@ -487,13 +487,30 @@ def get_supported_language_variant(lang_code, strict=False):
+         generic_lang_code = possible_lang_codes[-1]
+         supported_lang_codes = get_languages()
+ 
++        # Language codes are case-insensitive (RFC 5646), so match them
++        # case-insensitively, e.g. 'en-Latn-US' matches 'en-latn-us'.
++        supported_lang_codes = {
++            lang_code.lower(): lang_code for lang_code in supported_lang_codes
++        }
++
+         for code in possible_lang_codes:
+-            if code in supported_lang_codes and check_for_language(code):
+-                return code
++            if (
++                (supported_code := supported_lang_codes.get(code.lower())) is not None
++                and check_for_language(supported_code)
++            ):
++                return supported_code
++            # Try the special fallbacks for i.e. 'zh-hant-tw' -> 'zh-hant'.
++            for fallback_code in LANG_INFO.get(code, {}).get('fallback', []):
++                if (
++                    (supported_code := supported_lang_codes.get(fallback_code.lower()))
++                    is not None
++                    and check_for_language(supported_code)
++                ):
++                    return supported_code
+         if not strict:
+             # if fr-fr is not supported, try fr-ca.
+-            for supported_code in supported_lang_codes:
+-                if supported_code.startswith(generic_lang_code + '-'):
++            for supported_code in supported_lang_codes.values():
++                if supported_code.lower().startswith(generic_lang_code.lower() + '-'):
+                     return supported_code
+     raise LookupError(lang_code)
+ 
+@@ -508,7 +525,7 @@ def get_language_from_path(path, strict=False):
+     regex_match = language_code_prefix_re.match(path)
+     if not regex_match:
+         return None
+-    lang_code = regex_match[1]
++    lang_code = regex_match[1].replace('_', '-')
+     try:
+         return get_supported_language_variant(lang_code, strict=strict)
+     except LookupError:
+diff --git a/tests/i18n/tests.py b/tests/i18n/tests.py
+index bb6ea15f85..b46606ff5b 100644
+--- a/tests/i18n/tests.py
++++ b/tests/i18n/tests.py
+@@ -31,6 +31,7 @@ from django.utils.formats import (
+ )
+ from django.utils.numberformat import format as nformat
+ from django.utils.safestring import SafeString, mark_safe
++from django.urls import get_resolver
+ from django.utils.translation import (
+     activate, check_for_language, deactivate, get_language, get_language_bidi,
+     get_language_from_request, get_language_info, gettext, gettext_lazy,
+@@ -336,6 +337,18 @@ class TranslationTests(SimpleTestCase):
+             with self.subTest(lang=lang):
+                 self.assertEqual(to_locale(lang), locale)
+ 
++    def test_to_locale_with_script_and_region(self):
++        tests = (
++            ('en-latn-us', 'en_Latn_US'),
++            ('EN-LATN-US', 'en_Latn_US'),
++            ('en_Latn_US', 'en_Latn_US'),
++            ('sr-latn-rs', 'sr_Latn_RS'),
++            ('zh-hant-hk', 'zh_Hant_HK'),
++        )
++        for lang, locale in tests:
++            with self.subTest(lang=lang):
++                self.assertEqual(to_locale(lang), locale)
++
+     def test_to_language(self):
+         self.assertEqual(to_language('en_US'), 'en-us')
+         self.assertEqual(to_language('sr_Lat'), 'sr-lat')
+@@ -1492,6 +1505,31 @@ class MiscTests(SimpleTestCase):
+         r.META = {'HTTP_ACCEPT_LANGUAGE': 'zh-my,en'}
+         self.assertEqual(get_language_from_request(r), 'zh-hans')
+ 
++    def test_language_with_script_and_region(self):
++        """
++        Language codes that contain both a script and a region subtag are
++        supported, and matched case-insensitively (#33082).
++        """
++        with self.settings(
++            LANGUAGES=[
++                ('en-us', 'English'),
++                ('en-latn-us', 'Latin English'),
++            ],
++        ):
++            tests = [
++                ('en-latn-us', 'en-latn-us'),
++                ('en-Latn-US', 'en-latn-us'),
++                ('en-LATN-us', 'en-latn-us'),
++                ('en-us', 'en-us'),
++                ('en-US', 'en-us'),
++            ]
++            r = self.rf.get('/')
++            r.COOKIES = {}
++            for value, expected in tests:
++                with self.subTest(value=value):
++                    r.META = {'HTTP_ACCEPT_LANGUAGE': value}
++                    self.assertEqual(get_language_from_request(r), expected)
++
+     def test_subsequent_code_fallback_language(self):
+         """
+         Subsequent language codes should be used when the language code is not
+@@ -1780,6 +1818,39 @@ class LocaleMiddlewareTests(TestCase):
+         self.assertContains(response, "Yes/No")
+ 
+ 
++@override_settings(
++    USE_I18N=True,
++    LANGUAGES=[
++        ('en-us', 'English'),
++        ('en-latn-us', 'Latin English'),
++    ],
++    MIDDLEWARE=[
++        'django.middleware.locale.LocaleMiddleware',
++        'django.middleware.common.CommonMiddleware',
++    ],
++    ROOT_URLCONF='i18n.urls',
++    LANGUAGE_CODE='en-us',
++)
++class LocaleWithScriptAndRegionTests(SimpleTestCase):
++    def test_i18n_patterns_with_script_and_region(self):
++        """
++        i18n_patterns() works with language codes that include both a script
++        and a region subtag (#33082).
++        """
++        for language in ('en-latn-us', 'en-Latn-US'):
++            with self.subTest(language=language):
++                response = self.client.get('/%s/simple/' % language)
++                self.assertEqual(response.status_code, 200)
++
++    def test_language_prefix_regex(self):
++        with translation.override('en-Latn-US'):
++            resolver = get_resolver('i18n.urls')
++            pattern = resolver.url_patterns[0].pattern
++            self.assertEqual(pattern.language_prefix, 'en-latn-us/')
++            self.assertEqual(pattern.match('en-latn-us/simple/'), ('simple/', (), {}))
++            self.assertEqual(pattern.match('en-Latn-US/simple/'), ('simple/', (), {}))
++
++
+ @override_settings(
+     USE_I18N=True,
+     LANGUAGES=[
