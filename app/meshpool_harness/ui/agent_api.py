@@ -289,8 +289,10 @@ class Session:
             self._interrupting = True
             with self.lock:                          # messages waiting in the queue go with the new one, not lost
                 queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
+                qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
             if queued:
                 text = "\n\n".join([*queued, text])
+                images = [*qimgs, *(images or [])] or None
             self.stop()
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:
@@ -445,7 +447,8 @@ class Session:
         return r
 
     def stop(self):
-        self._was_stopped = True
+        if self.state in ("working", "waiting"):
+            self._was_stopped = True             # a request really was cut short
         with self.lock:
             had = bool(self.queue)
             self.queue = []

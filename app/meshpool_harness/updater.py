@@ -166,7 +166,13 @@ def install() -> dict:
         t = Path(tmp)
         tgz = _download(SRC.replace("{tag}", v["tag"]), t / "src.tgz")
         with tarfile.open(tgz) as tf:
-            tf.extractall(t, filter="data")
+            try:
+                tf.extractall(t, filter="data")
+            except TypeError:                         # Python without the tarfile filter: check paths ourselves
+                for m in tf.getmembers():
+                    if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or m.issym() or m.islnk():
+                        return {"ok": False, "error": "The release download looks unsafe. Nothing was changed."}
+                tf.extractall(t)
         src = next((d for d in t.iterdir() if d.is_dir() and (d / "app" / "meshpool_harness").is_dir()), None)
         if not src:
             return {"ok": False, "error": "The release download did not contain the app. Nothing was changed."}

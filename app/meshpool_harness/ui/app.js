@@ -233,7 +233,8 @@ function globalKeys(e) {
     // Esc closes the top-most thing that is open; with nothing open it stops the running task, wherever focus is.
     const open = $("#pop") || $("#ctx") || $(".scrim") || $("#onb");
     closePop(); closeCtx(); const sc = $(".scrim:not(.dlg-scrim)"); if (sc && !$("#onb") && !$(".dlg-scrim")) sc.remove();
-    if (!open && e.target?.id !== "input" && cfg().busy) { e.preventDefault(); stopNow(); }
+    const typing = e.target?.closest?.("input, textarea, select, [contenteditable=true]") && e.target.id !== "input";
+    if (!open && !typing && e.target?.id !== "input" && cfg().busy) { e.preventDefault(); stopNow(); }
   }
   if (!m) return;
   const k = e.key.toLowerCase();

@@ -171,7 +171,7 @@ def _retry_text(msg: str, attempt: int) -> str:
         why = "The model service had a problem"
     else:
         why = "The model call didn't go through"
-    return f"{why}. Trying again ({attempt + 1} of 6)…"
+    return f"{why}. Trying again ({attempt + 1} of 5)…"
 
 
 class Interrupted(Exception):
@@ -354,6 +354,12 @@ class Agent:
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
 
+    def _exists(self, path: str) -> bool:
+        try:
+            return self.ws._path(path, write=True).exists()
+        except Exception:  # noqa: BLE001
+            return False
+
     def _wait(self, fn, *a, **kw):
         """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
         second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
@@ -443,8 +449,10 @@ class Agent:
                     wrapped = True                      # a quick request ran long: answer now, no more tools
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                     self._no_tools = True
-                msg, streamed = self._chat(turn)
-                self._no_tools = False
+                try:
+                    msg, streamed = self._chat(turn)
+                finally:
+                    self._no_tools = False
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 content = msg.get("content") or ""
                 keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
@@ -716,7 +724,8 @@ class Agent:
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
-        if name in ("edit", "write_file") and self._diff(name, args) == "(no change)":
+        if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
+                self._diff(name, args) == "(no change)":
             return True, ""                    # nothing would change: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
         if group in self.always:

@@ -13,6 +13,7 @@ import gzip
 import html
 import json
 import os
+from concurrent.futures import TimeoutError as _FutTimeout
 import re
 import tempfile
 import threading
@@ -605,7 +606,7 @@ def research(question: str, queries: list | None = None, max_sources: int = 6, r
                 pass
             if good >= max_sources:
                 break
-    except TimeoutError:
+    except (TimeoutError, _FutTimeout):            # distinct classes before Python 3.11
         pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
