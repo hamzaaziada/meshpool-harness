@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -172,7 +173,8 @@ def find_mcp() -> list[dict]:
             if sig in seen:
                 continue
             seen.add(sig)
-            what = spec.get("url") or " ".join([spec["command"]] + spec.get("args", []))[:140]
+            what = ("Connects to " + urllib.parse.urlparse(spec["url"]).netloc) if spec.get("url") else \
+                f"Runs on this computer ({Path(str(spec['command'])).name})"
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
                         "has_secrets": bool(spec.get("env") or spec.get("headers"))})

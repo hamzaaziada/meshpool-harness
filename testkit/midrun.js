@@ -23,7 +23,7 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
   const waitState = async (id, want, ms = 60000) => { const t = Date.now(); while (Date.now() - t < ms) { if (want.includes(await st(id))) return true; await p.waitForTimeout(250); } return false; };
   const log = () => p.evaluate(() => (S.cur?.log || []).map(e => ({type: e.type, text: e.text || "", steer: !!e.steer})));
   // the reply to an interrupt: an assistant message after the last "Interrupted" note that answers the new text
-  const answeredAfterInterrupt = q => p.evaluate(q => { const l = S.cur?.log || []; const i = l.map(e => /Interrupted/.test(e.text || "")).lastIndexOf(true); return i >= 0 && l.slice(i).some(e => e.type === "assistant" && (e.text || "").includes(q.slice(0, 8)) || e.type === "assistant" && /stopped your previous request/.test(e.text || "")); }, q);
+  const answeredAfterInterrupt = q => p.evaluate(q => { const l = S.cur?.log || []; const i = l.map(e => /Interrupted|Stopped the previous request/.test(e.text || "")).lastIndexOf(true); return i >= 0 && l.slice(i).some(e => e.type === "assistant" && (e.text || "").includes(q.slice(0, 8)) || e.type === "assistant" && /stopped your previous request/.test(e.text || "")); }, q);
   const newIn = async (hid, kind, mode) => {
     await p.evaluate(([k]) => { if (S.appMode !== k) setAppMode(k); newThread(); }, [kind]);
     await p.evaluate(([h, m]) => { S.draft.harness = h; S.draft.mode = m; renderBar(); }, [hid, mode]);

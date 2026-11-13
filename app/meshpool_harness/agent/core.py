@@ -160,6 +160,20 @@ Rules
 - Write plainly: short sentences, no filler."""
 
 
+def _retry_text(msg: str, attempt: int) -> str:
+    """One calm line per retry instead of the raw network error."""
+    m = msg.lower()
+    if "http 0" in m or "connection" in m or "timed out" in m:
+        why = "Can't reach the model right now"
+    elif "429" in m or "rate" in m:
+        why = "The model is busy"
+    elif "5" in m[:8] or "http 5" in m:
+        why = "The model service had a problem"
+    else:
+        why = "The model call didn't go through"
+    return f"{why}. Trying again ({attempt + 1} of 6)…"
+
+
 class Interrupted(Exception):
     pass
 
@@ -474,8 +488,11 @@ class Agent:
                                                     "Send a message to continue."})
         except (Interrupted, KeyboardInterrupt):
             self._repair()
+            added = [t for t, _ in getattr(self, "_inbox", [])]
             self._take_inbox()                       # keep what the user added; the next turn sees it
-            self.emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
+            self.emit({"type": "interrupted", "text": "Stopped. " + (
+                "What you added wasn't answered yet; it goes along with your next message." if added
+                else "Send a message to continue.")})
         except Exception as e:
             self._repair()
             self.emit({"type": "error", "text": f"{e}"})
@@ -616,7 +633,7 @@ class Agent:
                         continue
                 if attempt >= 5:
                     raise
-                self.emit({"type": "status", "text": f"Model call failed ({msg[:120]}). Retrying."})
+                self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
@@ -711,7 +728,13 @@ class Agent:
             kind, title, detail = "edit", f"{'Edit' if name == 'edit' else 'Write'} {args.get('path', '')}?", \
                 self._diff(name, args)
         else:
-            kind, title = "mcp", f"Use the MCP tool {name.split('__', 2)[-1]} from '{name.split('__')[1]}'?"
+            tool = name.split('__', 2)[-1]
+            target = str(args.get("filename") or args.get("path") or args.get("url") or "")[:80]
+            nice = {"make_document": "Make a Word document", "make_pdf": "Make a PDF", "make_spreadsheet":
+                    "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
+                    "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
+                                                              + name.split('__')[1].replace("_", " ") + ")")
+            kind, title = "mcp", f"{nice}{' ' + target if target else ''}?"
             detail = json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         decision, note = self.approve(kind, title, detail)
         if decision == "always":
