@@ -22,7 +22,7 @@ const check = (n, ok, d = "") => { results.push(ok); console.log((ok ? "PASS " :
   await p.waitForNavigation({timeout: 60000}).catch(() => {});
   await p.waitForSelector("#openSettings", {timeout: 30000}).catch(() => {});
   const ver = await p.evaluate(() => api("/api/about").then(a => a.version)).catch(e => "error " + e.message);
-  check("after Restart the app is back on the new version", ver === "2.9.0", ver);
+  check("after Restart the app is back on the new version", ver === "0.2.0", ver);
   await p.waitForTimeout(4500);
   check("the update bar is gone after updating", await p.$("#updBar[hidden]") !== null);
   check("no page errors", !errs.length, errs.join(" | "));

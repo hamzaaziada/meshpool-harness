@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshpool-harness"
-version = "2.5.0"
+version = "0.1.0"
 description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
 readme = "README.md"
 requires-python = ">=3.10"
