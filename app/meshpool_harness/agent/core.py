@@ -793,7 +793,7 @@ class Agent:
         env = dict(os.environ, PYTHONPATH=str(C.APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
         env.pop("MH_EVENT_LOG", None)
         self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
-        proc = subprocess.Popen(cmd, cwd=str(C.APP), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        proc = subprocess.Popen(cmd, cwd=str(out), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace")
         t0 = time.time()
         while proc.poll() is None:
