@@ -21,7 +21,7 @@ sizes, colours or positions.
 | Line pitch | Exact points (12 pt text on a 13 pt pitch), so PowerPoint and LibreOffice lay text out identically | 1.08 × size |
 | Grid | 24 columns between 0.6 in and 12.73 in, 0.125 in gutters | fine grid |
 | Footer | Footnotes (in the label column on dense matrices), rule, source line, firm label and page number | same |
-| Fill | No dead space: the largest empty block in a content slide stays under 20% of the body. Short takeaways go in a band under a full-width chart instead of a half-empty side column; short tables open their rows up; stat stacks and matrix rows spread over the body; overflowing tables split evenly, never one stray row on a continuation slide | McKinsey content pages: largest empty block median 6%, p90 12% of the body |
+| Fill | Content fills the slide; the renderer never fakes it. Type steps up the scale (10 → 12 pt dense, 12 → 14 pt argument) before any gap opens; gaps are capped (0.3 in between matrix rows); table rows keep their natural height; bars and columns keep a set thickness (gap width, not a stretched frame). The layout follows the amount of content: a short table or a chart with few points sits beside its argument, the takeaway column narrows when its text is short, a long series runs full width over a takeaway band. Thin content goes back to the content model before rendering (fill targets per archetype) and again after rendering (P20); a slide without the evidence to fill it is merged | McKinsey content pages: largest empty block median 6%, p90 12% of the body |
 | Opening and closing | Cover: accent bar, 36 pt serif title, subtitle, hairline, date, firm. Closing: numbered next steps (action, detail and milestones, owner and timing) over the full body. Required when the brief asks for them | — |
 | Colour | Theme slots only: text, navy, emphasis blue, coral highlight, cyan focus, mid blue, rule grey, muted grey | — |
 
@@ -42,9 +42,12 @@ sizes, colours or positions.
    text may collide with other text (table text included), tables must stay inside their frames, and nothing may
    leave the slide. Failures go back to the content model as fix instructions; whatever is left is flagged in
    the speaker notes.
-6. **Dead-space check (P20).** The render is measured for the largest empty block in each content slide's body.
-   Over 20% goes back to the content model as a fix ("fill it with the evidence or implication the slide is missing,
-   or merge it with its neighbour; never pad"). Empty plot area inside a chart is data, not layout, and is ignored.
+6. **Dead-space check (P20).** Three parts. On the render, the largest empty block in each content slide's body
+   must stay under 20%; over that goes back to the content model ("fill it with the evidence or implication the
+   slide is missing, or merge it with its neighbour; never pad"). Empty plot area inside a chart is data, not
+   layout. From the file, two disguise checks: no table row stretched more than 0.25 in past its text, and no
+   bars or columns thicker than 0.6 / 1.2 in. Before rendering, fill targets (matrix cells with 2-3 bullets,
+   chart slides with 3 interpreting bullets, short tables with their argument) send thin slides back first.
 7. **Opens without repair (P0).** Every XML part is validated against the Office schemas, and relationships,
    content types and ids are checked, so PowerPoint should never show its "repair" prompt. The check found one
    defect, now fixed: python-pptx writes negative chart axis ids, which the schema does not allow.

@@ -48,10 +48,15 @@ renderer applies a strict consulting design; you only fill fields. Dense is good
   "table": {"groups": optional [{"label","span"}] over value columns, "columns": [...], "rows": [[...]],
   "highlight_rows": [index of the focus row], "italic_rows": [benchmark/average rows], "total_row": bool,
   "heat": optional {"column index": [all numeric values of that column]} for heat-map shading,
-  "size": 12 (10 if more than 14 rows)}; "takeaway": {"text": one bold line under the table}.
+  "size": 12 (10 if more than 14 rows)}; "takeaway": {"text": one bold line}; "bullets": 2-4 lines interpreting
+  the table (required when it has fewer than 8 rows: a short table sits beside them).
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories} on the left 2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
+FILL: every slide must carry enough substance to fill its page the way a top strategy firm's slide does; the
+renderer never stretches thin content. Targets: challenge_matrix cells = lead + 2-3 bullets; exhibit_argument =
+2-3 blocks of intro + 2-3 bullets; chart slides = takeaway + 3 bullets of 15-25 words; a table under 8 rows needs
+2-4 bullets. If the evidence for a slide is thin, merge it into a neighbour instead of padding.
 Text markup: **bold phrase**; a bold phrase containing a number is shown in the emphasis colour; ^1 is a
 superscript footnote marker. Numbers in bullets are emphasised automatically. Footnotes go in "footnotes"."""
 
@@ -168,6 +173,47 @@ def number_checks(slides, facts, rules) -> dict[int, list[str]]:
 UNIT_HINT = re.compile(r"\(([^)]*)\)|%|\bLQ\b|thousand|million|billion|\$", re.I)
 
 
+def _words(v) -> int:
+    if isinstance(v, dict):
+        return sum(_words(x) for x in v.values() if isinstance(x, (str, list, dict)))
+    if isinstance(v, list):
+        return sum(_words(x) for x in v)
+    return len(str(v).split()) if isinstance(v, str) else 0
+
+
+def fill_checks(slides) -> dict[int, list[str]]:
+    """Pre-render: is there enough substance to fill the archetype? A thin slide is sent back for more evidence
+    (or a merge), never stretched by the renderer to look full."""
+    out: dict[int, list[str]] = {}
+    for n, s in enumerate(slides, 1):
+        a, msgs = s.get("archetype"), []
+        if a == "challenge_matrix":
+            thin = [i + 1 for i, r in enumerate(s.get("rows") or [])
+                    for c in (r.get("cells") or []) if isinstance(c, dict) and len(c.get("bullets") or []) < 2]
+            if thin:
+                msgs.append(f"rows {sorted(set(thin))}: each cell needs a lead and 2-3 evidence bullets so the "
+                            "matrix fills the slide; add the evidence, or drop the row")
+        elif a in ("table_focus", "table_highlight"):
+            rows = len((s.get("table") or {}).get("rows") or [])
+            if rows < 8 and len(s.get("bullets") or []) < 2:
+                msgs.append(f"the table has {rows} rows: add 'bullets' (2-4 lines interpreting it, with numbers); "
+                            "they sit beside a short table. Or show it as a chart in exhibit_argument")
+        elif a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
+            if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < 35:
+                msgs.append("the takeaway column is thin: give 3 bullets (15-25 words each, with the numbers) that "
+                            "interpret the chart: the driver, the comparison, the implication")
+        elif a == "exhibit_argument":
+            if len(s.get("blocks") or []) < 2 or _words(s.get("blocks")) < 60:
+                msgs.append("the argument is thin: give 2-3 blocks, each an intro sentence and 2-3 bullets with "
+                            "numbers, so the right half is full")
+        elif a == "closing":
+            if any(not st.get("detail") or not st.get("milestones") for st in s.get("steps") or [] if isinstance(st, dict)):
+                msgs.append("every step needs a 'detail' (what it involves, with numbers) and 1-3 'milestones'")
+        if msgs:
+            out[n] = msgs
+    return out
+
+
 def chart_checks(slides) -> dict[int, list[str]]:
     """Pre-render chart sanity: one measure in one unit per chart, enough points for the chart kind."""
     out: dict[int, list[str]] = {}
@@ -223,7 +269,8 @@ before any slide exists. Return JSON: {{"governing_thought": str, "structure": "
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "title": str, "archetype": str,
 "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
 Exactly {slides_wanted} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below; prefer challenge_matrix, exhibit_argument and table_focus for dense evidence.
-Plan ONLY slides whose evidence is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
+Plan FEWER, DENSER slides: each slide must have enough evidence to fill its page. Plan ONLY slides whose evidence
+is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
@@ -263,6 +310,8 @@ design. Fill the archetype's fields completely and densely, the way a top strate
         fails = _content_failures(res)
         for n, msgs in number_checks(slides, facts, rules).items():
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
+        for n, msgs in fill_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[fill] {m}" for m in msgs)
         for n, msgs in chart_checks(slides).items():
             fails.setdefault(n, []).extend(f"[chart] {m}" for m in msgs)
         for e in r["errors"]:

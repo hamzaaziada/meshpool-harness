@@ -698,6 +698,28 @@ _KIND = {"bar": XL_CHART_TYPE.BAR_CLUSTERED, "column": XL_CHART_TYPE.COLUMN_CLUS
          "line": XL_CHART_TYPE.LINE_MARKERS, "waterfall": XL_CHART_TYPE.COLUMN_STACKED}
 
 
+BAR_SLOT_MAX = 0.62        # in per category for horizontal bars: bars stay about 0.4in thick, never slabs
+
+
+def _chart_box(kind, ncat, nser, x, y, w, h):
+    """Size the chart frame to its data: a 3-bar chart is not stretched into slabs across the slide."""
+    per = 1 + 0.45 * (max(1, nser) - 1)
+    legend = 0.35 if nser > 1 else 0
+    if kind in ("bar", "stacked_bar"):
+        h = min(h, ncat * BAR_SLOT_MAX * (per if kind == "bar" else 1) + 0.45 + legend)
+    return x, y, w, h
+
+
+def _gap_for(kind, ncat, nser, w, h):
+    """Gap width (% of a bar) that keeps columns at most ~0.95in and bars ~0.45in thick inside a full frame."""
+    clustered = kind in ("bar", "column")
+    dim = (h if kind in ("bar", "stacked_bar") else w) * 0.85
+    slot = dim / max(1, ncat)
+    cap = 0.45 if kind in ("bar", "stacked_bar") else 0.95
+    group = cap * (max(1, nser) if clustered else 1)
+    return int(max(50, min(400, (slot / group - 1) * 100)))
+
+
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     if c.get("kind") == "stats":
         return _stats(ctx, sl, n, c, x, y, w, h)
@@ -706,6 +728,9 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     kind = c.get("kind", "column")
     cats = [str(v) for v in c["categories"]]
     series = c["series"]
+    if kind == "bar" and len(cats) <= 5 and max((len(v) for v in cats), default=0) <= 22:
+        kind = "column"                                   # a few short bars read better standing up, full height
+    x, y, w, h = _chart_box(kind, len(cats), len(series), x, y, w, h)
     cd = CategoryChartData()
     cd.categories = cats
     fmt = "0" if not c.get("decimals") else "0." + "0" * int(c["decimals"])
@@ -739,7 +764,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         ch.legend.position = XL_LEGEND_POSITION.TOP
         ch.legend.include_in_layout = False
     try:
-        plot.gap_width = 50
+        plot.gap_width = _gap_for(kind, len(cats), len(series), w, h)
         va = ch.value_axis
         va.has_major_gridlines = False
         va.visible = False
@@ -781,6 +806,18 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         elif kind == "line":
             s.data_labels.position = XL_LABEL_POSITION.ABOVE
             s.data_labels.font.color.theme_color = TC.TEXT_1
+            vals = [v for v in series[k]["values"]]
+            if len(vals) > 12:                            # long series: label the points the story needs, not all
+                nums = [(j, v) for j, v in enumerate(vals) if isinstance(v, (int, float))]
+                keep = {nums[0][0], nums[-1][0], max(nums, key=lambda t: t[1])[0], min(nums, key=lambda t: t[1])[0]}
+                keep |= {j for j, cat in enumerate(cats) if cat in hl}
+                s.data_labels.show_value = False
+                for j in sorted(keep):
+                    dl = s.points[j].data_label
+                    dl.show_value = True
+                    dl.position = XL_LABEL_POSITION.ABOVE
+                    dl.font.size = Pt(T["label"])
+                    dl.font.bold = j == nums[-1][0]
         else:
             s.data_labels.font.color.theme_color = TC.BACKGROUND_1
     _alt(gf, c.get("alt") or f"{kind} chart of {', '.join(se['name'] for se in series)} ({c.get('unit', '')})")
@@ -811,7 +848,7 @@ def _plain(t) -> str:
     return re.sub(r"\*\*|\^\w+", "", str(t))
 
 
-def _table(ctx, sl, n, t, x, y, w, h):
+def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     groups = t.get("groups")
     cols, rows = t["columns"], t["rows"]
     hdr = 2 if groups else 1
@@ -857,15 +894,16 @@ def _table(ctx, sl, n, t, x, y, w, h):
         fit = max(3, fit)
         parts = -(-len(rows) // fit)                              # split evenly: never a stub continuation
         keep = max(3, -(-len(rows) // parts))
-        ctx.carry_rows = rows[keep:]
+        ctx.carry_rows = rows[keep:] if not dry else ["dry"]
         rows = rows[:keep]
         nrows = hdr + len(rows)
         t["total_row"] = False                                    # the total row travels with the last part
     hs = row_heights(size_, row_min(size_))
     room = h - head_h(size_) - sum(hs)                            # rows stretch to fill the space they have,
-    if room > 0:                                                  # sharing it evenly, up to 0.42in a row
-        cap = t.get("row_h", 0.42 if len(hs) > 6 else 0.9)       # a short table opens up instead of stopping halfway
-        hs = [min(max(hv, cap), hv + room / len(hs)) for hv in hs]
+    if room > 0:                                                  # a little air per row, never stretched rows:
+        hs = [hv + min(0.08, room / len(hs)) for hv in hs]        # a short table gets a different composition
+    if dry:
+        return float("inf") if ctx.carry_rows else sum(hs) + head_h(size_)
     gf = sl.shapes.add_table(nrows, len(cols), Inches(x), Inches(y), Inches(w), Inches(sum(hs) + head_h(size_)))
     gf.name = "Table"
     tbl = gf.table
@@ -1052,7 +1090,7 @@ def _stats(ctx, sl, n, c, x, y, w, h):
     """Big figures with labels, spread over the whole exhibit area with hairlines between them."""
     items = c.get("items") or []
     k = max(1, len(items))
-    rh = min(1.7, h / k)
+    rh = min(1.2, h / k)
     y += (h - rh * k) / 2                                   # a short stack sits centred, not stranded at the top
     big = rh >= 1.25
     vsize, lsize = (40, 16) if big else (28, 14)
@@ -1244,7 +1282,7 @@ def a_closing(ctx, s, sl, n):
         size -= 1
     if sum(need) > bottom - top:
         ctx.miss(n, "the next steps", int((sum(need) - (bottom - top)) * 30))
-    gap = min(0.8, max(0.0, (bottom - top - sum(need)) / max(1, len(steps))))   # thin steps stay flagged (P20)
+    gap = min(0.35, max(0.0, (bottom - top - sum(need)) / max(1, len(steps))))  # thin steps stay flagged (P20)
     y = top
     for i, ((a, d, wh), h) in enumerate(zip(laid, need)):
         rh = h + gap
@@ -1309,7 +1347,7 @@ def a_challenge_matrix(ctx, s, sl, n):
         laid = fit_rows(rows, size)
     while size < T["cell"]:                                # short content: larger type before larger gaps
         bigger = fit_rows(rows, size + 1)
-        if sum(x[2] for x in bigger) > avail * 0.9:
+        if sum(x[2] for x in bigger) > avail * 0.97:
             break
         size, laid = size + 1, bigger
     keep = len(rows)
@@ -1318,7 +1356,7 @@ def a_challenge_matrix(ctx, s, sl, n):
     if keep < len(rows):
         ctx.carry = dict(s, rows=rows[keep:], title=_cont_title(s["title"]), number_from=s.get("number_from", 1) + keep,
                          _cont=True)
-    gap = min(0.5, max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))   # rows fill the body
+    gap = min(0.3, max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))   # never airy rows
     y = top
     first = s.get("number_from", 1)
     for i, (r, (ba, bb, need)) in enumerate(zip(rows[:keep], laid[:keep])):
@@ -1410,6 +1448,22 @@ def a_table_focus(ctx, s, sl, n):
     bottom = FOOT_RULE_Y - 0.04 - notes_h - tk_h
     ctx.carry_rows = None
     t = dict(t)
+    bullets = [b if isinstance(b, dict) else {"text": b} for b in s.get("bullets") or []]
+    natural = _table(ctx, sl, n, dict(t), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
+    ctx.carry_rows = None
+    if bullets and len(t.get("columns") or []) <= 4 and natural < 0.72 * (bottom - y):
+        tx, tw = span(0, 7)                                # short table: table left, its argument right
+        ax, aw = span(8, 11)
+        gf = _table(ctx, sl, n, t, tx, y, tw, FOOT_RULE_Y - 0.04 - notes_h - y)
+        blocks = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+                  if tk.get("text") else [])
+        blocks += [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
+                   for b in bullets]
+        hgt = FOOT_RULE_Y - 0.04 - notes_h - y
+        _rule(sl, ax, y, aw, TC.TEXT_1, 0.75, "TakeawayRule")
+        _write(_box(sl, ax, y + 0.1, aw, hgt - 0.1, "Takeaways"), _fit(blocks, aw, hgt - 0.1, 11)[0], ctx, n)
+        ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
+        return
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)
     if ctx.carry_rows:
         ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]),
@@ -1434,16 +1488,37 @@ def a_chart_takeaway(ctx, s, sl, n):
           for b in bullets]
     body_h = BODY_B - BODY_Y
     bx, bw = span(8, 11)
-    if _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl):
-        x, w = span(0, 7)
+    long_series = len((s["chart"] or {}).get("categories") or []) >= 8
+    if not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl):
+        # The split follows the text: a narrower column for less text (the chart gains the width), then a step up
+        # the type scale; the renderer never adds gaps to fake fullness.
+        import copy
+        best = None
+        for split in (8, 9):
+            tx, tw = span(split, 11)
+            for bump in (0, 1, 2):
+                trial = copy.deepcopy(lead + bl)
+                for b in trial:
+                    b["size"] = b.get("size", T["body"]) + bump
+                need = _need(trial, tw)
+                if need > body_h - 0.1:
+                    break
+                best = (split, trial, need)
+                if need >= 0.62 * body_h:
+                    break
+            if best and best[0] == split and best[2] >= 0.62 * body_h:
+                break
+        split, blocks_, _ = best or (8, lead + bl, 0)
+        x, w = span(0, split - 1)
+        bx, bw = span(split, 11)
         _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
         _rule(sl, bx, BODY_Y, bw, TC.TEXT_1, 0.75, "TakeawayRule")
-        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), lead + bl, ctx, n)
+        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), _fit(blocks_, bw, body_h - 0.1, 11)[0], ctx, n)
         return
     lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
     cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
     cw = (RIGHT - colx(4) - GUT * (len(cols) - 1)) / len(cols)
-    band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.12
+    band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.04
     band = min(band, 0.45 * body_h)
     cy = BODY_B - band
     _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.18)

@@ -310,8 +310,12 @@ _SHORT_CHART = {"archetype": "bar_takeaway", "title": "Revenue grew 20% as prici
                 "subtitle": "Revenue, $M, 2023-2025",
                 "chart": {"kind": "column", "categories": ["2023", "2024", "2025"],
                           "series": [{"name": "Revenue ($M)", "values": [100, 110, 120]}]},
-                "takeaway": {"text": "Pricing carried growth"}, "bullets": ["Price rose in every region"],
+                "takeaway": {"text": "Pricing carried growth while volume slipped in every region"},
+                "bullets": ["Price rose 6% on average, led by the north at 9%, the third rise in three years",
+                            "Volume fell 4% overall; the south lost most, down 7% after a competitor's launch",
+                            "Gross margin held at 31% because input costs rose only 2% over the same period"],
                 "source": "Company accounts"}
+_THIN_CHART = dict(_SHORT_CHART, bullets=["Price rose in every region"], takeaway={"text": "Pricing carried growth"})
 
 
 @pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed to render")
@@ -332,11 +336,52 @@ def test_p20_flags_dead_space_and_renderer_fills_short_slides(tmp_path):
     r = VP.validate(str(empty), render=True)
     assert r["rules"]["P20"] == "fail"
     assert any("empty block" in f["message"] for f in r["failures"] if f["rule"] == "P20")
-    out = tmp_path / "short.pptx"                         # short takeaway: chart full width over a takeaway band
+    out = tmp_path / "full.pptx"                          # enough substance: fills honestly
     render([_SHORT_CHART], str(out))
     r = VP.validate(str(out), render=True)
-    assert r["rules"]["P20"] == "pass", r["stats"].get("empty_share_by_slide")
+    assert r["rules"]["P20"] == "pass", (r["stats"].get("empty_share_by_slide"),
+                                         [f["message"] for f in r["failures"] if f["rule"] == "P20"])
     assert r["rules"]["P1"] == "pass"
+    thin = tmp_path / "thin.pptx"                         # thin content is flagged, never stretched to look full
+    render([_THIN_CHART], str(thin))
+    r = VP.validate(str(thin), render=True)
+    p20 = [f for f in r["failures"] if f["rule"] == "P20"]
+    assert any(f["check"] == "dead_space" for f in p20)
+    assert not any(f["check"] in ("stretched_rows", "oversized_bars", "oversized_columns") for f in p20)
+
+
+def test_p20_catches_disguised_thin_content(tmp_path):
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[5])
+    s.shapes.title.text = "Three regions grew"
+    gf = s.shapes.add_table(4, 2, Inches(0.5), Inches(1.5), Inches(9), Inches(4.8))   # 3 short rows stretched
+    for i, (a, b) in enumerate([("Region", "Growth"), ("North", "9%"), ("South", "4%"), ("East", "2%")]):
+        gf.table.cell(i, 0).text, gf.table.cell(i, 1).text = a, b
+    s2 = prs.slides.add_slide(prs.slide_layouts[5])
+    s2.shapes.title.text = "Americas led growth"
+    cd = CategoryChartData()
+    cd.categories = ["Americas", "EMEA", "APAC"]
+    cd.add_series("Growth", (473, 184, 152))
+    ch = s2.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(0.5), Inches(1.5), Inches(9), Inches(5), cd).chart
+    ch.plots[0].gap_width = 30                                                   # slabs
+    p = tmp_path / "disguised.pptx"
+    prs.save(p)
+    checks = {f["check"] for f in VP.validate(str(p), render=False)["failures"] if f["rule"] == "P20"}
+    assert {"stretched_rows", "oversized_bars"} <= checks
+
+
+def test_fill_checks_send_thin_slides_back():
+    from engines.forge.build import fill_checks
+    slides = [{"archetype": "challenge_matrix", "rows": [{"cells": [{"lead": "a", "bullets": ["x"]},
+                                                                     {"lead": "b", "bullets": ["y", "z"]}]}]},
+              {"archetype": "table_focus", "table": {"columns": ["a", "b"], "rows": [["1", "2"]] * 4}},
+              _THIN_CHART, _SHORT_CHART]
+    out = fill_checks(slides)
+    assert set(out) == {1, 2, 3}
 
 
 def test_bookends_detected_and_enforced(tmp_path):
