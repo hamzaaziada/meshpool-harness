@@ -536,6 +536,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, save_settings(self._json()))
             if u.path == "/api/test":
                 return self._send(200, test_connection())
+            if u.path == "/api/update/check":
+                from meshpool_harness import updater as UP
+                return self._send(200, UP.check(force=bool(self._json().get("force"))))
+            if u.path == "/api/update/install":
+                from meshpool_harness import updater as UP
+                if _busy():
+                    return self._send(200, {"ok": False, "error": "A task is still running. Update when it finishes."})
+                return self._send(200, UP.install())
+            if u.path == "/api/update/restart":
+                from meshpool_harness import updater as UP
+                self._send(200, {"ok": True})
+                threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                return
             if u.path == "/api/route":
                 return self._send(200, route_preview(self._json()))
             if u.path == "/api/run":

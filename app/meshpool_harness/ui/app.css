@@ -95,6 +95,11 @@ code,pre,kbd{font-family:var(--mono)}
 .dot.wait{background:var(--warn)}
 @keyframes pulse{50%{opacity:.35}}
 .empty-side{color:var(--ink-3);font-size:12.5px;padding:8px}
+.updbar{display:flex;align-items:center;gap:8px;margin:6px 8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--hover);color:var(--ink);font-weight:500;font-size:12.5px;text-align:left;cursor:pointer}
+.updbar[hidden]{display:none}
+.updbar .dot{width:7px;height:7px;border-radius:50%;background:var(--accent,#2563eb);flex:none}
+.updbar .go{margin-left:auto;color:var(--accent,#2563eb);font-weight:600}
+.updbox{margin:14px 0 4px;padding:12px;border:1px solid var(--line);border-radius:var(--r-s)}
 .side-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px;align-items:center}
 .side-foot button{flex:1;display:flex;align-items:center;gap:8px;border:0;background:none;border-radius:var(--r-s);padding:7px 8px;color:var(--ink-2);font-weight:500}
 .side-foot button:hover{background:var(--hover);color:var(--ink)}
@@ -110,7 +115,7 @@ code,pre,kbd{font-family:var(--mono)}
 button.chip:hover{border-color:var(--ink-3);color:var(--ink)}
 .chip svg{width:14px;height:14px;flex:none}
 .topbar .sp{flex:1}
-.tbtn{border:1px solid transparent;background:none;border-radius:var(--r-s);padding:5px 8px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px;font-size:13px}
+.tbtn{border:1px solid transparent;background:none;border-radius:var(--r-s);padding:5px 8px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap;flex:none}
 .tbtn:hover{background:var(--hover);color:var(--ink)}
 .tbtn[aria-pressed="true"]{background:var(--sel);color:var(--ink)}
 .tbtn svg{width:16px;height:16px}
@@ -350,7 +355,10 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 @media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:268px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 10px 10px}}
 
 /* narrow main column (panel open, small window): icons only where space runs out */
-@container main (max-width:860px){.tbtn span{display:none}.topbar .title{max-width:none;flex:0 1 auto;min-width:60px}}
+.topbar .chip{flex:0 1 auto;min-width:0}
+.topbar .title{flex:0 1 auto;min-width:60px}
+@container main (max-width:1180px){.tbtn span{display:none}.tbtn{padding:6px}.topbar .chip.use{display:none}}
+@container main (max-width:860px){.topbar .title{max-width:none}}
 #pPill .lbl{flex:none}
 @container main (max-width:760px){#hPill .lbl,#aPill .lbl,#pPill .lbl{display:none}}
 @container main (max-width:640px){#topbar .chip:not(#projChip):not(#brChip){display:none}}
