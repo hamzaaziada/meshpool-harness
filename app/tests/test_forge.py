@@ -153,7 +153,7 @@ def decks(tmp_path_factory):
 def test_good_deck_passes_content_rules(decks):
     good, _, (brief, prov, story) = decks
     r = VP.validate(str(good), brief=brief, provenance=prov, storyline=story, render=HAS_LO)
-    fails = {k: v for k, v in r["rules"].items() if v == "fail"}
+    fails = {k: v for k, v in r["rules"].items() if v == "fail" and k != "P20"}   # P20 (density) has its own test
     detail = [f["message"] for f in r["failures"] if f["status"] == "fail"]
     # the default python-pptx template hardcodes nothing on slides; P6 must pass with charts included
     assert not fails, (fails, detail)
@@ -303,3 +303,82 @@ def test_forge_render_opens_cleanly(tmp_path):
     render(slides, str(out))
     r = OX.check(str(out))
     assert r["ok"], r["problems"]
+
+
+# ------------------------------------------------------------------ P20 dead space, P16 bookends
+_SHORT_CHART = {"archetype": "bar_takeaway", "title": "Revenue grew 20% as pricing offset lower volume",
+                "subtitle": "Revenue, $M, 2023-2025",
+                "chart": {"kind": "column", "categories": ["2023", "2024", "2025"],
+                          "series": [{"name": "Revenue ($M)", "values": [100, 110, 120]}]},
+                "takeaway": {"text": "Pricing carried growth"}, "bullets": ["Price rose in every region"],
+                "source": "Company accounts"}
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed to render")
+def test_p20_flags_dead_space_and_renderer_fills_short_slides(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from engines.forge.render import render
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    s = prs.slides.add_slide(prs.slide_layouts[5])
+    s.shapes.title.text = "Costs fell 4% after the plant closed"
+    tb = s.shapes.add_textbox(Inches(0.6), Inches(1.6), Inches(6), Inches(0.6))
+    tb.text_frame.text = "One short line of text, then nothing."
+    tb.text_frame.paragraphs[0].runs[0].font.size = Pt(14)
+    s._element.find("{http://schemas.openxmlformats.org/presentationml/2006/main}cSld").set("name", "arch:argument_only")
+    empty = tmp_path / "empty.pptx"
+    prs.save(empty)
+    r = VP.validate(str(empty), render=True)
+    assert r["rules"]["P20"] == "fail"
+    assert any("empty block" in f["message"] for f in r["failures"] if f["rule"] == "P20")
+    out = tmp_path / "short.pptx"                         # short takeaway: chart full width over a takeaway band
+    render([_SHORT_CHART], str(out))
+    r = VP.validate(str(out), render=True)
+    assert r["rules"]["P20"] == "pass", r["stats"].get("empty_share_by_slide")
+    assert r["rules"]["P1"] == "pass"
+
+
+def test_bookends_detected_and_enforced(tmp_path):
+    from engines.forge.build import _enforce_bookends, bookends
+    from engines.forge.render import render
+    assert bookends("Make a 10-slide deck on transport") == {"opening": False, "closing": False}
+    assert bookends("Start with a title slide and end with next steps") == {"opening": True, "closing": True}
+    plan = _enforce_bookends([{"node": "1", "title": "Revenue grew 20%", "archetype": "bar_takeaway"}],
+                             {"opening": True, "closing": True})
+    assert [p["archetype"] for p in plan] == ["cover", "bar_takeaway", "closing"]
+    out = tmp_path / "ends.pptx"
+    render([{"archetype": "cover", "title": "Regional growth plan", "subtitle": "Board review", "date": "March 2026"},
+            _SHORT_CHART,
+            {"archetype": "closing", "title": "The board should approve three moves now",
+             "steps": [{"action": "Reprice the core range", "detail": "Lift list prices 3% in Q2 on the 40 lines "
+                        "where competitors already moved; protect the ten traffic drivers at today's price.",
+                        "milestones": ["Price file to retailers by 15 April", "Volume check after eight weeks"],
+                        "owner": "CFO with category heads", "timing": "Decision March, live Q2"},
+                       {"action": "Close two depots", "detail": "Consolidate the two smallest depots into the new hub; "
+                        "saves $4M a year from 2027 with no loss of next-day coverage.",
+                        "milestones": ["Consultation opens in July", "Hub capacity tested before the move"], "owner": "COO",
+                        "timing": "Announce H2, complete 2027"},
+                       {"action": "Fund the new channel", "detail": "Commit $10M over two years to the direct channel, "
+                        "released in two tranches against a 5% share gate at month 12.",
+                        "milestones": ["Team in place by June", "Month-12 gate: 5% share or stop"], "owner": "CEO",
+                        "timing": "Board approval in March"}],
+             "source": "Company accounts"}], str(out))
+    assert OX.check(str(out))["ok"]
+    r = VP.validate(str(out), render=HAS_LO, brief={"slide_count": 3, "opening": True, "closing": True})
+    assert r["rules"]["P16"] == "pass", [f["message"] for f in r["failures"] if f["rule"] == "P16"]
+    if HAS_LO:
+        assert r["rules"]["P1"] == "pass" and r["rules"]["P20"] == "pass", r["stats"].get("empty_share_by_slide")
+    r = VP.validate(str(out), render=False, brief={"slide_count": 2, "opening": True, "closing": True})
+    missing = tmp_path / "noclose.pptx"
+    render([_SHORT_CHART], str(missing))
+    r = VP.validate(str(missing), render=False, brief={"slide_count": 1, "opening": True, "closing": True})
+    checks = {f["check"] for f in r["failures"] if f["rule"] == "P16"}
+    assert {"opening_slide", "closing_slide"} <= checks
+
+
+def test_table_cells_keep_their_detail():
+    from engines.forge.render import normalize
+    s = normalize({"archetype": "table_focus", "table": {"columns": ["Type", "Change"], "rows": [
+        [{"lead": "Strategic"}, {"lead": "+38%", "bullets": [{"text": "largest gain"}]}]]}})
+    assert s["table"]["rows"][0] == ["Strategic", "+38%: largest gain"]

@@ -16,7 +16,7 @@ quality doesn't depend on which model writes the content.
 | Document | What it holds |
 |---|---|
 | [design-grammar.md](design-grammar.md) | the design system every deck gets, measured on McKinsey reference pages, and what keeps it from breaking |
-| [engine-spec.md](engine-spec.md) | slide JSON schema, 28-archetype library, renderer contract, workbook block schema, all rules (P0–P19, X0–X13) |
+| [engine-spec.md](engine-spec.md) | slide JSON schema, 28-archetype library, renderer contract, workbook block schema, all rules (P0–P20, X0–X13) |
 | [pipeline-spec.md](pipeline-spec.md) | stage contracts, toolkit with versions and licences, Excel → dashboard → PBIP, cloud packaging |
 | [hebbia-deck-anatomy.md](hebbia-deck-anatomy.md) | the measurement template for Hebbia files, pipeline hypotheses H1–H6, our deck measured the same way |
 | [mckinsey-rebuild-test.md](mckinsey-rebuild-test.md) | the one-shot rebuild test, results and the bar to pass |

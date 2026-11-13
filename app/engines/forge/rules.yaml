@@ -16,6 +16,14 @@ pptx:
     dpi: 80
     timeout_s: 240
     box_tolerance_in: 0.08      # a rendered text span may sit this far outside its shape box
+  whitespace:                   # P20: dead space, measured on the render
+    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12
+    body_top: 0.20              # body band as fractions of page height (below the title block, above the source)
+    body_bottom: 0.90
+    exempt_archetypes: [cover, section_divider, appendix_divider, end]
+  bookends:                     # P16: opening/closing slides the brief asks for
+    opening_archetypes: [cover]
+    closing_archetypes: [closing, end]
   charts:                       # P2
     picture_name_hints: "(?i)chart|graph|plot|figure|exhibit"
   tables:                       # P3

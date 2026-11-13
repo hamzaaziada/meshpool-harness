@@ -28,7 +28,11 @@ STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
 ARCH_HELP = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields. Dense is good when it is organised.
-- cover: title, subtitle.
+- cover: title, subtitle, "date" (e.g. "Board meeting, March 2026").
+- closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
+  {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
+  "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
+  "timing": when, "prov": [fact ids]}.
 - challenge_matrix: numbered rows x two lenses. "columns": [row header, lens A, lens B] (e.g. ["Challenge",
   "A - Today", "B - Outlook"]); "rows": 3-5 of {"icon": one word meaning (e.g. money, congestion, store, people,
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
@@ -58,6 +62,33 @@ Every text element that holds numbers carries "prov": [fact ids] (bullets as {"t
 {"lead","bullets":[{"text","prov"}],"prov"}). Use ONLY fact values; if a number is missing write [GAP: what].
 Titles: one sentence stating the takeaway, with a verb, <= 18 words. Every data slide has a source.
 ONE chart = ONE measure in ONE unit. Line charts need >= 4 periods. Sort bars largest first."""
+
+
+_OPEN_RE = re.compile(r"(?i)\b(title|cover|opening|intro(?:duction|ductory)?)\s+(slide|page)\b|\bagenda\b|"
+                      r"\bstart (?:with|on) (?:a |the )?(?:title|cover)\b")
+_CLOSE_RE = re.compile(r"(?i)\b(closing|ending|end|final|last|conclusion|concluding|summary|thank[- ]you|q&a)\s+"
+                       r"(slide|page)\b|\bnext steps\b|\b(?:close|end|finish|conclude|wrap up) (?:with|on)\b|"
+                       r"\bcall to action\b")
+
+
+def bookends(brief: str) -> dict:
+    """Opening and closing slides the brief asks for. When asked for, they must be in the deck (P16)."""
+    return {"opening": bool(_OPEN_RE.search(brief or "")), "closing": bool(_CLOSE_RE.search(brief or ""))}
+
+
+def _enforce_bookends(plan: list, ends: dict) -> list:
+    plan = list(plan)
+    if ends["opening"] and (not plan or plan[0].get("archetype") != "cover"):
+        plan.insert(0, {"node": "0", "section": "", "title": plan[0].get("title", "") if plan else "", "archetype": "cover",
+                        "evidence": [], "needs": "cover: deck title, subtitle, date"})
+    if ends["closing"] and (not plan or plan[-1].get("archetype") not in ("closing", "end")):
+        last = plan[-1] if plan else {}
+        if re.search(r"(?i)next|act|recommend|priorit|plan|should|must|now", last.get("title", "")):
+            plan[-1] = dict(last, archetype="closing")            # the last slide already is the call to action
+        else:
+            plan.append({"node": "9.9", "section": "Next steps", "title": "Next steps", "archetype": "closing",
+                         "evidence": [], "needs": "closing: the next steps the argument implies"})
+    return plan
 
 
 def _call(client, model, system, user, task_id, max_tokens=12000) -> dict:
@@ -178,6 +209,11 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     facts = facts_from_brief(brief)
+    ends = bookends(brief)
+    opening = ('slide 1 MUST be the cover (node "0", archetype cover; the brief asks for an opening slide); '
+               if ends["opening"] else 'slide 1 is the cover (node "0"); ')
+    closing = ("the LAST slide MUST be archetype closing with the next steps (the brief asks for a closing slide)."
+               if ends["closing"] else "end with what to do next.")
     fact_txt = "\n".join(f"{f['id']}: {f['text']}" for f in facts)
     calls = 0
 
@@ -186,8 +222,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "title": str, "archetype": str,
 "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
-Exactly {slides_wanted} slides: slide 1 is the cover (node "0"); then the argument in 3-4 sections; end with what to
-do next. Use the archetypes below; prefer challenge_matrix, exhibit_argument and table_focus for dense evidence.
+Exactly {slides_wanted} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below; prefer challenge_matrix, exhibit_argument and table_focus for dense evidence.
 Plan ONLY slides whose evidence is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
@@ -199,7 +234,8 @@ supports it. Choose varied archetypes that prove each title.
 
     # ---- stage 3: content, one call per slide (in parallel), each with only its own facts
     from concurrent.futures import ThreadPoolExecutor
-    plan = [x for x in story.get("slides", []) if isinstance(x, dict)]
+    plan = _enforce_bookends([x for x in story.get("slides", []) if isinstance(x, dict)], ends)
+    nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
 
     def one(x):
         ev = set(x.get("evidence") or [])
@@ -222,7 +258,7 @@ design. Fill the archetype's fields completely and densely, the way a top strate
     for rnd in range(rules["repair"]["max_rounds"] + 1):
         r = render(slides, str(pptx))
         prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted}, provenance=prov,
+        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True)
         fails = _content_failures(res)
         for n, msgs in number_checks(slides, facts, rules).items():
@@ -267,7 +303,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
         r = render(slides, str(pptx))
         prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted}, provenance=prov,
+        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True)
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts, indent=1))
