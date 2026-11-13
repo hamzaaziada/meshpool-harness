@@ -165,6 +165,20 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
     doc.styles["Normal"].font.size = Pt(11)
     if title:
         doc.add_heading(title, level=0)
+    clarity_note = ""
+    if os.environ.get("MH_CLARITY", "1") != "0":          # a second, smaller model reads the prose for clarity;
+        try:                                               # numbers and facts are guarded, failures never block
+            if str(APP) not in sys.path:
+                sys.path.insert(0, str(APP))
+            from engines.forge.clarity import review_markdown
+            from meshpool_harness.core.client import LiveClient
+            markdown, rep = review_markdown(markdown, LiveClient("clarity_doc"),
+                                            main_model=os.environ.get("MH_MODEL"), task_id="clarity-doc")
+            if rep.get("model"):
+                clarity_note = (f" Clarity check ({rep['model']}): {rep['changed']} of {rep['checked']} lines made "
+                                "clearer, numbers unchanged.")
+        except Exception:
+            pass
     lines = markdown.replace("\r\n", "\n").split("\n")
     i = 0
     while i < len(lines):
@@ -213,7 +227,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         i += 1
     path = out / name
     doc.save(path)
-    return f"Saved the Word document: {path}", False
+    return f"Saved the Word document: {path}.{clarity_note}", False
 
 
 def read_document(path: str, sheet: str | None = None, pages: str | None = None, language: str | None = None,

@@ -473,3 +473,41 @@ def test_p17_text_belongs_in_its_shape(tmp_path):
     names = {sh.name: sh for sh in P2(str(out)).slides[0].shapes}
     assert names["ov_SoWhat"].text_frame.text.strip() and names["ov_ArgumentPanel"].text_frame.text.strip()
     assert "ov_SoWhatText" not in names and "Argument" not in names
+
+
+class _Stub:
+    """Chat client stub: per-model behaviour (raise, or return a JSON body)."""
+    def __init__(self, plan):
+        self.plan, self.calls = plan, []
+
+    def chat(self, *, model, messages, **kw):
+        self.calls.append(model)
+        how = self.plan.get(model, "raise")
+        if how == "raise":
+            raise RuntimeError(f"{model} unavailable")
+        return {"choices": [{"message": {"content": json.dumps(how(messages))}}]}
+
+
+def test_clarity_pass_guards_facts_and_falls_back():
+    from engines.forge import clarity
+
+    def edits(messages):
+        ids = [ln.split(":")[0] for ln in messages[1]["content"].split("\n") if ln.startswith("s")]
+        return {"edits": [{"id": ids[0], "issue": "jargon", "text": "Revenue grew 20% because prices rose"},
+                          {"id": ids[1], "issue": "x", "text": "Volume fell 9% overall"}]}       # number changed
+    slides = [{"archetype": "bar_takeaway", "title": "Revenue grew 20% as pricing levers unlocked upside",
+               "bullets": ["Volume fell 4% overall"]}]
+    stub = _Stub({"gpt-6.1-terra": edits})                     # luna missing: falls back to terra
+    rep = clarity.review(slides, stub, main_model="main")
+    assert stub.calls[:2] == ["gpt-6-luna", "gpt-6.1-terra"] and rep["model"] == "gpt-6.1-terra"
+    assert slides[0]["title"] == "Revenue grew 20% because prices rose"
+    assert slides[0]["bullets"][0] == "Volume fell 4% overall"     # a rewrite that changes a number is refused
+    assert rep["rejected"][0]["why"] == "numbers changed"
+    none = clarity.review([{"title": "Costs fell 4% after the plant closed"}], _Stub({}), main_model="main")
+    assert none["status"] == "not_run" and none["changed"] == 0     # nothing available: text left as written
+    main_only = clarity.review([{"title": "Costs fell 4% after the plant closed"}],
+                               _Stub({"main": lambda m: {"edits": []}}), main_model="main")
+    assert main_only["model"] == "main"                         # last resort: the main model, same rubric
+    md, _ = clarity.review_markdown("# Memo\n\n| a | b |\n|---|---|\n\nThe plan leverages synergies to unlock value.",
+                                    _Stub({"gpt-6-luna": lambda m: {"edits": [{"id": "s1.0", "text": "The plan cuts costs."}]}}))
+    assert "The plan cuts costs." in md and "| a | b |" in md
