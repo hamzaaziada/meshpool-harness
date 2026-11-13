@@ -1,0 +1,16 @@
+{
+  "id": "hermes-local",
+  "name": "Hermes (your install)",
+  "mode": "cowork",
+  "type": "acp",
+  "command": "hermes",
+  "args": [
+    "acp"
+  ],
+  "default": false,
+  "description": "The Hermes Agent you installed yourself, with its own settings, memory and skills.",
+  "settings_note": "Uses your Hermes model settings. To change the model, run hermes model in a terminal.",
+  "install": "Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash (Windows: iex (irm https://hermes-agent.nousresearch.com/install.ps1)), then run hermes acp --setup.",
+  "setup": "Run hermes acp --setup in a terminal.",
+  "homepage": "https://github.com/NousResearch/hermes-agent"
+}

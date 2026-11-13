@@ -161,12 +161,21 @@ def section(ws, row, text, ncols=6):
 def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
     """Append a check row: difference formula must be ~0. Status shows OK / ERROR. Returns the status cell ref."""
     ch = wb["Checks"]
-    r = max(4, ch.max_row + 1)
+    if "check_tolerance" not in wb.defined_names:          # the tolerance is a labelled input, not a typed literal
+        ch["H3"] = "Tolerance"
+        ch["H3"].font = Font(name=FONT, bold=True)
+        input_cell(ch, "I3", tol, "num", name="check_tolerance")
+    r = max(4, max((c.row for c in ch["A"] if c.value is not None), default=3) + 1)
     ch.cell(row=r, column=1, value=label)
     formula(ch, f"B{r}", diff_formula if diff_formula.startswith("=") else "=" + diff_formula, "num", link=True)
-    formula(ch, f"C{r}", f'=IF(ABS(B{r})<={tol},"OK","ERROR")')
-    if ch.max_row >= 4:
-        ch["E3"] = "All checks"
-        ch["E3"].font = Font(name=FONT, bold=True)
-        formula(ch, "F3", f'=IF(COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
+    formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
+    ch["E3"] = "All checks"
+    ch["E3"].font = Font(name=FONT, bold=True)
+    formula(ch, "F3", f'=IF(COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
+    if "MasterCheck" not in wb.defined_names:
+        dn = DefinedName("MasterCheck", attr_text="'Checks'!$F$3")
+        try:
+            wb.defined_names["MasterCheck"] = dn
+        except TypeError:
+            wb.defined_names.append(dn)
     return f"Checks!C{r}"

@@ -427,3 +427,19 @@ def test_table_cells_keep_their_detail():
     s = normalize({"archetype": "table_focus", "table": {"columns": ["Type", "Change"], "rows": [
         [{"lead": "Strategic"}, {"lead": "+38%", "bullets": [{"text": "largest gain"}]}]]}})
     assert s["table"]["rows"][0] == ["Strategic", "+38%: largest gain"]
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed for recalculation")
+def test_x14_catches_a_positive_loss_added_to_income(tmp_path):
+    from openpyxl import Workbook
+    for sign, expect in ((1, "fail"), (-1, "pass")):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Calc"
+        ws["A1"], ws["B1"] = "Acquirer net income ($B)", 238.8
+        ws["A2"], ws["B2"] = "Target net loss ($B)" if sign > 0 else "Target net loss ($B, negative = loss)", 2.8 * sign
+        ws["A3"], ws["B3"] = "Pro forma net income ($B)", "=B1+B2"
+        p = tmp_path / f"m{sign}.xlsx"
+        wb.save(p)
+        r = VX.validate(str(p))
+        assert r["rules"]["X14"] == expect, [f["message"] for f in r["failures"] if f["rule"] == "X14"]

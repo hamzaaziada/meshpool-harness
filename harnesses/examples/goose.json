@@ -1,0 +1,11 @@
+{
+  "id": "goose",
+  "name": "Goose",
+  "mode": "cowork",
+  "type": "acp",
+  "command": "goose",
+  "args": ["acp"],
+  "description": "Block's open-source general agent, through its ACP mode.",
+  "install": "Install Goose from https://block.github.io/goose and run goose configure.",
+  "homepage": "https://github.com/block/goose"
+}
