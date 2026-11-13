@@ -304,6 +304,9 @@ design. Fill the archetype's fields completely and densely, the way a top strate
         content = {"slides": list(ex.map(one, plan))}
     calls += len(plan)
     slides = [s for s in content.get("slides", []) if isinstance(s, dict)]
+    from engines.forge import clarity                          # a second, smaller model reads every line once
+    clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
+    calls += 1
     rounds = []
     pptx = out / "deck.pptx"
     for rnd in range(rules["repair"]["max_rounds"] + 1):
@@ -333,6 +336,7 @@ design. Fill the archetype's fields completely and densely, the way a top strate
             break
         if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
             break                                            # two rounds without progress: stop paying for repairs
+        repaired = set()
         for n, msgs in sorted(fails.items()):
             if n - 1 >= len(slides):
                 continue
@@ -350,8 +354,13 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 calls += 1
                 if fixed.get("archetype") in ARCHETYPES:
                     slides[n - 1] = fixed
+                    repaired.add(n - 1)
             except Exception:
                 pass
+        if repaired:                                            # repaired slides get the same clarity read
+            clear.append(clarity.review(slides, client, only=repaired, main_model=MODEL,
+                                        task_id=f"{task_id}-clarity-r{rnd}"))
+            calls += 1
     # freeze what is left into the notes: nothing passes silently
     left = fails
     if left and rules["repair"]["flag_in_file"]:
@@ -366,6 +375,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
     (out / "facts.json").write_text(json.dumps(facts, indent=1))
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
+    (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"],
             "unresolved": {k: v for k, v in left.items()}}
 
