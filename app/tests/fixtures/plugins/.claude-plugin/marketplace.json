@@ -1,0 +1,8 @@
+{
+  "name": "fixture-marketplace",
+  "owner": {"name": "Tests"},
+  "plugins": [
+    {"name": "demo", "source": "./demo-plugin", "description": "Demo plugin"},
+    {"name": "second", "source": "./second-plugin", "description": "A plugin without plugin.json", "version": "0.1.0"}
+  ]
+}
