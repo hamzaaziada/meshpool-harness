@@ -42,6 +42,9 @@ def events_from_messages(messages: list) -> list:
                 except ValueError:
                     summ = ""
                 out = outputs.get(c.get("id"), "")
+                if f.get("name") == "ask_user":           # a question card, answered, as it looked at the time
+                    evs += _replay_question(c.get("id"), f.get("arguments"), out)
+                    continue
                 evs.append({"type": "tool_start", "id": c.get("id"), "name": f.get("name", ""), "summary": summ,
                             "mcp": f.get("name", "").startswith("mcp__"), "diff": ""})
                 evs.append({"type": "tool_end", "id": c.get("id"), "name": f.get("name", ""),
@@ -50,6 +53,21 @@ def events_from_messages(messages: list) -> list:
     for i, e in enumerate(evs):
         e["i"] = i
     return evs
+
+
+def _replay_question(cid, raw_args, out: str) -> list:
+    from meshpool_harness.agent import ask as ASK
+    try:
+        args = json.loads(raw_args or "{}") if isinstance(raw_args, str) else dict(raw_args or {})
+        qs = ASK.normalize(args)
+    except Exception:  # noqa: BLE001  a malformed call was answered with an error; show nothing for it
+        return []
+    if not out or out.startswith("ERROR"):
+        return []
+    stopped = out.startswith("Not run")
+    return [{"type": "question", "id": cid, "questions": qs, "timeout_s": 0},
+            {"type": "question_done", "id": cid, "source": "stopped" if stopped else "replay", "answers": [],
+             "text": "Stopped before you answered." if stopped else ASK.replay_text(out)}]
 
 
 MODES = ("ask", "edits", "auto")
@@ -177,6 +195,9 @@ class Session:
                 self.agent = Agent(workdir, profile="work" if self.harness["id"] == "meshpool-work" else "code", **kw)
             self.agent.save()
         self.id, self.workdir = self.agent.id, str(self.agent.root)
+        if self.harness["type"] not in ("acp", "pi"):
+            # ask_user waits for this page's answer; a scheduled run has no one watching, so it takes the defaults
+            self.agent.interactive = lambda: not self.scheduled and not getattr(self, "deleted", False)
         if resume_id:
             self.kind = read_meta(self.id).get("kind") or self.kind
         else:
@@ -231,6 +252,7 @@ class Session:
             self.state = "idle"
 
     def emit(self, ev: dict):
+        self._question_state(ev)
         if ev.get("type") == "interrupted" and getattr(self, "_interrupting", False):
             self._interrupting = False               # the new message is being answered: do not say "send a message"
             ev = dict(ev, text="Stopped the previous request.")
@@ -267,6 +289,24 @@ class Session:
         p["note"] = note
         p["answered"] = True
         p["ev"].set()
+
+    def _question_state(self, ev: dict):
+        """ask_user: the thread waits for the user while a question is open (like an approval)."""
+        t = ev.get("type")
+        if t == "question" and ev.get("timeout_s"):
+            self.state = "waiting"
+            if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
+                qs = ev.get("questions") or [{}]
+                _notify(f"{self.agent.title or 'A task'} has a question for you", str(qs[0].get("question", ""))[:200])
+        elif t == "question_done" and self.state == "waiting" and not self.pending:
+            self.state = "working"
+
+    def reply(self, question_id: str, answers) -> None:
+        """The user answered an ask_user question (POST /api/agent/<id>/reply)."""
+        self.touched = time.time()
+        if not hasattr(self.agent, "reply"):
+            raise ValueError("This agent does not ask questions.")
+        self.agent.reply(str(question_id or ""), answers)
 
     def _body(self, text: str, images: list | None) -> str:
         body = text
@@ -312,6 +352,10 @@ class Session:
                            "answer this message instead.")
         if self.state not in ("working", "waiting"):
             self._was_stopped = False
+        q = self.agent.pending_question() if hasattr(self.agent, "pending_question") else None
+        if q and not interrupt and text.strip():
+            self.agent.reply(q["id"], text)              # typed in the message box: the answer to the open question
+            return {"queued": False, "answered": q["id"]}
         if self.state in ("working", "waiting"):
             if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
                 self.agent.steer(self._body(text, images), images=images)
