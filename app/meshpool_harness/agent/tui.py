@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -200,6 +201,33 @@ class Terminal:
                 return "no", note
 
 
+    def ask_questions(self, qid: str, questions: list):
+        """ask_user in the terminal: numbered options per question, Enter takes the recommended one, any other
+        text is the user's own answer. No terminal: None (the agent goes on with its recommendations)."""
+        st = self.st
+        self.spin.stop()
+        if not sys.stdin.isatty():
+            return None
+        answers = []
+        for q in questions:
+            self.p("")
+            self.p(st.amber(f"{q['header']}: {q['question']}") + (st.dim("  (several: 1,3)") if q.get("multi") else ""))
+            rec = [str(i) for i, o in enumerate(q["options"], 1) if o.get("recommended")]
+            for i, o in enumerate(q["options"], 1):
+                self.p(f"  {st.bold(str(i))} {o['label']}" + (st.green("  (recommended)") if o.get("recommended") else "")
+                       + (st.dim("  " + o["description"]) if o.get("description") else ""))
+            try:
+                a = input(f"  Pick{' (Enter: ' + ','.join(rec) + ')' if rec else ''}, or type your own answer > ").strip()
+            except EOFError:
+                return None
+            nums = [int(x) for x in re.split(r"[ ,]+", a or ",".join(rec)) if x.isdigit()]
+            if a and not nums or any(not 1 <= n <= len(q["options"]) for n in nums):
+                answers.append({"selected": [], "other": a})
+            else:
+                answers.append({"selected": [q["options"][n - 1]["label"] for n in nums], "other": ""})
+        return answers
+
+
 def ask_key(force: bool = False) -> bool:
     """First run: ask for the API key in the terminal and save it to meshpool.config."""
     import getpass
@@ -345,6 +373,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         term.p(st.red(str(e)))
         return 1
     term.agent = agent
+    agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
     try:
         if prompt is not None:
             agent.send(prompt)

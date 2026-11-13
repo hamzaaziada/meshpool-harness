@@ -879,6 +879,7 @@ function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup
 function applyEv(ev) {
   const cur = S.cur, col = $("#col");
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
+  if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
@@ -968,6 +969,61 @@ function applyEv(ev) {
       }
       break; }
   }
+}
+/* ---------- ask_user: questions with options ---------- */
+// The agent asks 1-4 questions; each has 2-5 options (the recommended one is preselected) and a free-text "Other".
+// Answers go to POST /api/agent/<id>/reply {question_id, answers: [{selected: [labels], other: text}]}.
+function questionEv(ev, add) {
+  if ((ev.type === "tool_start" || ev.type === "tool_end") && ev.name === "ask_user") return true;   // the card shows it
+  if (ev.type === "question") { closeGroup(); questionCard(ev, add); S.cur.activity = "Waiting for your answer"; return true; }
+  if (ev.type === "question_done") { questionDone(ev); return true; }
+  return false;
+}
+function questionCard(ev, add) {
+  const qs = ev.questions || [], cid = "q-" + String(ev.id).replace(/[^\w-]/g, "");
+  const many = qs.length > 1;
+  const html = `<div class="qhead" id="${cid}-h">${many ? `${qs.length} questions before I go on` : "A question before I go on"}</div>` +
+    qs.map((q, i) => `<fieldset class="qq" data-i="${i}" data-multi="${q.multi ? 1 : 0}">
+      <legend><span class="qchip">${esc(q.header || `Question ${i + 1}`)}</span><span class="qtext">${esc(q.question)}</span>${q.multi ? `<span class="qhint">Pick any</span>` : ""}</legend>
+      <div class="qopts">${(q.options || []).map(o => `<button type="button" class="qopt" aria-pressed="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="ql">${esc(o.label)}${o.recommended ? ` <span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</button>`).join("")}</div>
+      <label class="qother"><span>Other</span><input type="text" placeholder="Type your own answer" aria-label="Your own answer to: ${esc(q.question)}"></label>
+    </fieldset>`).join("") +
+    `<div class="acts"><button type="button" class="btn primary qsend">Send ${many ? "answers" : "answer"}</button><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span></div>`;
+  const d = add(html, "qcard"); d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-labelledby", cid + "-h");
+  $$(".qq", d).forEach(fs => {
+    const multi = fs.dataset.multi === "1", btns = $$(".qopt", fs), inp = $("input", fs);
+    btns.forEach(b => b.onclick = () => {
+      const on = b.getAttribute("aria-pressed") !== "true";
+      if (!multi) { btns.forEach(x => x.setAttribute("aria-pressed", "false")); if (on) inp.value = ""; }
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    inp.oninput = () => { if (!multi && inp.value.trim()) btns.forEach(x => x.setAttribute("aria-pressed", "false")); };
+    inp.onkeydown = e => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $(".qsend", d).click(); } };
+  });
+  $(".qsend", d).onclick = async () => {
+    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[aria-pressed=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
+    $$("button, input", d).forEach(x => x.disabled = true);
+    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); }
+    catch (e) { $$("button, input", d).forEach(x => x.disabled = false); toast(e.message); }
+  };
+  if (!ev.timeout_s) $$("button, input", d).forEach(x => x.disabled = true);   // answered at once (no one to ask)
+  scrollConv(true);
+  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-pressed=true]", d)?.focus({preventScroll: true});
+}
+function questionDone(ev) {
+  const d = document.getElementById("q-" + String(ev.id).replace(/[^\w-]/g, "")); if (!d || d.classList.contains("done")) return;
+  d.classList.add("done");
+  const src = ev.source, head = $(".qhead", d);
+  if (head) head.textContent = src === "stopped" ? "Question (stopped)" : src === "user" || src === "replay" ? "You answered" : src === "timeout" ? "No answer in time: went with the recommendations" : "Went with the recommendations";
+  const ans = ev.answers || [];
+  const typed = src === "user" && /^You replied/.test(ev.text || "");
+  const rows = ans.length && !typed ? $$(".qq", d).map((fs, i) => {
+    const a = ans[i] || {}, q = $(".qtext", fs)?.textContent || "", h = $(".qchip", fs)?.textContent || "";
+    const val = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", ");
+    return `<div class="qa"><span class="qchip">${esc(h)}</span><span class="qtext">${esc(q)}</span><b>${esc(val || "-")}</b>${a.default && src === "user" ? `<span class="qhint">recommended</span>` : ""}</div>`;
+  }).join("") : `<div class="qa"><span class="qtext qpre">${esc(ev.text || "")}</span></div>`;
+  $$(".qq, .acts", d).forEach(x => x.parentNode.removeChild(x));
+  d.insertAdjacentHTML("beforeend", rows);
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
