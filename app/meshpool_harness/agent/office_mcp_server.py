@@ -14,6 +14,7 @@ Tools
   check_workbook(path)                -> the forge workbook rules (X0-X13) after a headless recalculation
   check_document(path)                -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
+  find_icon(query, set?, limit?)      -> bundled outline icons (Lucide, Tabler) that fit a meaning, with SVG paths
 
 Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
 timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
@@ -353,6 +354,22 @@ def convert_document(path: str, to: str = "pdf"):
     return f"Saved: {dst}", False
 
 
+def find_icon(query: str, set: str | None = None, limit: int = 8):
+    """Icons from the bundled outline sets that fit a meaning, best first (read-only)."""
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
+    from engines import icons as IC
+    try:
+        rows = IC.search(query, set=set or None, limit=max(1, min(int(limit or 8), 40)))
+    except ValueError as e:
+        return str(e), True
+    if not rows:
+        return f"No icon matches {query!r}. Try a simpler word (money, growth, risk, people, time).", False
+    lines = [f"{r['set']}:{r['name']}  score {r['score']}  {r['path']}" + (f"  tags: {', '.join(r['tags'][:5])}"
+             if r["tags"] else "") for r in rows]
+    return ("Use one set for the whole deck. Best matches (set:name, score, SVG path):\n" + "\n".join(lines)), False
+
+
 S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
 TOOLS = {
@@ -380,6 +397,11 @@ TOOLS = {
     "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "
                          "to PDF, or Markdown to PDF or Word. `to` is the target extension.",
                          {"path": S, "to": S}, ["path", "to"]),
+    "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
+                  "\"risk\"). Searches the bundled outline sets, Lucide (ISC) and Tabler (MIT), by name, tags and "
+                  "synonyms, and returns set:name and the SVG path, best first. `set` (lucide or tabler) keeps a "
+                  "deck to one set; `limit` is the number of results (default 8).",
+                  {"query": S, "set": S, "limit": {"type": "integer"}}, ["query"]),
     "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }
