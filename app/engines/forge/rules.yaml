@@ -38,7 +38,13 @@ pptx:
   fonts:                        # P4
     allowlist: []               # extra families beyond the theme major/minor fonts
     max_families: 2
-    max_sizes_per_role: 3
+    max_sizes_per_role: 3       # untagged decks (reference / hand-made)
+    max_sizes_per_role_by_density:  # forge slides tagged "density:<mode>", counted per mode; roles not listed use the base.
+      # The renderer's type scale (density.py SCALES) gives body text 4-6 sizes per mode (lead, body, head, label,
+      # argument intro/exhibit) and fitting adds up to two steps; present also carries the larger action/step sizes.
+      read:     {body: 5, subtitle: 4}
+      balanced: {body: 6, subtitle: 5}
+      present:  {body: 8, subtitle: 3}
     require_embedding: false    # true when the template licence allows embedding
     metric_files:               # metric-compatible fonts for measurement when the real font is absent
       Calibri: Carlito

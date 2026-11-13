@@ -238,3 +238,81 @@ def test_present_vs_read_same_content(tmp_path):
     assert "the third rise in three years" in got["present"][0][2]      # the cut detail is in the speaker notes
     assert "the third rise in three years" not in got["read"][0][2]
     assert "Training for 120 sales staff" in got["present"][4][2]
+
+
+# ------------------------------------------------------------------ P4 per density mode
+def test_p4_font_sizes_counted_per_density_mode(tmp_path):
+    """Each density mode's slides are held to that mode's size cap; the renderer's own decks pass in every mode,
+    a forced cross-mode check and an untagged deck still fail."""
+    from engines.forge.render import render
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    for mode in ("present", "balanced", "read"):
+        out = tmp_path / f"{mode}.pptx"
+        render(sample(), str(out), carry=False, density=mode)
+        r = VP.validate(str(out), render=False)
+        assert r["rules"]["P4"] == "pass", (mode, [f["message"] for f in r["failures"] if f["rule"] == "P4"])
+    r = VP.validate(str(tmp_path / "present.pptx"), render=False, density="read")   # present type, read caps
+    assert r["rules"]["P4"] == "fail"
+    prs = Presentation(str(tmp_path / "balanced.pptx"))     # untagged: the base cap (3) applies, not a mode's
+    for sl in prs.slides:
+        c = sl._element.find(qn("p:cSld"))
+        c.set("name", c.get("name").replace("density:balanced", ""))
+    prs.save(str(tmp_path / "untagged.pptx"))
+    r = VP.validate(str(tmp_path / "untagged.pptx"), render=False)
+    assert any(f["check"] == "font_sizes" and f["limit"] == 3 for f in r["failures"])
+
+
+# ------------------------------------------------------------------ wide tables keep their bullets
+WIDE = {"archetype": "table_focus", "node": "2.3", "source": SRC, "title": "The south trails on every measure",
+        "table": {"columns": ["Region", "Lead channel", "Growth", "Margin", "Discount", "Win rate"],
+                  "rows": [["North", "Direct", "+12%", "37%", "9%", "41%"], ["South", "Distributors", "+9%", "29%", "14%", "33%"],
+                           ["East", "Online", "+8%", "34%", "11%", "38%"], ["West", "Direct", "+6%", "31%", "12%", "36%"],
+                           ["Central", "Partners", "+5%", "33%", "10%", "39%"], ["Islands", "Direct", "+4%", "30%", "13%", "34%"],
+                           ["Export", "Distributors", "+3%", "28%", "15%", "31%"]]},   # 7 rows: stays a table
+        "takeaway": {"text": "The south carries the deepest discounts"},
+        "bullets": [{"text": "South discounts average 14%, five points above the north"},
+                    {"text": "Win rates in the south trail by eight points despite the discounts"},
+                    {"text": "A reset in the south alone would add about 1 point to group margin"}]}
+
+
+def _shapes_text(sl):
+    return " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame)
+
+
+@pytest.mark.parametrize("mode", ["present", "balanced", "read"])
+def test_wide_table_keeps_bullets_in_a_band(tmp_path, mode):
+    from pptx import Presentation
+    from engines.forge.render import render
+    out = tmp_path / "wide.pptx"
+    render([WIDE], str(out), carry=False, density=mode)
+    sl = Presentation(str(out)).slides[0]
+    table = next(sh for sh in sl.shapes if sh.has_table)
+    assert table.width.inches > 11                                   # full width
+    band = [sh for sh in sl.shapes if sh.name.startswith("Takeaways")]
+    assert band and all(sh.top >= table.top + table.height for sh in band)   # under the table
+    assert all((sh.top + sh.height) / 914400 <= 7.02 for sh in band)  # above the footer rule
+    on, notes = _shapes_text(sl), sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
+    for b in WIDE["bullets"]:                                        # on the slide, else in the notes: never lost
+        assert b["text"] in on or b["text"] in notes, (mode, b["text"])
+    if mode == "read":
+        assert all(b["text"] in on for b in WIDE["bullets"])
+
+
+def test_wide_table_band_overflow_goes_to_notes(tmp_path):
+    from pptx import Presentation
+    from engines.forge.render import render
+    long = [{"text": f"Point {i}: " + " ".join(["the south region trails the group on discount depth and win rate"] * 3)}
+            for i in range(8)]
+    s = dict(WIDE, table=dict(WIDE["table"], rows=WIDE["table"]["rows"] * 2), bullets=long)
+    out = tmp_path / "wide_long.pptx"
+    render([s], str(out), carry=False, density="read")
+    sl = Presentation(str(out)).slides[0]
+    on, notes = _shapes_text(sl), sl.notes_slide.notes_text_frame.text
+    assert "Did not fit" in notes
+    for b in long:
+        assert b["text"] in on or b["text"] in notes
+    if HAS_LO:
+        r = VP.validate(str(out), render=True)
+        assert r["rules"]["P1"] == "pass" and r["rules"]["P8"] == "pass", \
+            [f["message"] for f in r["failures"] if f["rule"] in ("P1", "P8")]

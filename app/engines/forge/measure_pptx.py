@@ -315,6 +315,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
                "gradients": len(sx.findall(".//a:gradFill", NS)), "max_group_depth": 0, "decorative_lines": 0,
                "emoji": 0, "scheme_colors": s_scheme, "srgb_colors": len(s_srgb_vals),
                "srgb_values": s_srgb_vals, "slide_number": False, "locks": []}
+        rec["font_sizes"] = {k: Counter() for k in size_hist}   # per slide, so P4 can count per density mode
         scheme_n += s_scheme
         srgb_n += len(s_srgb_vals)
         srgb_vals.update(s_srgb_vals)
@@ -358,6 +359,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 rec["charts"].append(ci)
                 for s in ci["label_sizes"]:
                     size_hist["chart_labels"][s] += 1
+                    rec["font_sizes"]["chart_labels"][s] += 1
                 srgb_n += ci["srgb"]
                 scheme_n += ci["scheme"]
                 srgb_vals.update(ci["srgb_values"])
@@ -451,6 +453,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 if role_key:
                     for p in paras:
                         size_hist[role_key][p["size"] * srec.get("font_scale", 1.0)] += 1
+                        rec["font_sizes"][role_key][p["size"] * srec.get("font_scale", 1.0)] += 1
                 srec["overflow"] = _overflow(srec, metric_map, R)
             rec["shapes"].append(srec)
 
