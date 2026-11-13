@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -66,13 +67,23 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
     m = re.search(r"\b(\d{1,2})[- ]slide", task)
     slides = int(m.group(1)) if m else 10
     mode = density_from(task, options, density)
-    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id, theme=theme_from(task),
-                density=mode)
+    fixed, extra = [], []
+    from engines.forge.finance_pages import finance_workbook, pages_from_workbook
+    cands = list(files or []) + [str(p) for p in Path(workdir).glob("*.xls*") if not p.name.startswith("~$")]
+    wbk = finance_workbook(cands)
+    if wbk and not re.search(r"\b(no|without) (model|valuation) pages\b", task, re.I):
+        try:                                                    # banker pages computed from the model's outputs
+            fixed, extra = pages_from_workbook(wbk)
+        except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
+            print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
+                theme=theme_from(task), density=mode, fixed_pages=fixed, extra_facts=extra)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
-    answer = (f"Built {Path(pptx).name}: {slides} slides in the forge design system ({mode} density), checked after "
-              "rendering. "
+    answer = (f"Built {Path(pptx).name}: {slides + len(fixed)} slides in the forge design system ({mode} density), "
+              + (f"{len(fixed)} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
+                 if fixed else "") + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],

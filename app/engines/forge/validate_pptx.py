@@ -50,7 +50,8 @@ reprice restructure rethink shut simplify standardise standardize stop streamlin
 face shape matter drive lack outweigh hinge rest lie set keep put let
 jump surge soar climb slip slide slump plunge tumble dip rebound recover edge outstrip top spike bottom flatten level
 plateau cluster cost total average comprise outnumber dominate signal suggest indicate point mean imply contract
-decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark""".split())
+decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark
+compound span bracket weigh sit straddle clear""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 

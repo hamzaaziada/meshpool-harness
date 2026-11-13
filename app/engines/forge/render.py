@@ -802,7 +802,129 @@ def _gap_for(kind, ncat, nser, w, h):
     return int(max(50, min(400, (slot / group - 1) * 100)))
 
 
+RANGE_PLOT = (0.30, 0.10, 0.66, 0.84)                 # football field: room for method names on the left
+OVERLAY = "ov_"                                        # rules.yaml layout.overlap_declare_prefix: placed by the data
+
+
+def fmt_value(v: float, unit: str = "", decimals: int | None = None) -> str:
+    """Banker number style: $24.37, 12.5x, 38.0%, (4.2) for negatives; NM for None."""
+    if v is None:
+        return "NM"
+    u = (unit or "").strip()
+    d = decimals if decimals is not None else (2 if u in ("$", "$/sh") else 1)
+    body = f"{abs(v):,.{d}f}"
+    if u in ("$", "$/sh", "$m", "$mm", "$bn"):
+        body = "$" + body + {"$m": "m", "$mm": "mm", "$bn": "bn"}.get(u, "")
+    elif u in ("x", "%"):
+        body += u
+    elif u:
+        body += " " + u
+    return f"({body})" if v < 0 else body
+
+
+def _nice_bounds(lo: float, hi: float) -> tuple[float, float]:
+    import math
+    span_ = max(hi - lo, abs(hi) * 0.05, 1e-9)
+    step = 10 ** math.floor(math.log10(span_ / 4))
+    for m in (1, 2, 2.5, 5, 10):
+        if span_ / (step * m) <= 6:
+            step *= m
+            break
+    a = math.floor((lo - 0.12 * span_) / step) * step
+    b = math.ceil((hi + 0.12 * span_) / step) * step
+    return (max(0.0, a) if lo >= 0 else a), b
+
+
+def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
+    """Football field: one floating bar per method (low to high) as a native stacked bar chart (editable), the low
+    and high written at the bar ends, and an optional marker line (current price, offer) across all bars."""
+    cats = [str(v) for v in c["categories"]]
+    lows = [float(v) for v in c["series"][0]["values"]]
+    highs = [float(v) for v in c["series"][1]["values"]]
+    unit, dec = c.get("unit", "$"), c.get("decimals")
+    mk = c.get("marker") or {}
+    pts = lows + highs + ([float(mk["value"])] if mk.get("value") is not None else [])
+    amin, amax = _nice_bounds(min(pts), max(pts))
+    slot = min(0.8, (h - 0.5) / max(1, len(cats)))
+    h = min(h, slot * len(cats) / RANGE_PLOT[3] + 0.1)
+    cd = CategoryChartData()
+    cd.categories = cats
+    cd.add_series("Low", lows)
+    cd.add_series("Range", [hi - lo for lo, hi in zip(lows, highs)])
+    gf = sl.shapes.add_chart(XL_CHART_TYPE.BAR_STACKED, Inches(x), Inches(y), Inches(w), Inches(h), cd)
+    positive_axis_ids(gf.chart)
+    gf.name = name
+    ch = gf.chart
+    ch.has_title = False
+    ch.has_legend = False
+    ch.font.size = Pt(T["label"])
+    ch.font.color.theme_color = TC.TEXT_1
+    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+    lay = pa.find(qn("c:layout"))
+    if lay is None:
+        lay = pa.makeelement(qn("c:layout"), {})
+        pa.insert(0, lay)
+    for e in list(lay):
+        lay.remove(e)
+    ml = lay.makeelement(qn("c:manualLayout"), {})
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", RANGE_PLOT[0]),
+                     ("c:y", RANGE_PLOT[1]), ("c:w", RANGE_PLOT[2]), ("c:h", RANGE_PLOT[3])):
+        ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
+    lay.append(ml)
+    plot = ch.plots[0]
+    plot.gap_width = 70
+    plot.overlap = 100
+    va, ca = ch.value_axis, ch.category_axis
+    va.minimum_scale, va.maximum_scale = amin, amax
+    va.has_major_gridlines = False
+    va.visible = False
+    ca.reverse_order = True
+    ca.tick_labels.font.size = Pt(T["label"])
+    ca.format.line.color.theme_color = TC.TEXT_1
+    base, rng = plot.series
+    base.format.fill.background()
+    base.format.line.fill.background()
+    rng.format.fill.solid()
+    rng.format.fill.fore_color.theme_color = TC.ACCENT_4
+    hl = {str(v) for v in c.get("highlight_categories") or []}
+    for j, cat in enumerate(cats):
+        if cat in hl:
+            f = rng.points[j].format
+            f.fill.solid()
+            f.fill.fore_color.theme_color = TC.ACCENT_3
+    px = lambda v: x + w * (RANGE_PLOT[0] + RANGE_PLOT[2] * (v - amin) / (amax - amin))  # noqa: E731
+    top, ph = y + h * RANGE_PLOT[1], h * RANGE_PLOT[3]
+    band = ph / len(cats)
+    pre = OVERLAY                                              # data-placed labels: exempt from the grid snap
+    if mk.get("value") is not None:                            # marker first: it reads before the bars below it
+        mx = px(float(mk["value"]))
+        lab = f"{mk.get('label', 'Marker')}: {fmt_value(float(mk['value']), unit, dec)}"
+        _write(_box(sl, mx - 1.4, top - 0.34, 2.8, 0.26, pre + "MarkerLabel", MSO_ANCHOR.BOTTOM),
+               [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False}], ctx, n)
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(top - 0.05), Inches(mx),
+                                     Inches(top + ph + 0.02))
+        ln.name = pre + "Marker"
+        ln.line.color.theme_color = TC.ACCENT_3
+        ln.line.width = Pt(1.5)
+        ln.line.dash_style = 4                                 # dash
+    def label(xx, txt, name, right):
+        tw = _need_w(txt, T["label"]) + 0.1                    # as wide as its text, opaque: the marker runs behind
+        bx = _box(sl, xx - tw if right else xx, cy - 0.12, tw, 0.24, name, MSO_ANCHOR.MIDDLE)
+        bx.fill.solid()
+        bx.fill.fore_color.theme_color = TC.BACKGROUND_1
+        _write(bx, [{"text": txt, "size": T["label"], "align": PP_ALIGN.RIGHT if right else PP_ALIGN.LEFT,
+                     "numbers": False}], ctx, n)
+    for j, (lo, hi) in enumerate(zip(lows, highs)):
+        cy = top + band * (j + 0.5)
+        label(px(lo) - 0.04, fmt_value(lo, unit, dec), f"{pre}RangeLow{j + 1}", True)
+        label(px(hi) + 0.04, fmt_value(hi, unit, dec), f"{pre}RangeHigh{j + 1}", False)
+    _alt(gf, c.get("alt") or "Valuation ranges by method (football field)" + (f"; {mk.get('label')} marked" if mk else ""))
+    return gf
+
+
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
+    if c.get("kind") == "range":
+        return _range_chart(ctx, sl, n, c, x, y, w, h)
     if c.get("kind") == "stats":
         return _stats(ctx, sl, n, c, x, y, w, h)
     if c.get("kind") == "bubble":
@@ -1104,6 +1226,8 @@ def _cell(v):
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
+    if s.get("archetype") == "football_field" and isinstance(s.get("chart"), dict):
+        s["chart"] = dict(s["chart"], kind="range")
     t = s.get("table")
     if isinstance(t, dict):
         t = dict(t)
@@ -1153,13 +1277,23 @@ def normalize(s: dict) -> dict:
 
 REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
-            "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "grid": ["parts"]}
+            "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "football_field": ["chart"],
+            "grid": ["parts"]}
 
 
 def chart_problems(c: dict) -> list[str]:
     """Charts that would mislead: one bar, mixed units in one series, ranks drawn as quantities, short lines."""
     if not c or c.get("kind") == "bubble":
         return []
+    if c.get("kind") == "range":
+        se = [x for x in c.get("series") or [] if isinstance(x, dict)]
+        cats = c.get("categories") or []
+        if len(se) != 2 or any(len(x.get("values") or []) != len(cats) for x in se):
+            return ["a football field needs two series (low, high) with one value per method"]
+        if any(not isinstance(v, (int, float)) for x in se for v in x["values"]):
+            return ["football field values must be numbers"]
+        bad = [cats[i] for i, (a, b) in enumerate(zip(se[0]["values"], se[1]["values"])) if a > b]
+        return [f"low above high for {', '.join(map(str, bad))}"] if bad else []
     cats = [str(x) for x in c.get("categories") or []]
     series = [se for se in c.get("series") or [] if isinstance(se, dict)]
     out = []
@@ -1725,7 +1859,7 @@ def a_table_focus(ctx, s, sl, n):
     hgt = FOOT_RULE_Y - 0.04 - notes_h - y
     tx, tw = span(0, 7)
     ax, aw = span(8, 11)
-    as_chart = _table_as_chart(t) if bullets else None
+    as_chart = _table_as_chart(t) if bullets and not t.get("keep_table") else None
     if as_chart and DENSITY["mode"] == "present" and len(as_chart["series"]) > 1:
         as_chart = None                                    # presenting: one measure per chart, else the table
     side = None
@@ -1773,6 +1907,14 @@ def a_table_focus(ctx, s, sl, n):
         _cut_note(s, dropped)
         band = max(_need(c, cw) for c in cols) + 0.04
         bottom -= band + 0.18
+    if not t.get("size") and len(t.get("rows") or []) <= 14:     # room to spare: a step up the type scale first
+        base = T["cell"]
+        for z, pad in [(z, 0.16) for z in range(base + 4, base, -1)] + [(base, 0.16)]:
+            need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
+            ctx.carry_rows = None
+            if need <= 0.85 * (bottom - y):                 # margin for header wrapping the dry run cannot see
+                t = dict(t, size=z, _pad=pad)
+                break
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)
     if ctx.carry_rows:
         ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]), bullets=[],
@@ -1850,6 +1992,11 @@ def a_waterfall_bridge(ctx, s, sl, n):
     a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="waterfall")), sl, n)
 
 
+def a_football_field(ctx, s, sl, n):
+    """Valuation summary: the floating-bar ranges on the left two thirds, the takeaway and bullets on the right."""
+    a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="range")), sl, n)
+
+
 def a_grid(ctx, s, sl, n):
     """A slide assembled from parts (chart, table, stats, text, callout, process, timeline, matrix2x2, harvey, quote)
     on a grid layout; see parts.py. Imported here, not at the top, because parts.py imports this module."""
@@ -1861,7 +2008,7 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "text_matrix": a_challenge_matrix, "exhibit_argument": a_exhibit_argument, "table_focus": a_table_focus,
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
-              "waterfall_bridge": a_waterfall_bridge, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
+              "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
               "grid": a_grid}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 

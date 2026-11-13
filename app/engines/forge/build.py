@@ -338,7 +338,8 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
 
 
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
-          theme=None, density: str | None = None) -> dict:
+          theme=None, density: str | None = None, fixed_pages: list | None = None,
+          extra_facts: list | None = None) -> dict:
     """density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
@@ -348,7 +349,13 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     rules = rules or load_rules()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    facts = facts_from_brief(brief)
+    facts = facts_from_brief(brief) + [dict(f) for f in extra_facts or []]
+    fixed = [dict(p, fixed=True) for p in fixed_pages or []]
+    narrative_n = max(3, slides_wanted - len(fixed))
+    fixed_txt = ("\nThese data pages are already built from the model and will be inserted as a section before the "
+                 "closing slide; do NOT plan slides that repeat them, build the argument around them and cite their "
+                 "facts (W ids) where you use their numbers:\n" + "\n".join(f"- {p['title']}" for p in fixed)
+                 if fixed else "")
     ends = bookends(brief)
     opening = ('slide 1 MUST be the cover (node "0", archetype cover; the brief asks for an opening slide); '
                if ends["opening"] else 'slide 1 is the cover (node "0"); ')
@@ -362,7 +369,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "title": str, "archetype": str,
 "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
-Exactly {slides_wanted} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.
+Exactly {narrative_n} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.{fixed_txt}
 {STORY[density]}
 Each slide must have the evidence its point needs. Plan ONLY slides whose evidence
 is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
@@ -395,6 +402,13 @@ design. {WRITE[density]}
         content = {"slides": list(ex.map(one, plan))}
     calls += len(plan)
     slides = [s for s in content.get("slides", []) if isinstance(s, dict)]
+    if fixed:                                                  # model pages go in before the closing slide
+        at = len(slides) - 1 if slides and slides[-1].get("archetype") in ("closing", "next_steps", "end") \
+            else len(slides)
+        slides[at:at] = fixed
+        plan[at:at] = [{"node": p.get("node"), "title": p.get("title"), "archetype": p.get("archetype")} for p in fixed]
+        nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
+    is_fixed = lambda i: bool(slides[i].get("fixed"))  # noqa: E731
     from engines.forge import clarity                          # a second, smaller model reads every line once
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
@@ -403,8 +417,8 @@ design. {WRITE[density]}
     for rnd in range(rules["repair"]["max_rounds"] + 1):
         r = render(slides, str(pptx), carry=False, theme=theme, density=density)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
-                       storyline={"nodes": nodes}, render=True, density=density)
+        res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
+                       provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
         fails = _content_failures(res)
         for n, msgs in number_checks(slides, facts, rules).items():
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
@@ -422,6 +436,9 @@ design. {WRITE[density]}
         for i, sl_ in enumerate(slides, 1):
             for e in schema_errors(normalize(sl_)) if sl_.get("archetype") not in ("cover", "section_divider") else []:
                 fails.setdefault(i, []).append("[schema] " + e)
+        for i in range(len(slides)):                         # computed pages are not rewritten by a model
+            if is_fixed(i):
+                fails.pop(i + 1, None)
         rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
         if not fails or rnd == rules["repair"]["max_rounds"]:
             break
