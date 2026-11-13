@@ -1592,6 +1592,44 @@ function showOnboarding() {
   };
 }
 
+/* Bring your context: what ChatGPT, Claude or Gemini already knows about you, by prompt or by data export, and
+   custom GPT / project instructions as skills. */
+async function contextPanel(box) {
+  if (!box) return;
+  let prompt = "";
+  try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
+  box.innerHTML = `<h3 class="onb-h">Bring your context</h3>
+    <p class="muted">So Meshpool knows how you work from day one. Pick either way; both take a minute.</p>
+    <ol class="ctx-steps">
+      <li><b>Ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
+        <div><button class="btn" id="ctxCopy">Copy the prompt</button></div>
+        <textarea id="ctxText" rows="4" placeholder="Paste the answer here"></textarea>
+        <div><button class="btn" id="ctxGo">Import the answer</button></div></li>
+      <li><b>Or upload your data export.</b> ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data.
+        Both email you a .zip. Meshpool keeps your projects' instructions as skills and lasting facts as memory; it does not copy your chats.
+        <div><input type="file" id="ctxZip" accept=".zip"></div></li>
+      <li><b>Have a custom GPT or a Claude project you rely on?</b> Paste its instructions to make it a skill.
+        <input id="ctxName" placeholder="Name, e.g. board-memo-writer">
+        <textarea id="ctxIns" rows="3" placeholder="Paste the instructions"></textarea>
+        <div><button class="btn" id="ctxSkill">Save as a skill</button></div></li>
+    </ol><div class="res" id="ctxRes"></div>`;
+  const res = (t, bad) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ""); r.textContent = t; };
+  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
+  $("#ctxGo", box).onclick = async () => {
+    const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
+    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : "")); } catch (e) { res(e.message, true); }
+  };
+  $("#ctxZip", box).onchange = async ev => {
+    const f = ev.target.files[0]; if (!f) return; res("Reading your export…");
+    const data = await new Promise(ok => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.readAsDataURL(f); });
+    try { const r = await post("/api/import-context", {file: {name: f.name, data}}); res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${r.skills.length} project skills, ${r.memory} facts into memory, ${r.instructions} instructions (from ${r.conversations_seen} conversations; chats not copied).`); } catch (e) { res(e.message, true); }
+  };
+  $("#ctxSkill", box).onclick = async () => {
+    const instructions = $("#ctxIns", box).value.trim(); if (!instructions) return res("Paste the instructions first.", true);
+    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`); } catch (e) { res(e.message, true); }
+  };
+}
+
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
   box.innerHTML = `<div class="res">Looking for skills and MCP servers in Claude, Codex, Cursor and other apps...</div>`;
@@ -1675,6 +1713,7 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
     ${subs.length ? `<h3 class="onb-h">Use your subscriptions</h3><ul class="rows2" id="oSubs">${subs.map(h => `<li><span class="tg"><b>${esc(h.name)}</b><small>${esc(h.description)}</small></span>${h.signed_in ? `<span class="badge added">Signed in</span>` : `<button class="btn" data-login="${esc(h.id)}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="oSubRes"></div>` : ""}
     <div id="oImport"></div>
+    <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   $$("[data-login]", card).forEach(x => x.onclick = async () => {
     try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("oSubRes").className = "res"; RES("oSubRes").textContent = r.message; } catch (e) { RES("oSubRes").className = "res bad"; RES("oSubRes").textContent = e.message; }
@@ -1683,6 +1722,7 @@ function setupStep(o, prev) {
     setTimeout(tick, 3000);
   });
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
+  contextPanel($("#oContext", card));
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click

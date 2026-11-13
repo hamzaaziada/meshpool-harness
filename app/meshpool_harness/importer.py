@@ -222,3 +222,176 @@ def run(keys: list[str]) -> dict:
             except (OSError, ValueError) as e:
                 done["errors"].append(f"{m['name']}: {e}")
     return done
+
+
+# ---------- context: what another assistant already knows about the user -----------------------------------------
+# Two ways in, both a few clicks: (1) a prompt the user pastes into ChatGPT, Claude or Gemini, whose answer they paste
+# back here; (2) the normal data export (the .zip ChatGPT and Claude send by email). Nothing leaves this computer
+# except, for an export, one call to a small model that pulls lasting facts out of conversation titles and openers.
+
+CONTEXT_PROMPT = """I am moving to a new assistant and want it to know me the way you do. Please write out what you \
+know about me from our past conversations and your memory, in exactly this format and nothing else:
+
+## Instructions
+(How I like answers: tone, length, format, language, things to always or never do. One per line, starting with "- ".)
+
+## About me
+(Lasting facts: my role, company, industry, location and time zone, tools and data I use, projects I work on, \
+people and clients I mention often, preferences. One fact per line, starting with "- ". No secrets, passwords or \
+account numbers.)
+
+## Recurring work
+(Tasks I ask for again and again, with how I like them done. One per line, starting with "- ".)"""
+
+
+def context_prompt() -> str:
+    return CONTEXT_PROMPT
+
+
+def _sections(text: str) -> dict:
+    out, cur = {}, None
+    for line in (text or "").replace("\r\n", "\n").split("\n"):
+        h = re.match(r"^\s*#{1,4}\s*(.+?)\s*$", line)
+        if h:
+            cur = h.group(1).strip().lower()
+            out.setdefault(cur, [])
+            continue
+        item = re.match(r"^\s*(?:[-*•]|\d+[.)])\s+(.+)$", line)
+        if item and cur is not None:
+            out[cur].append(item.group(1).strip())
+    return out
+
+
+def import_context_text(text: str) -> dict:
+    """Read the answer to CONTEXT_PROMPT (or any similar list) into Meshpool: preferences become instructions,
+    facts and recurring work become memory. Lines that look like secrets or instructions to the system are refused
+    by the memory store."""
+    from meshpool_harness import assistant as AS
+    sec = _sections(text)
+    if not sec:                                         # a plain list with no headings: treat every line as a fact
+        sec = {"about me": [ln.strip("-•* ").strip() for ln in (text or "").splitlines() if len(ln.strip()) > 3]}
+    ins = [x for k, v in sec.items() if "instruction" in k or "prefer" in k or "style" in k for x in v]
+    facts = [x for k, v in sec.items() if not ("instruction" in k or "prefer" in k or "style" in k) for x in v]
+    added_ins = 0
+    if ins:
+        cur = AS.instructions()
+        new = [x for x in ins if x.lower() not in cur.lower()]
+        if new:
+            AS.set_instructions((cur + "\n" if cur else "") + "\n".join(f"- {x}" for x in new))
+            added_ins = len(new)
+    saved, skipped = 0, []
+    for f in facts:
+        try:
+            r = AS.remember(f[:400])
+            saved += r.startswith("Saved")
+        except ValueError as e:
+            skipped.append(f"{f[:60]}: {e}")
+    return {"instructions": added_ins, "memory": saved, "skipped": skipped}
+
+
+def import_instructions_as_skill(name: str, text: str, description: str = "") -> str:
+    """A custom GPT's instructions, a Claude project's instructions or any saved prompt becomes a Meshpool skill."""
+    from meshpool_harness import skills as SK
+    text = (text or "").strip()
+    if len(text) < 20:
+        raise ValueError("Paste the instructions (at least a sentence).")
+    desc = description.strip() or re.sub(r"\s+", " ", text)[:200]
+    r = SK.create(name or "imported-instructions", desc, text)
+    return r.get("id") or r.get("name") or str(r) if isinstance(r, dict) else str(r)
+
+
+def _write_skill(name: str, desc: str, body: str) -> str:
+    from meshpool_harness import skills as SK
+    slug = re.sub(r"[^a-z0-9-]+", "-", (name or "imported").lower()).strip("-")[:60] or "imported"
+    d = SK.folder() / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {slug}\ndescription: {desc.replace(chr(10), ' ')[:300]}\n---\n\n{body}\n",
+                                encoding="utf-8")
+    return slug
+
+
+def _export_kind(z) -> str:
+    names = set(z.namelist())
+    base = {n.rsplit("/", 1)[-1] for n in names}
+    if "projects.json" in base or "users.json" in base:
+        return "claude"
+    if "conversations.json" in base and ("chat.html" in base or "message_feedback.json" in base or "user.json" in base):
+        return "chatgpt"
+    return "chatgpt" if "conversations.json" in base else "unknown"
+
+
+def _read_json(z, leaf: str):
+    for n in z.namelist():
+        if n.rsplit("/", 1)[-1] == leaf:
+            return json.loads(z.read(n).decode("utf-8", errors="replace"))
+    return None
+
+
+def _openers(convs: list, kind: str, limit: int = 80) -> list[str]:
+    """Title plus the user's first message of the most recent conversations (trimmed): enough to find lasting facts."""
+    rows = []
+    for c in convs or []:
+        title = c.get("title") or c.get("name") or ""
+        first, ts = "", c.get("update_time") or c.get("updated_at") or c.get("create_time") or 0
+        if kind == "chatgpt":
+            for node in (c.get("mapping") or {}).values():
+                m = (node or {}).get("message") or {}
+                if (m.get("author") or {}).get("role") == "user":
+                    parts = (m.get("content") or {}).get("parts") or []
+                    first = " ".join(p for p in parts if isinstance(p, str))
+                    break
+        else:
+            for m in c.get("chat_messages") or []:
+                if m.get("sender") == "human":
+                    first = m.get("text") or ""
+                    break
+        rows.append((str(ts), f"{title} :: {re.sub(chr(10), ' ', first)[:240]}"))
+    rows.sort(reverse=True)
+    return [r for _, r in rows[:limit]]
+
+
+def import_export(path: str, client=None) -> dict:
+    """Read a ChatGPT or Claude data export (.zip). Claude projects (their instructions and knowledge files) become
+    skills; lasting facts about the user, distilled by a small model from recent conversation titles and openers,
+    become memory. Conversations themselves are not copied."""
+    import zipfile
+    z = zipfile.ZipFile(path)
+    kind = _export_kind(z)
+    if kind == "unknown":
+        raise ValueError("This does not look like a ChatGPT or Claude export (no conversations.json inside).")
+    done = {"kind": kind, "skills": [], "memory": 0, "instructions": 0, "skipped": []}
+    if kind == "claude":
+        for p in _read_json(z, "projects.json") or []:
+            body = (p.get("prompt_template") or "").strip()
+            docs = p.get("docs") or []
+            if not body and not docs:
+                continue
+            text = body or f"Project knowledge for {p.get('name', 'this project')}."
+            if docs:
+                text += "\n\nKnowledge files (in this skill's folder): " + ", ".join(d.get("filename", "doc") for d in docs)
+            slug = _write_skill(f"project-{p.get('name', 'claude')}", p.get("description") or
+                                f"Instructions and knowledge from the Claude project '{p.get('name', '')}'.", text)
+            from meshpool_harness import skills as SK
+            for d in docs[:30]:
+                fn = re.sub(r"[^\w .-]", "_", d.get("filename") or "doc.txt")[:80]
+                (SK.folder() / slug / fn).write_text(d.get("content") or "", encoding="utf-8")
+            done["skills"].append(slug)
+    convs = _read_json(z, "conversations.json") or []
+    lines = _openers(convs, kind)
+    if lines:
+        try:
+            from meshpool_harness.core.client import LiveClient
+            client = client or LiveClient("context_import")
+            r = client.chat(model=os.environ.get("MH_CONTEXT_MODEL", "gpt-6-luna"), max_tokens=2000, temperature=0.1,
+                            task_id="context-import", role="worker", messages=[
+                                {"role": "system", "content": "From these conversation titles and first messages, write "
+                                 "what a new assistant should know about this person, in the format below. Only lasting "
+                                 "facts and preferences supported by several conversations; no secrets, no one-off "
+                                 "questions, no guesses.\n\n" + CONTEXT_PROMPT.split("in exactly this format and nothing else:")[1]},
+                                {"role": "user", "content": "\n".join(lines)}])
+            got = import_context_text(r["choices"][0]["message"].get("content") or "")
+            done.update(memory=got["memory"], instructions=got["instructions"], skipped=got["skipped"])
+        except Exception as e:  # the export still counts: projects were imported
+            done["skipped"].append(f"context from conversations: {type(e).__name__}")
+    done["conversations_seen"] = len(convs)
+    return done
