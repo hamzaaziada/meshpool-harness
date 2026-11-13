@@ -696,7 +696,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = W._inside(W.check_root(b.get("root", "")), b.get("path", ""))
                 if not p.exists():
                     raise ValueError("That file is gone.")
-                reveal(p)
+                try:
+                    reveal(p)
+                except OSError:
+                    return self._send(400, {"error": f"There's no app on this computer to open {p.name}. It is at: {p}"})
                 return self._send(200, {"ok": True})
             if u.path == "/api/attach":
                 import base64
