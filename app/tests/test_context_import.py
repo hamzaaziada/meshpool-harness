@@ -92,5 +92,5 @@ def test_bundled_professional_skills_ship_with_their_licence():
         assert f"name: {name}" in (d / name / "SKILL.md").read_text()
     for name in ("finance-buy-side-deal-analysis", "finance-trading-comps", "finance-precedent-transactions",
                  "finance-dcf-valuation", "finance-assumption-book", "finance-three-statement-model",
-                 "finance-valuation-method-selection"):
+                 "finance-valuation-method-selection", "finance-research-method"):
         assert (d / name / "SKILL.md").exists()

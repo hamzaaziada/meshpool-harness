@@ -41,7 +41,7 @@ INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md", "instructions.md", "INSTRUCTIONS.
 KNOWLEDGE_WORK = "Anthropic knowledge-work plugins (Apache-2.0)"
 FINANCE_KIT = ["finance-buy-side-deal-analysis", "finance-trading-comps", "finance-precedent-transactions",
                "finance-dcf-valuation", "finance-assumption-book", "finance-three-statement-model",
-               "finance-valuation-method-selection"]
+               "finance-valuation-method-selection", "finance-research-method"]
 BUILTIN = [
     {"id": "finance-kit", "name": "Finance kit", "prefix": None, "skills": FINANCE_KIT,
      "source": "Meshpool", "license": "Apache-2.0",
