@@ -734,6 +734,9 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     cd = CategoryChartData()
     cd.categories = cats
     fmt = "0" if not c.get("decimals") else "0." + "0" * int(c["decimals"])
+    if str(c.get("unit", "")).strip().lower() in ("%", "pp", "x"):          # the unit rides on the label: 38%
+        u = str(c["unit"]).strip()
+        fmt = f'{fmt}"{u if u != "pp" else " pp"}";-{fmt}"{u if u != "pp" else " pp"}"'
     if kind == "waterfall":
         vals = [float(v or 0) for v in series[0]["values"]]
         base, run = [], 0.0
@@ -800,7 +803,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False
         s.data_labels.font.size = Pt(T["label"])
-        if kind in ("column", "bar") and not multi:
+        if kind in ("column", "bar"):                     # clustered too: labels outside, in text colour
             s.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
             s.data_labels.font.color.theme_color = TC.TEXT_1
         elif kind == "line":
@@ -901,7 +904,8 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     hs = row_heights(size_, row_min(size_))
     room = h - head_h(size_) - sum(hs)                            # rows stretch to fill the space they have,
     if room > 0:                                                  # a little air per row, never stretched rows:
-        hs = [hv + min(0.08, room / len(hs)) for hv in hs]        # a short table gets a different composition
+        pad = t.get("_pad", 0.08)                                 # a short table gets a different composition
+        hs = [hv + min(pad, room / len(hs)) for hv in hs]
     if dry:
         return float("inf") if ctx.carry_rows else sum(hs) + head_h(size_)
     gf = sl.shapes.add_table(nrows, len(cols), Inches(x), Inches(y), Inches(w), Inches(sum(hs) + head_h(size_)))
@@ -926,7 +930,14 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     hh = col_head_h(size_)
     tbl.rows[hdr - 1].height = Inches(hh)
     hl, it = set(t.get("highlight_rows") or []), set(t.get("italic_rows") or [])
-    heat = {int(k): v for k, v in (t.get("heat") or {}).items()}
+    heat = {}
+    for k, v in (t.get("heat") or {}).items():                    # model-supplied heat values: numbers only
+        try:
+            nums = [float(z) for z in v if isinstance(z, (int, float)) or re.match(r"^-?[\d.]+$", str(z))]
+            if nums:
+                heat[int(k)] = nums
+        except (TypeError, ValueError):
+            continue
     size = size_
 
     def put(cell, text, bold=False, italic=False, align=PP_ALIGN.CENTER, color=TC.TEXT_1, sz=size, anchor=MSO_ANCHOR.MIDDLE):
@@ -1150,9 +1161,7 @@ def fallback(s: dict) -> dict:
             s["archetype"] = "argument_only"
             if not s.get("blocks"):
                 s["blocks"] = [{"text": "", "bullets": list(s.get("bullets") or [])}]
-            if (s.get("callout") or {}).get("bullets"):
-                s["blocks"] = list(s["blocks"]) + [{"text": "**So what**", "bullets": s["callout"]["bullets"]}]
-            return s
+            return s                                        # the callout stays a callout (so-what band)
         s["chart"] = st
         if s.get("archetype") in ("exhibit_argument",) and s.get("blocks") and s.get("title_right"):
             return s
@@ -1194,8 +1203,19 @@ def a_argument_only(ctx, s, sl, n):
             blocks.append({"text": b["text"], "size": ARGUMENT["bullet"] + 2, "bullet": True, "space_before": 4,
                            "prov": b.get("prov")})
     x, w = span(0, 8)
-    blocks, _ = _fit(blocks, w, BODY_B - BODY_Y, 11)
-    _write(_box(sl, x, BODY_Y, w, BODY_B - BODY_Y, "Argument"), blocks, ctx, n)
+    top_h = BODY_B - BODY_Y
+    co = [b["text"] if isinstance(b, dict) else str(b) for b in (s.get("callout") or {}).get("bullets") or []]
+    if co:                                               # so-what band across the foot of the body
+        cbl = [{"text": t, "size": ARGUMENT["callout"] + 1, "bullet": True, "space_before": 3,
+                "color": TC.BACKGROUND_1} for t in co[:3]]
+        cw = RIGHT - LEFT - 0.5
+        ch = min(1.6, _need(cbl, cw) + 0.25)
+        cy = BODY_B - ch
+        _fill(sl, LEFT, cy, RIGHT - LEFT, ch, TC.TEXT_2, "ov_SoWhat")
+        _write(_box(sl, LEFT + 0.25, cy + 0.06, cw, ch - 0.1, "ov_SoWhatText", MSO_ANCHOR.MIDDLE), cbl, ctx, n)
+        top_h = cy - 0.2 - BODY_Y
+    blocks, _ = _fit(_grow(blocks, w, top_h), w, top_h, 11)
+    _write(_box(sl, x, BODY_Y, w, top_h, "Argument"), blocks, ctx, n)
 
 
 # ------------------------------------------------------------------ archetypes
@@ -1262,8 +1282,11 @@ def a_closing(ctx, s, sl, n):
                [{"text": t, "size": T["head"], "bold": True, "numbers": False}])
     _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.TEXT_1, 0.75, "HeadRule")
     top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
-    if s.get("footnotes"):
-        bottom -= 0.25
+    notes = s.get("footnotes") or []
+    if notes:
+        notes_h = 0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04
+        bottom -= notes_h + 0.06
+        ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
 
     def cells(st, size):
         a = [{"text": st.get("action", ""), "size": size + (4 if size > T["body"] else 2), "bold": True, "numbers": False}]
@@ -1274,12 +1297,23 @@ def a_closing(ctx, s, sl, n):
                "numbers": False, "color": TC.TEXT_2}] if has_when else []
         return a, d, wh
     size = T["body"] + (2 if len(steps) <= 3 else 0)          # few steps: larger type before larger gaps
+    keep_ms = 3
     while True:
-        laid = [cells(st, size) for st in steps]
+        steps_ = [dict(st, milestones=(st.get("milestones") or [])[:keep_ms]) for st in steps]
+        laid = [cells(st, size) for st in steps_]
         need = [max(_need(a, aw), _need(d, dw) if d else 0, _need(wh, ww) if wh else 0, 0.4) + 0.12 for a, d, wh in laid]
-        if sum(need) <= bottom - top or size <= 10:
+        if sum(need) <= bottom - top:
             break
-        size -= 1
+        if size > 10:
+            size -= 1
+        elif keep_ms > 0:                                    # at the floor: milestones go to the notes, not off-page
+            keep_ms -= 1
+        else:
+            break
+    if keep_ms < 3:
+        cut = [f"{st.get('action')}: " + "; ".join((st.get("milestones") or [])[keep_ms:]) for st in steps
+               if (st.get("milestones") or [])[keep_ms:]]
+        s["notes"] = (s.get("notes", "") + "\nMilestones not shown: " + " | ".join(cut)).strip()
     if sum(need) > bottom - top:
         ctx.miss(n, "the next steps", int((sum(need) - (bottom - top)) * 30))
     gap = min(0.35, max(0.0, (bottom - top - sum(need)) / max(1, len(steps))))  # thin steps stay flagged (P20)
@@ -1433,6 +1467,56 @@ def a_exhibit_argument(ctx, s, sl, n):
         _write(_box(sl, rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1, "ov_SoWhatText", MSO_ANCHOR.MIDDLE), cb, ctx, n)
 
 
+_NUMCELL = re.compile(r"^\s*([+\-−]?)\s*([$€£]?)\s*(\d[\d,]*(?:\.\d+)?)\s*(%|pp|x|[KMBT]|bn|m)?\s*$", re.I)
+
+
+def _table_as_chart(t: dict):
+    """A small table whose value columns are numbers in one unit -> clustered bar/column chart data (or None)."""
+    rows = t.get("rows") or []
+    cols = t.get("columns") or []
+    if not 2 <= len(rows) <= 6 or len(cols) < 2:
+        return None
+    units, series = None, []
+    for ci in range(1, len(cols)):
+        parsed = []
+        for r in rows:
+            m = _NUMCELL.match(_plain(r[ci]).replace("−", "-")) if ci < len(r) else None
+            if not m:
+                parsed = None
+                break
+            sign, cur, num, unit = m.groups()
+            parsed.append(((-1 if sign in ("-", "−") else 1) * float(num.replace(",", "")), (cur or "") + (unit or "").lower()))
+        if not parsed or len({u for _, u in parsed}) != 1:
+            continue
+        u = parsed[0][1]
+        if units is None:
+            units = u
+        if u == units and len(series) < 3:
+            series.append({"name": _plain(cols[ci]), "values": [v for v, _ in parsed]})
+    if not series:
+        return None
+    cats = [_plain(r[0]) for r in rows]
+    kind = "bar" if max(len(c) for c in cats) > 14 else "column"
+    decimals = 1 if any(abs(v - round(v)) > 1e-9 for se in series for v in se["values"]) else 0
+    hl = [cats[i] for i in t.get("highlight_rows") or [] if i < len(cats)] if len(series) == 1 else []
+    return {"kind": kind, "categories": cats, "series": series, "unit": units, "decimals": decimals,
+            "highlight_categories": hl, "alt": f"{kind} chart: " + "; ".join(se["name"] for se in series)}
+
+
+def _grow(blocks, w, h, max_bump=2):
+    """Short text steps up the type scale (at most two points) instead of leaving the column half empty."""
+    import copy
+    best = blocks
+    for bump in range(1, max_bump + 1):
+        trial = copy.deepcopy(blocks)
+        for b in trial:
+            b["size"] = b.get("size", T["body"]) + bump
+        if _need(trial, w) > h * 0.9:
+            break
+        best = trial
+    return best
+
+
 def a_table_focus(ctx, s, sl, n):
     _header(ctx, s, sl, n)
     t = s["table"]
@@ -1451,17 +1535,29 @@ def a_table_focus(ctx, s, sl, n):
     bullets = [b if isinstance(b, dict) else {"text": b} for b in s.get("bullets") or []]
     natural = _table(ctx, sl, n, dict(t), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
     ctx.carry_rows = None
-    if bullets and len(t.get("columns") or []) <= 4 and natural < 0.72 * (bottom - y):
-        tx, tw = span(0, 7)                                # short table: table left, its argument right
-        ax, aw = span(8, 11)
-        gf = _table(ctx, sl, n, t, tx, y, tw, FOOT_RULE_Y - 0.04 - notes_h - y)
+    hgt = FOOT_RULE_Y - 0.04 - notes_h - y
+    tx, tw = span(0, 7)
+    ax, aw = span(8, 11)
+    as_chart = _table_as_chart(t) if bullets else None
+    side = None
+    if bullets and not as_chart and len(t.get("columns") or []) <= 4 and natural < 0.72 * (bottom - y):
+        side = _table(ctx, sl, n, dict(t), tx, y, tw, hgt, dry=True)   # measured at the width it will be drawn
+        ctx.carry_rows = None
+        if side == float("inf"):
+            side = None
+    if as_chart or side:
+        if as_chart:                                       # a small all-number table reads better as a chart
+            _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
+            ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
+        else:                                              # short table: table left, its argument right
+            _table(ctx, sl, n, dict(t, _pad=0.16), tx, y, tw, hgt)
         blocks = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
                   if tk.get("text") else [])
         blocks += [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
                    for b in bullets]
-        hgt = FOOT_RULE_Y - 0.04 - notes_h - y
         _rule(sl, ax, y, aw, TC.TEXT_1, 0.75, "TakeawayRule")
-        _write(_box(sl, ax, y + 0.1, aw, hgt - 0.1, "Takeaways"), _fit(blocks, aw, hgt - 0.1, 11)[0], ctx, n)
+        _write(_box(sl, ax, y + 0.1, aw, hgt - 0.1, "Takeaways"), _fit(_grow(blocks, aw, hgt - 0.1), aw, hgt - 0.1, 11)[0],
+               ctx, n)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
         return
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)

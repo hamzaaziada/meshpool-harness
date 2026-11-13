@@ -49,13 +49,13 @@ renderer applies a strict consulting design; you only fill fields. Dense is good
   "highlight_rows": [index of the focus row], "italic_rows": [benchmark/average rows], "total_row": bool,
   "heat": optional {"column index": [all numeric values of that column]} for heat-map shading,
   "size": 12 (10 if more than 14 rows)}; "takeaway": {"text": one bold line}; "bullets": 2-4 lines interpreting
-  the table (required when it has fewer than 8 rows: a short table sits beside them).
+  the table (required when it has fewer than 12 rows: a short table sits beside them).
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories} on the left 2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
 FILL: every slide must carry enough substance to fill its page the way a top strategy firm's slide does; the
 renderer never stretches thin content. Targets: challenge_matrix cells = lead + 2-3 bullets; exhibit_argument =
-2-3 blocks of intro + 2-3 bullets; chart slides = takeaway + 3 bullets of 15-25 words; a table under 8 rows needs
+2-3 blocks of intro + 2-3 bullets; chart slides = takeaway + 3 bullets of 15-25 words; a table under 12 rows needs
 2-4 bullets. If the evidence for a slide is thin, merge it into a neighbour instead of padding.
 Text markup: **bold phrase**; a bold phrase containing a number is shown in the emphasis colour; ^1 is a
 superscript footnote marker. Numbers in bullets are emphasised automatically. Footnotes go in "footnotes"."""
@@ -195,14 +195,18 @@ def fill_checks(slides) -> dict[int, list[str]]:
                             "matrix fills the slide; add the evidence, or drop the row")
         elif a in ("table_focus", "table_highlight"):
             rows = len((s.get("table") or {}).get("rows") or [])
-            if rows < 8 and len(s.get("bullets") or []) < 2:
+            if rows < 12 and len(s.get("bullets") or []) < 2:
                 msgs.append(f"the table has {rows} rows: add 'bullets' (2-4 lines interpreting it, with numbers); "
-                            "they sit beside a short table. Or show it as a chart in exhibit_argument")
+                            "they sit beside a table this short. Or show it as a chart in exhibit_argument")
         elif a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
             if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < 35:
                 msgs.append("the takeaway column is thin: give 3 bullets (15-25 words each, with the numbers) that "
                             "interpret the chart: the driver, the comparison, the implication")
-        elif a == "exhibit_argument":
+        c = s.get("chart") or {}
+        if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
+            msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
+                        "split over time, or a comparison with a benchmark")
+        if a == "exhibit_argument":
             if len(s.get("blocks") or []) < 2 or _words(s.get("blocks")) < 60:
                 msgs.append("the argument is thin: give 2-3 blocks, each an intro sentence and 2-3 bullets with "
                             "numbers, so the right half is full")
@@ -327,18 +331,22 @@ design. Fill the archetype's fields completely and densely, the way a top strate
         rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
         if not fails or rnd == rules["repair"]["max_rounds"]:
             break
+        if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
+            break                                            # two rounds without progress: stop paying for repairs
         for n, msgs in sorted(fails.items()):
             if n - 1 >= len(slides):
                 continue
             s = slides[n - 1]
             ev = set(next((x.get("evidence", []) for x in story.get("slides", []) if x.get("node") == s.get("node")), []))
             rel = [f for f in facts if f["id"] in ev] or facts
+            if any(m.startswith(("[P20]", "[fill]", "[schema]")) for m in msgs):
+                rel = facts                                  # a thin slide needs the whole evidence base to fill
             try:
                 fixed = _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
 {SLIDE_SHAPE}
 {ARCH_HELP}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
-                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 4000)
+                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 6000)
                 calls += 1
                 if fixed.get("archetype") in ARCHETYPES:
                     slides[n - 1] = fixed
