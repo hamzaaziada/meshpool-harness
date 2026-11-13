@@ -122,6 +122,7 @@ function shell() {
         <label class="search">${ICON.search}<input id="q" placeholder="Search threads" aria-label="Search threads"><span class="kbd">${MOD}K</span></label>
       </div>
       <div class="side-list" id="sideList"></div>
+      <button class="updbar" id="updBar" hidden></button>
       <div class="side-foot">
         <button id="openSettings"><span class="kdot" id="kdot"></span>Settings<span class="kbd" style="margin-left:auto">${MOD},</span></button>
       </div>
@@ -145,6 +146,7 @@ function shell() {
   $("#newThread").onclick = newThread;
   $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
   $("#openSettings").onclick = () => openSettings();
+  $("#updBar").onclick = () => openSettings("about");
   $("#hideSide").onclick = toggleSide;
   $("#q").oninput = () => { clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
   setupComposer();
@@ -226,18 +228,24 @@ function renderSide() {
   if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(thHTML).join("")}</ul>`;
   html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
   if (!byProj.size) html += `<div class="empty-side">Add a folder to start. Meshpool works inside the folders you choose.</div>`;
-  for (const [path, list] of byProj) {
+  // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
+  const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
+  const order = [...byProj].sort((a, z) => last(z[1]) - last(a[1]));
+  for (const [path, list] of order) {
     const closed = S.closedProjects.has(path);
     html += `<div class="proj ${closed ? "closed" : ""}" data-p="${esc(path)}">
       <div class="proj-h" title="${esc(path)}"><span class="chev">${ICON.chev}</span>${ICON.dir}<span class="nm">${esc(projName(path))}</span>
         <span class="acts"><button class="iconbtn" data-newin="${esc(path)}" title="New thread in this folder" aria-label="New thread in ${esc(projName(path))}">${ICON.plus}</button><button class="iconbtn" data-pmenu="${esc(path)}" aria-label="Folder options">${ICON.more}</button></span></div>
-      <ul class="threads">${list.length ? list.map(thHTML).join("") : `<li class="empty-side" style="padding:2px 8px">No threads yet</li>`}</ul></div>`;
+      ${list.length ? `<ul class="threads">${list.map(thHTML).join("")}</ul>` : ""}</div>`;
   }
   const arch = S.threads.filter(t => t.archived && (t.kind || "code") === S.appMode);
   if (arch.length) {
     html += `<div class="sec"><button class="iconbtn" id="togArch" style="padding:0 4px;font-size:11.5px;font-weight:600;color:var(--ink-3)">${S.showArchived ? "Hide" : "Show"} archived (${arch.length})</button></div>`;
     if (S.showArchived) html += `<ul class="threads" style="padding-left:0">${arch.map(thHTML).join("")}</ul>`;
   }
+  // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it.
+  if (el.dataset.mode === "list" && el._html === html) return;
+  el._html = html; el.dataset.mode = "list";
   el.innerHTML = html;
   $("#addProj")?.addEventListener("click", pickProject);
   $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
@@ -266,6 +274,7 @@ async function renderSearch(q) {
   if (($("#q").value || "").trim().toLowerCase() !== q) return;
   const ids = new Set(local.map(t => t.id));
   const more = hits.filter(h => !ids.has(h.id));
+  el.dataset.mode = "search";
   el.innerHTML = `<div class="sec">Results</div><ul class="threads" style="padding-left:0">${local.map(thHTML).join("")}${more.map(h => `<li class="th" data-id="${esc(h.id)}"><span class="dot"></span><span class="tt">${esc(h.title)}<span class="od" style="display:block;font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.snippet)}</span></span></li>`).join("")}</ul>${!local.length && !more.length ? `<div class="empty-side">Nothing matches.</div>` : ""}`;
   bindThreads(el);
 }
@@ -338,7 +347,7 @@ function renderTop() {
     ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}${esc(projName(root))}</button>` : ""}
     <span id="branchChip"></span>
     <span class="sp"></span>
-    ${usage ? `<span class="chip" title="Tokens in this thread">${esc(usage)}</span>` : ""}
+    ${usage ? `<span class="chip use" title="Tokens in this thread">${esc(usage)}</span>` : ""}
     <button class="tbtn" id="stepsBtn" aria-pressed="${!!S.steps}" title="Show every step: what the model is thinking and each tool it uses (${MOD}E)">${ICON.eye}<span>Steps</span></button>
     ${tabs.map(([k, ic, lb, kb]) => `<button class="tbtn" data-panel="${k}" aria-pressed="${S.panel === k}" title="${lb}${kb ? " (" + kb + ")" : ""}">${ic}<span>${lb}</span></button>`).join("")}
     ${v ? `<button class="tbtn" id="tmore" aria-label="Thread options">${ICON.more}</button>` : ""}`;
@@ -1215,10 +1224,13 @@ async function renderSection(sec) {
   } else if (sec === "about") {
     const a = await api("/api/about");
     b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}</h3>
-      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness" target="_blank" rel="noopener">Downloads and updates</a></p>
+      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a></p>
+      <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <h3 style="font-size:15px;margin:16px 0 6px">License</h3><pre class="lic">${esc(a.notice)}</pre>
       <details style="margin-top:10px"><summary class="linkbtn" style="display:inline">Apache License 2.0, full text</summary><pre class="lic">${esc(a.license)}</pre></details>
       <details style="margin-top:8px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
+    updatePanel(S.upd);
+    $("#updCheck").onclick = async () => { RES("updRes").className = "res"; RES("updRes").textContent = "Checking..."; updatePanel(await checkUpdate(true)); };
   } else if (sec === "web") {
     const keys = ["BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL"];
     b.innerHTML = `${close}<h3>Web search</h3><p class="lead">Every harness can search the web, read pages and PDFs, and research a question across many sources at once, without opening a browser. It works with no setup through free search engines. For heavy research, add a key below: searches get faster and are never limited.</p>
@@ -1531,6 +1543,41 @@ function setupStep(o, prev) {
   $("#oFinish", card).onclick = () => { o.remove(); renderBar(); renderHero(); };
 }
 
+/* ================================== updates ================================== */
+async function checkUpdate(force) {
+  try { S.upd = await post("/api/update/check", {force: !!force}); } catch (e) { S.upd = {ok: false, error: e.message}; }
+  const bar = $("#updBar");
+  if (bar) { bar.hidden = !(S.upd.ok && S.upd.newer); bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(S.upd.latest || "")} is available<span class="go">Update</span>`; }
+  return S.upd;
+}
+function updatePanel(u) {
+  const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
+  if (!u) { res.textContent = ""; more.innerHTML = ""; return; }
+  if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = ""; return; }
+  if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = ""; return; }
+  res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
+  const how = u.kind === "mac-app" ? "Downloads the new Mac app and opens it." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">Update now</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>`;
+  const btn = $("#updGo"); if (!btn) return;
+  btn.onclick = async () => {
+    const out = RES("updOut"); btn.disabled = true; btn.textContent = "Updating...";
+    out.className = "res"; out.textContent = "Downloading the release. Keep Meshpool open.";
+    let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
+    btn.disabled = false; btn.textContent = "Update now";
+    if (!r.ok) { out.className = "res bad"; out.textContent = r.error; return; }
+    out.className = "res ok"; out.textContent = r.message;
+    if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
+    else if (r.action !== "installer") btn.remove();
+  };
+}
+async function restartApp() {
+  const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting Meshpool..."; }
+  try { await post("/api/update/restart", {}); } catch (e) {}
+  const t0 = Date.now();
+  const wait = async () => { try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok && Date.now() - t0 > 2500) { location.reload(); return; } } catch (e) {} if (Date.now() - t0 < 90000) setTimeout(wait, 1000); else if (out) out.textContent = "Meshpool closed. Open it again to use the new version."; };
+  setTimeout(wait, 1500);
+}
+
 /* ================================== boot ================================== */
 (async () => {
   shell();
@@ -1543,5 +1590,6 @@ function setupStep(o, prev) {
   if (S.panel) renderPanel();
   if (!S.settings.has_key) showOnboarding(); else { loadModels().then(renderBar); if (MP.desktop && !store("permsAsked")) permStep(); }
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
+  setTimeout(() => checkUpdate(false), 3000);
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();

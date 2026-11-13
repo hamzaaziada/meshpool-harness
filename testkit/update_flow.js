@@ -1,0 +1,31 @@
+// Drives the update through the UI. Called by update_flow.sh.
+const {chromium} = require("playwright");
+const [port, dir] = process.argv.slice(2);
+const results = [];
+const check = (n, ok, d = "") => { results.push(ok); console.log((ok ? "PASS " : "FAIL ") + n + (ok ? "" : "  -> " + String(d).slice(0, 300))); };
+(async () => {
+  const b = await chromium.launch(); const p = await b.newPage({viewport: {width: 1280, height: 800}});
+  const errs = []; p.on("pageerror", e => errs.push(e.message));
+  await p.addInitScript(() => { try { localStorage.setItem("mp_permsAsked", "1"); } catch (e) {} });
+  await p.goto(`http://127.0.0.1:${port}/`);
+  const bar = await p.waitForSelector("#updBar:not([hidden])", {timeout: 15000}).catch(() => null);
+  check("an older copy shows the update bar", !!bar, "no bar");
+  check("the bar names the new version", bar && /2\.9\.0/.test(await bar.innerText()), bar && await bar.innerText());
+  if (bar) await bar.click();
+  await p.waitForSelector("#updGo", {timeout: 10000}).catch(() => {});
+  check("About shows the available version and an Update button", !!await p.$("#updGo"), await p.innerText("body").catch(() => ""));
+  await p.click("#updGo");
+  await p.waitForFunction(() => /Restart/.test(document.querySelector("#updGo")?.textContent || "") || /res bad/.test(document.querySelector("#updOut")?.className || ""), null, {timeout: 120000}).catch(() => {});
+  const msg = await p.innerText("#updOut").catch(() => "");
+  check("Update now installs and offers a restart", /Updated to Meshpool 2\.9\.0/.test(msg), msg);
+  await p.click("#updGo");
+  await p.waitForNavigation({timeout: 60000}).catch(() => {});
+  await p.waitForSelector("#openSettings", {timeout: 30000}).catch(() => {});
+  const ver = await p.evaluate(() => api("/api/about").then(a => a.version)).catch(e => "error " + e.message);
+  check("after Restart the app is back on the new version", ver === "2.9.0", ver);
+  await p.waitForTimeout(4500);
+  check("the update bar is gone after updating", await p.$("#updBar[hidden]") !== null);
+  check("no page errors", !errs.length, errs.join(" | "));
+  console.log(`\n${results.filter(Boolean).length}/${results.length} passed`);
+  await b.close(); process.exit(results.every(Boolean) ? 0 : 1);
+})();

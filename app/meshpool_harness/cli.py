@@ -131,6 +131,9 @@ def _agent_parser():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
+        import time
+        time.sleep(3)
     if os.name == "nt" and sys.executable.lower().endswith("pythonw.exe"):
         # The Windows app runs windowless under pythonw.exe, whose children get no usable stdin/stdout. Launch child
         # Pythons (Hermes, MCP servers, engines) with python.exe; their console windows are suppressed.
