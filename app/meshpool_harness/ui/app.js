@@ -48,9 +48,15 @@ const ICON = {
 };
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}});
+  let r;
+  try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
+  catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
   let j = null; try { j = await r.json(); } catch (e) { /* not JSON */ }
-  if (!r.ok) throw new Error((j && j.error) || `HTTP ${r.status}`);
+  if (!r.ok) {
+    if (j && j.error && r.status < 500) throw new Error(j.error);
+    if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
+    throw new Error("Something went wrong on Meshpool's side. Try again." + (j && j.error ? ` (${j.error})` : ""));
+  }
   return j;
 }
 const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});
@@ -307,7 +313,7 @@ function threadMenu(e, id) {
     {label: "Rename", fn: () => renameThread(id)},
     {label: t.pinned ? "Unpin" : "Pin", fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
     {label: t.archived ? "Unarchive" : "Archive", fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
-    {label: "Delete", danger: true, fn: async () => { if (await ask({title: "Delete this thread?", text: "Its files in your project stay as they are.", ok: "Delete", danger: true})) threadAct(id, "delete"); }},
+    {label: "Delete", danger: true, fn: async () => { if (await ask({title: "Delete this thread?", text: "The conversation is removed. Files in your project stay as they are.", ok: "Delete thread", danger: true})) threadAct(id, "delete"); }},
   ]);
 }
 function projMenu(e, path) {
@@ -336,7 +342,7 @@ async function pickProject() {
   try {
     let r = await post("/api/projects", {action: "pick"});
     if (r.no_picker) {                 // no folder dialog on this computer: type or paste the path instead
-      const p = await ask({title: "Add a folder", text: "This computer has no folder picker. Type or paste the folder's full path.", value: "", ok: "Add"});
+      const p = await ask({title: "Add a folder", text: "Type or paste the full path of the folder.", value: "", ok: "Add folder"});
       if (!p) return;
       r = await post("/api/projects", {action: "add", path: p.trim()});   // a wrong path shows "Folder not found"
     }
@@ -448,7 +454,7 @@ function renderBar() {
   $("#attBtn").onclick = () => $("#fileIn").click();
   $("#sendBtn")?.addEventListener("click", () => sendNow(false));
   $("#stopBtn")?.addEventListener("click", stopNow);
-  $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Interrupt."); } });
+  $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
   const root = curRoot();
   $("#hintline").innerHTML = c.busy ? `Enter adds to this task · ${MOD}Enter does it now instead · Esc stops`
     : root ? `Working in <b>${esc(projName(root))}</b>${S.cur ? "" : ` · <button class="linkbtn" id="chgProj" style="font-size:11.5px;padding:0">change folder</button>`}` : "";
@@ -489,7 +495,7 @@ async function stopNow() {
   try { await post(`/api/agent/${S.cur.id}/stop`); } catch (e) { toast(e.message); }
   clearTimeout(S.cur.pollT); poll();
   const cur = S.cur, t0 = Date.now();
-  const wait = () => { if (S.cur !== cur || !["working", "waiting"].includes(cur.view?.state) || Date.now() - t0 > 20000) { S.stopping = false; renderBar(); if (Date.now() - t0 > 20000 && ["working", "waiting"].includes(cur.view?.state)) toast("Still stopping. The harness is finishing its current step."); return; } setTimeout(wait, 300); };
+  const wait = () => { if (S.cur !== cur || !["working", "waiting"].includes(cur.view?.state) || Date.now() - t0 > 20000) { S.stopping = false; renderBar(); if (Date.now() - t0 > 20000 && ["working", "waiting"].includes(cur.view?.state)) toast("Stopping… finishing the current step."); return; } setTimeout(wait, 300); };
   wait();
 }
 async function sendNow(interrupt) {
@@ -1035,7 +1041,7 @@ async function openFile(root, rel, node) {
     if (f.readonly) { ta.readOnly = true; $("#fsave").outerHTML = `<span class="pnote" style="padding:0">${esc(f.note || "Read only")}</span>`; return; }
     ta.oninput = () => $("#fsave").disabled = false;
     ta.onkeydown = e => { if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); $("#fsave").click(); } };
-    $("#fsave").onclick = async () => { try { await post("/api/file", {root, path: rel, text: ta.value}); $("#fsave").disabled = true; toast("Saved"); } catch (e) { toast(e.message); } };
+    $("#fsave").onclick = async () => { try { await post("/api/file", {root, path: rel, text: ta.value}); $("#fsave").disabled = true; toast("File saved"); } catch (e) { toast(e.message); } };
   } catch (e) { v.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
 }
 function panelTerm(body) {
@@ -1110,7 +1116,7 @@ async function drawCI(root, fresh) {
     ${failingRuns.length ? `<div class="row" style="margin-top:8px"><button class="btn primary" id="ciFix">Ask the agent to fix the failing CI</button></div>` : ""}`;
   $("#ciRef").onclick = () => drawCI(root, true);
   $("#ciConn")?.addEventListener("click", () => openSettings("connectors"));
-  $("#ciMerge")?.addEventListener("click", async () => { if (!await ask({title: `Merge #${pr.number}?`, text: `Squash and merge ${ci.branch} into ${pr.base} on GitHub.`, ok: "Merge"})) return; try { await post("/api/git/ci", {root, action: "merge", pr: pr.number}); toast("Merged"); drawCI(root, true); } catch (e) { toast(e.message, 5000); } });
+  $("#ciMerge")?.addEventListener("click", async () => { if (!await ask({title: `Merge #${pr.number}?`, text: `Squash and merge ${ci.branch} into ${pr.base} on GitHub.`, ok: "Merge"})) return; try { await post("/api/git/ci", {root, action: "merge", pr: pr.number}); toast("Pull request merged"); drawCI(root, true); } catch (e) { toast(e.message, 5000); } });
   $$("[data-rerun]", box).forEach(b => b.onclick = async () => { try { await post("/api/git/ci", {root, action: "rerun", run: b.dataset.rerun}); toast("Rerunning the failed jobs"); setTimeout(() => drawCI(root, true), 3000); } catch (e) { toast(e.message, 5000); } });
   $("#ciFix")?.addEventListener("click", () => { const i = $("#input"); i.value = `CI is failing on ${ci.branch}: ${failingRuns.map(r => r.name + " (" + r.url + ")").join(", ")}. Find out why from the logs (use gh or the GitHub tools), fix it, run the tests, commit and push.`; i.focus(); i.dispatchEvent(new Event("input")); });
 }
@@ -1240,7 +1246,7 @@ async function renderSection(sec) {
       const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
       $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
-      $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this task?", text: "It stops running. Threads from earlier runs stay.", ok: "Delete", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
+      $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this scheduled task?", text: "It won't run again. Threads from earlier runs stay.", ok: "Delete task", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });
       $$("[data-topen]", b).forEach(x => x.onclick = () => { $(".scrim")?.remove(); openThread(x.dataset.topen); });
     };
@@ -1318,7 +1324,7 @@ async function renderSection(sec) {
       });
       $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected."; } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
-      $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect?", text: "Threads stop using it. You can connect again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
+      $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Threads stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
     draw((await api("/api/connectors")).connectors);
     return;
@@ -1337,7 +1343,7 @@ async function renderSection(sec) {
     const drawSk = () => {
       $("#skl").innerHTML = S.skills.map(s => `<li><label class="switch"><input type="checkbox" data-id="${esc(s.id)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>$${esc(s.name)}</b><small>${esc(s.description)}</small></span><button class="btn" data-edit="${esc(s.id)}">Edit</button><button class="iconbtn" data-rm="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">${ICON.x}</button></li>`).join("") || `<li class="pnote">No skills yet.</li>`;
       $$("#skl input[data-id]").forEach(i => i.onchange = () => skillAct({action: "toggle", id: i.dataset.id, on: i.checked}));
-      $$("#skl [data-rm]").forEach(x => x.onclick = async () => { if (await ask({title: "Remove this skill?", text: "Its folder is deleted from your skills folder.", ok: "Remove", danger: true})) skillAct({action: "remove", id: x.dataset.rm}); });
+      $$("#skl [data-rm]").forEach(x => x.onclick = async () => { if (await ask({title: "Remove this skill?", text: "Its folder is deleted from your skills folder. This can't be undone.", ok: "Remove skill", danger: true})) skillAct({action: "remove", id: x.dataset.rm}); });
       $$("#skl [data-edit]").forEach(x => x.onclick = async () => {
         const sk = await api("/api/skill?id=" + encodeURIComponent(x.dataset.edit));
         const li = x.closest("li"); li.insertAdjacentHTML("afterend", `<li><div style="flex:1"><textarea class="code" id="skEd">${esc(sk.text)}</textarea><div style="display:flex;gap:6px;margin-top:6px"><button class="btn primary" id="skEdSave">Save</button><button class="btn" id="skEdCancel">Cancel</button></div></div></li>`);
