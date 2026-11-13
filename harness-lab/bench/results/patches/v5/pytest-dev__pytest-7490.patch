@@ -1,56 +1,56 @@
-diff --git a/changelog/7480.bugfix.rst b/changelog/7480.bugfix.rst
+diff --git a/changelog/7490.bugfix.rst b/changelog/7490.bugfix.rst
 new file mode 100644
-index 000000000..f15697c4c
+index 000000000..df6c283d2
 --- /dev/null
-+++ b/changelog/7480.bugfix.rst
-@@ -0,0 +1,3 @@
-+Fixed regression where an ``xfail`` mark added dynamically during a test
-+(e.g. via ``request.node.add_marker``) was no longer honored, so the test
-+was reported as failed instead of xfailed.
++++ b/changelog/7490.bugfix.rst
+@@ -0,0 +1 @@
++Fixed regression where an ``xfail`` marker added dynamically during a test's execution (using ``request.node.add_marker``) was no longer honored, causing the test to fail instead of being reported as xfailed.
 \ No newline at end of file
 diff --git a/src/_pytest/skipping.py b/src/_pytest/skipping.py
-index 335e10996..71fbce557 100755
+index 335e10996..d4824676f 100755
 --- a/src/_pytest/skipping.py
 +++ b/src/_pytest/skipping.py
-@@ -262,6 +262,15 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
+@@ -247,7 +247,8 @@ def pytest_runtest_setup(item: Item) -> None:
+ @hookimpl(hookwrapper=True)
+ def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
+     xfailed = item._store.get(xfailed_key, None)
+-    if xfailed is None:
++    # Check if we have a mark added dynamically by the test function itself.
++    if xfailed is None or not xfailed.run:
+         item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+ 
+     if not item.config.option.runxfail:
+@@ -262,6 +263,9 @@ def pytest_runtest_makereport(item: Item, call: CallInfo[None]):
      outcome = yield
      rep = outcome.get_result()
      xfailed = item._store.get(xfailed_key, None)
-+    # Re-evaluate the xfail marks if the test failed during its execution:
-+    # the test may have added an xfail marker dynamically (for example via
-+    # request.node.add_marker), in which case we must honor it.
-+    if (
-+        call.when == "call"
-+        and call.excinfo
-+        and not call.excinfo.errisinstance(xfail.Exception)
-+    ):
-+        xfailed = evaluate_xfail_marks(item) or xfailed
++    # Check if we have a mark added dynamically by the test function itself.
++    if rep.when == "call" and xfailed is None and not item.config.option.runxfail:
++        item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
      # unittest special case, see setting of unexpectedsuccess_key
      if unexpectedsuccess_key in item._store and rep.when == "call":
          reason = item._store[unexpectedsuccess_key]
 diff --git a/testing/test_skipping.py b/testing/test_skipping.py
-index 8fceb37aa..bfe8d7e77 100755
+index 8fceb37aa..a8c7fea29 100755
 --- a/testing/test_skipping.py
 +++ b/testing/test_skipping.py
-@@ -1230,3 +1230,21 @@ def test_relpath_rootdir(testdir):
+@@ -1230,3 +1230,19 @@ def test_relpath_rootdir(testdir):
      result.stdout.fnmatch_lines(
          ["SKIPPED [[]1[]] tests/test_1.py:2: unconditional skip"]
      )
 +
 +
-+def test_dynamic_xfail_added_during_test(testdir):
-+    """A test which adds an xfail marker to itself at runtime should be
-+    reported as xfailed rather than failed (#7480)."""
++def test_xfail_dynamically_added_during_call(testdir):
++    """An xfail marker added dynamically during the test call should be honored (#7490)."""
 +    testdir.makepyfile(
 +        """
 +        import pytest
 +
-+        def test_xfail(request):
-+            mark = pytest.mark.xfail(reason="dynamic")
++        def test_xfail_test(request):
++            mark = pytest.mark.xfail(reason="xfail")
 +            request.node.add_marker(mark)
 +            assert 0
 +        """
 +    )
-+    result = testdir.runpytest("-rx")
++    result = testdir.runpytest("-rsx")
 +    result.stdout.fnmatch_lines(["*1 xfailed*"])
-+    assert result.ret == 0

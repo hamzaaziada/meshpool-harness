@@ -1,48 +1,41 @@
 diff --git a/django/utils/autoreload.py b/django/utils/autoreload.py
-index cc65c043ab..56747a4644 100644
+index cc65c043ab..51cdba3e6e 100644
 --- a/django/utils/autoreload.py
 +++ b/django/utils/autoreload.py
-@@ -220,6 +220,15 @@ def get_child_arguments():
+@@ -220,6 +220,10 @@ def get_child_arguments():
      py_script = Path(sys.argv[0])
  
      args = [sys.executable] + ['-W%s' % o for o in sys.warnoptions]
-+    if sys.platform == 'win32':
-+        args += ['-Xutf8']
-+    else:
-+        args += [
-+            '-X%s' % (
-+                name if value is True or value is None else '%s=%s' % (name, value)
-+            )
-+            for name, value in sys._xoptions.items()
-+        ]
++    args += [
++        '-X%s%s' % (key, '=%s' % value if value is not True else '')
++        for key, value in sys._xoptions.items()
++    ]
      # __spec__ is set when the server was started with the `-m` option,
      # see https://docs.python.org/3/reference/import.html#main-spec
      # __spec__ may not exist, e.g. when running in a Conda env.
 diff --git a/tests/utils_tests/test_autoreload.py b/tests/utils_tests/test_autoreload.py
-index 7c28a9d4d0..14ce723d09 100644
+index 7c28a9d4d0..5b4272a712 100644
 --- a/tests/utils_tests/test_autoreload.py
 +++ b/tests/utils_tests/test_autoreload.py
-@@ -246,6 +246,23 @@ class TestChildArguments(SimpleTestCase):
-                 [sys.executable, __file__, 'runserver']
-             )
+@@ -203,6 +203,21 @@ class TestChildArguments(SimpleTestCase):
+             [sys.executable, '-Werror', __file__, 'runserver']
+         )
  
 +    @mock.patch('__main__.__spec__', None)
 +    @mock.patch('sys.argv', [__file__, 'runserver'])
 +    @mock.patch('sys.warnoptions', [])
 +    def test_xoptions(self):
-+        with mock.patch.object(
-+            sys,
-+            '_xoptions',
-+            {'utf8': True, 'faulthandler': None, 'int_max_str_digits': '5000'},
-+        ):
++        with mock.patch('sys._xoptions', {'utf8': True}):
 +            self.assertEqual(
 +                autoreload.get_child_arguments(),
-+                [
-+                    sys.executable, '-Xutf8', '-Xfaulthandler',
-+                    '-Xint_max_str_digits=5000', __file__, 'runserver',
-+                ],
++                [sys.executable, '-Xutf8', __file__, 'runserver'],
++            )
++        with mock.patch('sys._xoptions', {'utf8': True, 'foo': 'bar'}):
++            self.assertEqual(
++                autoreload.get_child_arguments(),
++                [sys.executable, '-Xutf8', '-Xfoo=bar', __file__, 'runserver'],
 +            )
 +
- 
- class TestUtilities(SimpleTestCase):
-     def test_is_django_module(self):
+     @mock.patch('__main__.__spec__', None)
+     @mock.patch('sys.warnoptions', [])
+     def test_exe_fallback(self):

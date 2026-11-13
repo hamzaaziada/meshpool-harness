@@ -1,32 +1,90 @@
 diff --git a/CHANGES b/CHANGES
-index bc32362ae..200eba820 100644
+index bc32362ae..e71c7f2ac 100644
 --- a/CHANGES
 +++ b/CHANGES
 @@ -16,6 +16,9 @@ Features added
  Bugs fixed
  ----------
  
-+* #10449: autodoc: The return type of a class is no longer injected into the
-+  class description when :confval:`autodoc_typehints` is ``description``.
++* #9575: autodoc: The annotation of a class is incorrectly rendered as the
++  return type of the class when ``autodoc_typehints = "description"``
 +
  Testing
  --------
  
 diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
-index 06768168e..e08497b26 100644
+index 06768168e..e220f5c5c 100644
 --- a/sphinx/ext/autodoc/typehints.py
 +++ b/sphinx/ext/autodoc/typehints.py
-@@ -29,7 +29,12 @@ def record_typehints(app: Sphinx, objtype: str, name: str, obj: Any,
-                 if param.annotation is not param.empty:
-                     annotation[param.name] = typing.stringify(param.annotation, mode)
-             if sig.return_annotation is not sig.empty:
--                annotation['return'] = typing.stringify(sig.return_annotation, mode)
-+                if objtype == "class":
-+                    # suppress the return type of a class, which is the type
-+                    # of an instance returned by its constructor
-+                    pass
-+                else:
-+                    annotation['return'] = typing.stringify(sig.return_annotation, mode)
-     except (TypeError, ValueError):
-         pass
+@@ -59,7 +59,10 @@ def merge_typehints(app: Sphinx, domain: str, objtype: str, contentnode: Element
  
+         for field_list in field_lists:
+             if app.config.autodoc_typehints_description_target == "all":
+-                modify_field_list(field_list, annotations[fullname])
++                if objtype == 'class':
++                    modify_field_list(field_list, annotations[fullname], suppress_rtype=True)
++                else:
++                    modify_field_list(field_list, annotations[fullname])
+             elif app.config.autodoc_typehints_description_target == "documented_params":
+                 augment_descriptions_with_types(
+                     field_list, annotations[fullname], force_rtype=True
+@@ -83,7 +86,8 @@ def insert_field_list(node: Element) -> nodes.field_list:
+     return field_list
+ 
+ 
+-def modify_field_list(node: nodes.field_list, annotations: Dict[str, str]) -> None:
++def modify_field_list(node: nodes.field_list, annotations: Dict[str, str],
++                      suppress_rtype: bool = False) -> None:
+     arguments: Dict[str, Dict[str, bool]] = {}
+     fields = cast(Iterable[nodes.field], node)
+     for field in fields:
+@@ -123,7 +127,7 @@ def modify_field_list(node: nodes.field_list, annotations: Dict[str, str]) -> No
+             field += nodes.field_body('', nodes.paragraph('', ''))
+             node += field
+ 
+-    if 'return' in annotations and 'return' not in arguments:
++    if 'return' in annotations and 'return' not in arguments and not suppress_rtype:
+         field = nodes.field()
+         field += nodes.field_name('', 'rtype')
+         field += nodes.field_body('', nodes.paragraph('', annotation))
+diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py
+index fdb82b1b9..a42d534c6 100644
+--- a/tests/test_ext_autodoc_configs.py
++++ b/tests/test_ext_autodoc_configs.py
+@@ -1055,6 +1055,36 @@ def test_autodoc_typehints_description_with_documented_init(app):
+             '         None\n' == context)
+ 
+ 
++@pytest.mark.sphinx('text', testroot='ext-autodoc',
++                    confoverrides={'autodoc_typehints': "description"})
++def test_autodoc_typehints_description_class_has_no_rtype(app):
++    # The return annotation of a class (taken from ``__init__``) must not be
++    # rendered as the return type of the class itself.  See #9575.
++    (app.srcdir / 'index.rst').write_text(
++        '.. autoclass:: target.typehints._ClassWithDocumentedInit\n'
++        '   :special-members: __init__\n',
++        encoding='utf8'
++    )
++    app.build()
++    context = (app.outdir / 'index.txt').read_text(encoding='utf8')
++    assert ('class target.typehints._ClassWithDocumentedInit(x)\n'
++            '\n'
++            '   Class docstring.\n'
++            '\n'
++            '   Parameters:\n'
++            '      **x** (*int*) --\n'
++            '\n'
++            '   __init__(x)\n'
++            '\n'
++            '      Init docstring.\n'
++            '\n'
++            '      Parameters:\n'
++            '         **x** (*int*) -- Some integer\n'
++            '\n'
++            '      Return type:\n'
++            '         None\n' == context)
++
++
+ @pytest.mark.sphinx('text', testroot='ext-autodoc',
+                     confoverrides={'autodoc_typehints': "description",
+                                    'autodoc_typehints_description_target': 'documented'})
