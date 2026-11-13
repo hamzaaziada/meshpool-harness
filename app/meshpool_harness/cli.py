@@ -102,7 +102,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import"}
+COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
 
 
 def _agent_parser():
@@ -115,6 +115,7 @@ def _agent_parser():
                "  import           bring your context from ChatGPT, Claude or Gemini\n"
                "  login            save your Meshpool API key\n"
                "  check            show settings and installed tools (--live sends one tiny model call)\n"
+               "  connect          connect apps: Notion, Gmail, Slack, HubSpot... or any MCP server by URL\n"
                "  mcp              list, test and switch MCP servers\n"
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
                "  work             fetch a task from GitHub, Jira, a URL or a file, run it, report back\n"
@@ -180,6 +181,15 @@ def main(argv=None):
         if folder is None:
             return 1
         return agent_main(str(folder), onboarded=True)
+    if argv[0] == "connect":
+        from meshpool_harness.agent import connect_cli
+        return connect_cli.main(argv[1:])
+    if argv[0] == "disconnect":
+        from meshpool_harness.agent import connect_cli
+        if len(argv) < 2:
+            print("Usage: meshpool disconnect <name>")
+            return 1
+        return connect_cli.disconnect(argv[1])
     if argv[0] == "import":
         from meshpool_harness.agent import onboard
         from meshpool_harness.agent.tui import Style, _enable_ansi

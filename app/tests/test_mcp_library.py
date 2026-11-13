@@ -40,7 +40,7 @@ def test_every_entry_is_complete_and_verified():
             assert L.VERIFIED.get(e["id"]), f"{e['id']} has no verification note"
         for s in e["settings"]:
             assert re.fullmatch(r"[A-Z][A-Z0-9_]*", s["name"]) and s["hint"]
-    assert {"sec-edgar", "fred", "alpha-vantage"} <= set(ids)          # buy-side data sources
+    assert {"sec-edgar", "alpha-vantage", "yahoo-finance"} <= set(ids)          # buy-side data sources
     # names the 2.4 config upgrade deletes when disabled must not be used
     assert not {"filesystem", "fetch", "memory", "sequential-thinking"} & set(ids)
 
@@ -56,15 +56,15 @@ def test_settings_are_names_never_values():
 
 def test_add_writes_disabled_server_with_placeholders(home):
     from meshpool_harness import mcp_library as L
-    r = L.add("fred")
-    assert r == {"server": "fred"}
-    s = _mcp(home)["fred"]
-    assert s["disabled"] is True and s["command"] == "npx" and s["args"] == ["-y", "fred-mcp-server"]
-    assert s["env"] == {"FRED_API_KEY": "${FRED_API_KEY}"} and s["description"].startswith(L.MARK)
-    assert L.add("fred")["existing"] is True and list(_mcp(home)).count("fred") == 1
-    row = next(x for x in L.listing() if x["id"] == "fred")
-    assert row["added"] and not row["enabled"] and row["missing"] == ["FRED_API_KEY"]
-    assert row["target"] == "npx -y fred-mcp-server"
+    r = L.add("tavily")
+    assert r == {"server": "tavily"}
+    s = _mcp(home)["tavily"]
+    assert s["disabled"] is True and s["command"] == "npx" and s["args"] == ["-y", "tavily-mcp@latest"]
+    assert s["env"] == {"TAVILY_API_KEY": "${TAVILY_API_KEY}"} and s["description"].startswith(L.MARK)
+    assert L.add("tavily")["existing"] is True and list(_mcp(home)).count("tavily") == 1
+    row = next(x for x in L.listing() if x["id"] == "tavily")
+    assert row["added"] and not row["enabled"] and row["missing"] == ["TAVILY_API_KEY"]
+    assert row["target"] == "npx -y tavily-mcp@latest"
 
 
 def test_remote_entry_keeps_key_in_url_placeholder(home):
@@ -76,12 +76,12 @@ def test_remote_entry_keeps_key_in_url_placeholder(home):
 def test_configure_saves_settings_outside_mcp_json_and_enables(home):
     from meshpool_harness import config as C, mcp_library as L
     with pytest.raises(ValueError):
-        L.configure("fred", {})                                        # nothing filled in yet
-    L.configure("fred", {"FRED_API_KEY": "abc123", "OTHER": "ignored"})
-    assert C.read()["FRED_API_KEY"] == "abc123" and "OTHER" not in C.read()
-    s = _mcp(home)["fred"]
+        L.configure("tavily", {})                                        # nothing filled in yet
+    L.configure("tavily", {"TAVILY_API_KEY": "abc123", "OTHER": "ignored"})
+    assert C.read()["TAVILY_API_KEY"] == "abc123" and "OTHER" not in C.read()
+    s = _mcp(home)["tavily"]
     assert "disabled" not in s and "abc123" not in (home / "mcp.json").read_text()
-    row = next(x for x in L.listing() if x["id"] == "fred")
+    row = next(x for x in L.listing() if x["id"] == "tavily")
     assert row["enabled"] and row["missing"] == []
 
 

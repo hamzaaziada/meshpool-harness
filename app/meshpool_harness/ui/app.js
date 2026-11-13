@@ -1530,41 +1530,84 @@ async function renderSection(sec) {
     $("#wSave").onclick = async () => { const values = {}; $$("[data-wk]", b).forEach(x => { if (x.value.trim() || x.dataset.wk === "SEARXNG_URL") values[x.dataset.wk] = x.value.trim(); }); try { await post("/api/settings", {values}); RES("wRes").className = "res ok"; RES("wRes").textContent = "Saved."; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
     $("#wTest").onclick = async () => { RES("wRes").className = "res"; RES("wRes").textContent = "Searching..."; try { const r = await post("/api/web-test"); RES("wRes").className = "res " + (r.ok ? "ok" : "bad"); RES("wRes").textContent = r.ok ? `Search works: ${r.count} results in ${r.seconds} s, first: ${r.first}` : r.error; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
   } else if (sec === "connectors") {
+    const cats = ["Connected", "Engineering", "Work and documents", "Sales and marketing", "Finance and data", "Yours"];
+    const redirect = `${location.origin}/oauth/callback`;
+    const say = (t, cls = "") => { RES("cnRes").className = "res " + cls; RES("cnRes").textContent = t; };
+    const clientForm = c => `<span class="ownclient" data-cf="${esc(c.id)}"><small>${esc(c.client_help || "This app only signs in apps it knows. Create an OAuth app in its developer settings with the redirect URL below, then paste its client ID (and secret, if it gives you one).")}</small>
+      <small>Redirect URL: <code>${esc(redirect)}</code></small>
+      <span class="keyrow" style="margin-top:6px"><input data-cid="${esc(c.id)}" placeholder="Client ID" autocomplete="off" spellcheck="false"><input type="password" data-csec="${esc(c.id)}" placeholder="Client secret (if any)" autocomplete="off" spellcheck="false"><button class="btn primary" data-client="${esc(c.id)}">Connect</button></span></span>`;
+    const row = c => {
+      const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
+      const own = c.needs_client && !c.own_client && !c.connected;
+      const btn = c.connected ? `<label class="switch" title="Use in new threads"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
+        : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
+        : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
+      return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
+        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
+        ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}
+        ${own || S.cnNeedClient === c.id ? clientForm(c) : ""}</span>${btn}</li>`;
+    };
+    const filter = () => {
+      const q = ($("#cnq")?.value || "").trim().toLowerCase(), cat = S.cnCat || "";
+      $$("#cnl > li", b).forEach(li => { li.hidden = (q && !li.dataset.text.includes(q)) || (cat && li.dataset.cat !== cat); });
+      $$("[data-cncat]", b).forEach(x => x.classList.toggle("primary", x.dataset.cncat === cat));
+    };
+    const signIn = (r, id) => {                       // poll until the browser sign-in finished
+      if (r.needs_client) { S.cnNeedClient = r.needs_client; draw(r.connectors); say(r.message); return; }
+      RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
+      const t0 = Date.now();
+      const tick = async () => {
+        if (!$("#cnl")) return;
+        const l = (await api("/api/connectors")).connectors;
+        if (l.find(c => c.id === id)?.connected) { S.cnNeedClient = ""; draw(l); say(`${l.find(c => c.id === id).name} is connected. New threads can use it.`, "ok"); return; }
+        if (Date.now() - t0 < 300000) setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    };
     const draw = rows => {
-      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools: CRM records, leads, tasks, issues, pages, pull requests and more. Sign-in happens in your browser; Meshpool keeps the access on this computer only.</p>
-        <ul class="rows2" id="cnl">${[...rows].sort((a, z) => (z.connected - a.connected) || (z.custom - a.custom)).map(c => `<li data-id="${esc(c.id)}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">Connected</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : ""}<small>${esc(c.description)}</small>
-          ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
-          ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}</span>
-          ${c.connected ? `<label class="switch" title="Use in new threads"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-off="${esc(c.id)}">Disconnect</button>`
-            : c.auth === "oauth" ? `<button class="btn primary" data-go="${esc(c.id)}">Connect</button>` : ""}</li>`).join("")}</ul>
+      const order = c => (c.connected ? 0 : 1);
+      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: Meshpool keeps the access on this computer only and runs no server in between.</p>
+        <div class="cnbar"><input id="cnq" placeholder="Search ${rows.length} apps" spellcheck="false" value="${esc(S.cnQ || "")}"><span class="cnchips"><button class="btn${S.cnCat ? "" : " primary"}" data-cncat="">All</button>${cats.filter(k => rows.some(c => (c.connected ? "Connected" : c.custom ? "Yours" : c.category) === k)).map(k => `<button class="btn" data-cncat="${esc(k)}">${esc(k)}</button>`).join("")}</span></div>
         <div class="res" id="cnRes"></div>
-        <h3 style="font-size:15px;margin:18px 0 4px">Add another app</h3><p class="lead" style="font-size:12.5px">Any app with a remote MCP server works. Paste its address. Leave the token empty to sign in through your browser.</p>
-        <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>`;
+        <ul class="rows2" id="cnl">${[...rows].sort((x, z) => order(x) - order(z)).map(row).join("")}</ul>
+        <h3 style="font-size:15px;margin:18px 0 4px">Add another app</h3><p class="lead" style="font-size:12.5px">Any app with a remote MCP server works. Paste its address; Meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
+        <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token or API key (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>
+        <details style="margin-top:8px"><summary class="linkbtn" style="display:inline;padding-left:0">More options: your own sign-in client</summary><span class="keyrow" style="margin-top:6px"><input id="cxCid" placeholder="Client ID" autocomplete="off" spellcheck="false"><input id="cxSec" type="password" placeholder="Client secret" autocomplete="off" spellcheck="false"></span><small class="muted">For apps that only sign in apps they know. Redirect URL: <code>${esc(redirect)}</code></small></details>`;
       done();
+      $("#cnq").oninput = () => { S.cnQ = $("#cnq").value; filter(); };
+      $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
+      filter();
       $("#cxAdd").onclick = async () => {
         const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
-        $("#cxAdd").disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Checking the server...";
-        const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim()}); $("#cxAdd").disabled = false;
+        $("#cxAdd").disabled = true; say("Checking the server...");
+        const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim(), client_id: $("#cxCid").value.trim(), client_secret: $("#cxSec").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
-        S.connCache = r.connectors; draw(r.connectors);
-        if (r.url) { RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
-          const id = r.id, t0 = Date.now(); const tick = async () => { if (!$("#cnl")) return; const l = (await api("/api/connectors")).connectors; if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected. New threads can use it."; return; } if (Date.now() - t0 < 300000) setTimeout(tick, 2000); }; setTimeout(tick, 2000);
-        } else { RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Added. New threads can use it."; }
+        S.connCache = r.connectors; S.cnCat = ""; draw(r.connectors);
+        if (r.url || r.needs_client) signIn(r, r.id); else say(r.message || "Added. New threads can use it.", "ok");
       };
-      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { RES("cnRes").className = "res bad"; RES("cnRes").textContent = e.message; return null; } };
+      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { say(e.message, "bad"); return null; } };
       $$("[data-go]", b).forEach(x => x.onclick = async () => {
         x.disabled = true; x.textContent = "Opening sign-in...";
         const r = await act({action: "connect", id: x.dataset.go});
         if (!r) { x.disabled = false; x.textContent = "Connect"; return; }
-        RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
-        const id = x.dataset.go, t0 = Date.now();
-        const tick = async () => {
-          if (!$("#cnl")) return;
-          const l = (await api("/api/connectors")).connectors;
-          if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `${l.find(c => c.id === id).name} is connected. New threads can use it.`; return; }
-          if (Date.now() - t0 < 300000) setTimeout(tick, 2000);
-        };
-        setTimeout(tick, 2000);
+        signIn(r, x.dataset.go);
+      });
+      $$("[data-client]", b).forEach(x => x.onclick = async () => {
+        const id = x.dataset.client, cid = $(`[data-cid="${id}"]`, b).value.trim();
+        if (!cid) { $(`[data-cid="${id}"]`, b).focus(); return; }
+        const r = await act({action: "client", id, client_id: cid, client_secret: $(`[data-csec="${id}"]`, b).value.trim()});
+        if (r) signIn(r, id);
+      });
+      $$("[data-turnon]", b).forEach(x => x.onclick = async () => {
+        x.disabled = true;
+        const r = await act({action: "enable", id: x.dataset.turnon, on: true}); if (!r) { x.disabled = false; return; }
+        draw(r.connectors); say("Checking it...");
+        const t = await act({action: "check", id: x.dataset.turnon}); if (t) say(t.ok ? `On: ${t.tools.length} tools. New threads can use it.` : t.error, t.ok ? "ok" : "bad");
+      });
+      $$("[data-test]", b).forEach(x => x.onclick = async () => {
+        x.disabled = true; say("Testing...");
+        const t = await act({action: "check", id: x.dataset.test}); x.disabled = false;
+        if (t) say(t.ok ? `Works: ${t.tools.length} tools (${t.tools.slice(0, 6).join(", ")}${t.tools.length > 6 ? ", ..." : ""}).` : t.error, t.ok ? "ok" : "bad");
       });
       $("[data-ghfound]", b)?.addEventListener("click", async e => {
         e.target.disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Looking for a GitHub login on this computer...";
@@ -1583,7 +1626,7 @@ async function renderSection(sec) {
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
-      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected."; } });
+      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); const t = await act({action: "check", id: x.dataset.save}); if (t) say(t.ok ? `Connected: ${t.tools.length} tools.` : t.error, t.ok ? "ok" : "bad"); } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Threads stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };

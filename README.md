@@ -66,8 +66,15 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
 - **Web research without a browser.**
   - The agent can search the web and read pages, PDFs and Office files.
   - It can research a question across many sources at once, with links you can check.
-- **Connectors:** GitHub, Jira and Confluence, Linear, Notion, Apollo, Instantly, ClickUp, Airtable, Attio, Intercom, Granola, Canva, Zapier, Netlify, Webflow, Sentry, GitLab, Vercel, Supabase and Stripe. You can also add any remote MCP server.
-- **Skills**, shared by every agent.
+- **Connectors:** 58 apps, each checked against its live server. Sign-in runs directly between your computer and the app; Meshpool runs no server in between.
+  - **Engineering:** GitHub, GitLab, Linear, Jira and Confluence, Sentry, Vercel, Netlify, Cloudflare, Supabase, Neon, Prisma, PostHog, Jam, Hugging Face, Context7 and DeepWiki.
+  - **Work and documents:** Gmail, Google Calendar, Google Drive, Slack, Notion, Asana, ClickUp, monday.com, Airtable, Dropbox, Box, Miro, Granola, Fireflies, Otter, tl;dv, Docusign, Zapier, Make and Pipedream.
+  - **Sales and marketing:** HubSpot, Attio, Close, Apollo, Lusha, Instantly, Intercom, Mailchimp, Semrush, Similarweb, Wix, Webflow, Canva and Gamma.
+  - **Finance and data:** Stripe, PayPal, Square, Crunchbase, Morningstar, Exa and Firecrawl.
+  - **Any other remote MCP server** by its address. Meshpool works out whether it needs nothing, a token or a browser sign-in.
+  - Apps that only sign in apps they know (Google, Slack, HubSpot and a few others) take a client ID you create in that app.
+  - In the terminal: `meshpool connect`, `meshpool connect notion` or `meshpool connect https://...`, and `/connect` inside a session.
+- **Skills**, shared by every agent: about 100 built in, for email and meetings, writing, marketing, product, hiring, data, projects, engineering, sales, finance and legal. Add your own, or import them from Claude, Codex and Cursor.
 - **Instructions and memory** that carry over between chats.
 - **Scheduled tasks**, such as a daily brief or a weekly report.
 - **Parallel sub-agents** for big jobs.

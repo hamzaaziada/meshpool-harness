@@ -3,6 +3,8 @@
 Transports:
 - stdio: {"command": "npx", "args": [...], "env": {...}}   (the server is a child process; JSON-RPC over its pipes)
 - streamable HTTP: {"url": "https://...", "headers": {"Authorization": "Bearer ${TOKEN}"}}
+- HTTP with SSE (the 2024-11-05 transport): {"url": "https://.../sse", "type": "sse"}; also used on its own when a
+  server refuses the streamable HTTP POST, as the MCP spec's backwards-compatibility section describes.
 
 Config file: mcp.json next to meshpool.config, in the same shape Claude Desktop and Claude Code use:
     {"mcpServers": {"name": {...}, ...}}
@@ -28,6 +30,7 @@ from meshpool_harness import config as C
 
 PROTOCOL = "2025-06-18"
 CLIENT = {"name": "meshpool", "version": _VERSION}
+UA = {"User-Agent": f"Meshpool/{_VERSION} (MCP client)"}   # Python's default agent is blocked by many CDNs
 
 
 def config_file() -> Path:
@@ -137,7 +140,9 @@ class _Stdio:
         if exe == sys.executable:
             env["PYTHONPATH"] = str(C.APP) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         log_dir.mkdir(parents=True, exist_ok=True)
-        self.err = open(log_dir / f"{name}.log", "a", encoding="utf-8", errors="replace")
+        self.log = log_dir / f"{name}.log"
+        self.err = open(self.log, "a", encoding="utf-8", errors="replace")
+        self.log_start = self.err.tell()
         kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
         try:
             self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err,
@@ -184,7 +189,35 @@ class _Stdio:
             self.p.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
             self.p.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
-            raise MCPError("the server process exited (see its log in runs/mcp-logs)")
+            raise MCPError(self._exit_reason())
+
+    def _exit_reason(self) -> str:
+        """Why the server stopped, from the last meaningful line it printed (its whole log is in runs/mcp-logs)."""
+        try:
+            self.err.flush()
+            with open(self.log, encoding="utf-8", errors="replace") as f:
+                f.seek(self.log_start)
+                lines = [ln.strip() for ln in f.read()[-20000:].splitlines()]
+        except OSError:
+            lines = []
+        skip = re.compile(r"^(npm (warn|notice)|at |node:|Node\.js v|File \"|\^+$|~+|\{|\}|status:|signal:|output:|"
+                          r"pid:|stdout:|stderr:|throw err|warning: The `UV_|Traceback|Installed|Resolved|Prepared|"
+                          r"Downloading|Downloaded|Updated|Updating|Building|Built)")
+        why = []
+        for ln in lines:
+            if ln.startswith("{") and ln.endswith("}"):           # a JSON log line: keep its message
+                try:
+                    j = json.loads(ln)
+                    ln = str(j.get("message") or j.get("msg") or j.get("error") or "")
+                except ValueError:
+                    pass
+            if ln and not skip.match(ln) and not ln.startswith("Error: Command failed") and \
+                    not re.match(r"^[A-Za-z_]+: ['\"\d-]", ln):     # object dumps such as "port: 1"
+                why.append(ln)
+        bad = [ln for ln in why if re.search(r"error|fatal|fail|invalid|denied|missing|refused|not found|unauthori",
+                                             ln, re.I)]
+        msg = (bad or why or [""])[-1][:300]
+        return "the server process exited" + (f": {msg}" if msg else "") + f" (log: {self.log.name} in runs/mcp-logs)"
 
     def request(self, rid: int, method: str, params: dict, timeout: float) -> dict:
         self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
@@ -192,7 +225,7 @@ class _Stdio:
         with self.cv:
             while rid not in self.pending:
                 if not self.alive:
-                    raise MCPError("the server process exited (see its log in runs/mcp-logs)")
+                    raise MCPError(self._exit_reason())
                 left = end - time.time()
                 if left <= 0:
                     raise MCPError(f"no reply to {method} within {int(timeout)} s")
@@ -226,7 +259,7 @@ class _Http:
         self.version = None
 
     def _post(self, obj: dict, timeout: float, want_id=None) -> dict | None:
-        h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **self.headers}
+        h = {**UA, "Content-Type": "application/json", "Accept": "application/json, text/event-stream", **self.headers}
         if self.session:
             h["Mcp-Session-Id"] = self.session
         if self.version:
@@ -282,10 +315,122 @@ class _Http:
     def close(self):
         if self.session:
             try:
-                h = {"Mcp-Session-Id": self.session, **self.headers}
+                h = {**UA, "Mcp-Session-Id": self.session, **self.headers}
                 urllib.request.urlopen(urllib.request.Request(self.url, headers=h, method="DELETE"), timeout=5)
             except Exception:
                 pass
+
+
+class _Sse:
+    """The older HTTP+SSE transport: a GET event stream that first names the URL to POST messages to, then carries
+    the replies."""
+
+    def __init__(self, name: str, spec: dict, timeout: float = 30):
+        import urllib.parse
+        self.url = spec["url"]
+        self.headers = {k: str(v) for k, v in (spec.get("headers") or {}).items()}
+        self.pending: dict = {}
+        self.cv = threading.Condition()
+        self.alive = True
+        self.endpoint = None
+        req = urllib.request.Request(self.url, headers={**UA, "Accept": "text/event-stream", **self.headers})
+        try:
+            self.r = urllib.request.urlopen(req, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise MCPError(f"HTTP {e.code}: the server refused the credentials. Sign in again under Settings, "
+                               "Connectors, or check the headers in mcp.json")
+            raise MCPError(f"HTTP {e.code} opening the event stream")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise MCPError(f"could not reach {self.url}: {e}")
+        if "text/event-stream" not in self.r.headers.get("Content-Type", ""):
+            self.r.close()
+            raise MCPError("the server is not an MCP server (no event stream)")
+        self._join = urllib.parse.urljoin
+        threading.Thread(target=self._reader, daemon=True).start()
+        end = time.time() + timeout
+        with self.cv:
+            while self.endpoint is None and self.alive and time.time() < end:
+                self.cv.wait(0.3)
+        if not self.endpoint:
+            self.close()
+            raise MCPError("the event stream did not say where to send messages")
+
+    def _reader(self):
+        event, data = "message", []
+        try:
+            for raw in self.r:
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    data.append(line[5:].lstrip())
+                elif line == "":
+                    if data:
+                        payload = "\n".join(data)
+                        with self.cv:
+                            if event == "endpoint":
+                                self.endpoint = self._join(self.url, payload.strip())
+                            else:
+                                try:
+                                    msg = json.loads(payload)
+                                except ValueError:
+                                    msg = {}
+                                if isinstance(msg, dict) and "id" in msg and "method" not in msg:
+                                    self.pending[msg["id"]] = msg
+                            self.cv.notify_all()
+                    event, data = "message", []
+        except Exception:  # noqa: BLE001  the stream closed
+            pass
+        with self.cv:
+            self.alive = False
+            self.cv.notify_all()
+
+    def _send(self, obj: dict):
+        req = urllib.request.Request(self.endpoint, data=json.dumps(obj).encode(), method="POST",
+                                     headers={**UA, "Content-Type": "application/json", **self.headers})
+        try:
+            urllib.request.urlopen(req, timeout=30).close()
+        except urllib.error.HTTPError as e:
+            raise MCPError(f"HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise MCPError(f"could not reach {self.endpoint}: {e}")
+
+    def request(self, rid, method, params, timeout):
+        self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        end = time.time() + timeout
+        with self.cv:
+            while rid not in self.pending:
+                if not self.alive:
+                    raise MCPError("the server closed the event stream")
+                left = end - time.time()
+                if left <= 0:
+                    raise MCPError(f"no reply to {method} within {int(timeout)} s")
+                self.cv.wait(min(left, 0.5))
+            return self.pending.pop(rid)
+
+    def notify(self, method, params=None):
+        try:
+            self._send({"jsonrpc": "2.0", "method": method, **({"params": params} if params else {})})
+        except MCPError:
+            pass
+
+    def close(self):
+        self.alive = False
+        try:                                    # shut the socket first: close() alone waits for the reader thread
+            import socket
+            self.r.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.r.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _sse_spec(spec: dict) -> bool:
+    return str(spec.get("type") or spec.get("transport") or "").lower() == "sse" or \
+        str(spec.get("url", "")).rstrip("/").endswith("/sse")
 
 
 # ---------- one server ---------------------------------------------------------------------------------------------
@@ -312,14 +457,28 @@ class Server:
 
     def start(self, timeout: float = 90):
         try:
-            if self.spec.get("url"):
+            init = {"protocolVersion": PROTOCOL, "clientInfo": CLIENT, "capabilities": {"roots": {"listChanged": False}}}
+            if self.spec.get("url") and _sse_spec(self.spec):
+                self.t = _Sse(self.name, self.spec, min(timeout, 30))
+                res = self._rpc("initialize", init, timeout)
+            elif self.spec.get("url"):
                 self.t = _Http(self.name, self.spec)
+                try:
+                    res = self._rpc("initialize", init, timeout)
+                except MCPError as e:
+                    # An older server: POST is refused, so try the HTTP+SSE transport at the same address.
+                    if not re.match(r"HTTP (400|404|405)\b", str(e)):
+                        raise
+                    try:
+                        self.t = _Sse(self.name, self.spec, min(timeout, 30))
+                        res = self._rpc("initialize", init, timeout)
+                    except MCPError:
+                        raise e from None              # not an SSE server either: report what the POST said
             elif self.spec.get("command"):
                 self.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
+                res = self._rpc("initialize", init, timeout)
             else:
                 raise MCPError("needs either a command or a url")
-            res = self._rpc("initialize", {"protocolVersion": PROTOCOL, "clientInfo": CLIENT,
-                                           "capabilities": {"roots": {"listChanged": False}}}, timeout)
             self.info = res.get("serverInfo") or {}
             if isinstance(self.t, _Http):
                 self.t.version = res.get("protocolVersion") or PROTOCOL
@@ -417,6 +576,19 @@ class Manager:
                 self.map[tool_name(s.name, t["name"])] = (s.name, t["name"])
         return self
 
+    def add(self, name: str, spec: dict, timeout: float = 60) -> "Server":
+        """Start one more server in a running session (after /connect) and make its tools available at once."""
+        old = self.servers.pop(name, None)
+        if old:
+            old.close()
+        s = Server(name, spec, C.runs_dir() / "mcp-logs", self.roots)
+        s.start(timeout)
+        self.servers[name] = s
+        self.map = {k: v for k, v in self.map.items() if v[0] != name}
+        for t in s.tools:
+            self.map[tool_name(name, t["name"])] = (name, t["name"])
+        return s
+
     def schemas(self) -> list[dict]:
         out = []
         for s in self.servers.values():
@@ -452,7 +624,7 @@ class Manager:
 
     def status(self) -> list[dict]:
         rows = [{"name": s.name, "status": s.status, "tools": [t["name"] for t in s.tools], "error": s.error,
-                 "transport": "http" if s.spec.get("url") else "stdio",
+                 "transport": ("sse" if isinstance(s.t, _Sse) else "http") if s.spec.get("url") else "stdio",
                  "server": (s.info.get("name") or "") + (" " + s.info.get("version", "") if s.info.get("version") else "")}
                 for s in self.servers.values()]
         rows += [{"name": n, "status": "disabled", "tools": [], "error": "", "transport": "", "server": ""}
