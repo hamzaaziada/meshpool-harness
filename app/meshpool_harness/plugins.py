@@ -94,8 +94,8 @@ def list_plugins() -> list[dict]:
     for rec in _load()["plugins"].values():
         servers = [{"name": n, "enabled": isinstance(mcp.get(n), dict) and not mcp[n].get("disabled"),
                     "target": _target(mcp.get(n) or {}), "present": n in mcp} for n in rec.get("servers", [])]
-        out.append(dict(rec, enabled=bool(rec.get("skills")) and not any(s in off for s in rec["skills"]),
-                        server_status=servers))
+        on = not any(s in off for s in rec["skills"]) if rec.get("skills") else any(x["enabled"] for x in servers)
+        out.append(dict(rec, enabled=on, server_status=servers))
     return sorted(out, key=lambda r: r["name"])
 
 
@@ -580,3 +580,35 @@ def remove_plugin(name: str) -> list[dict]:
         shutil.rmtree(pdir, ignore_errors=True)
     _save(d)
     return list_plugins()
+
+
+# ---------- app API (Settings, Plugins) ---------------------------------------------------------------------------
+
+def api_view() -> dict:
+    return {"plugins": list_plugins(), "catalog": catalog(), "file": str(state_file())}
+
+
+def api_action(body: dict) -> dict:
+    """POST /api/plugins: {action: install, source, names?} | {action: upload, file: {name, data(base64)}} |
+    {action: enable, name, on} | {action: remove, name}."""
+    act = body.get("action")
+    done: list[dict] = []
+    if act == "install":
+        done = install_plugin(body.get("source", ""), body.get("names") or None)
+    elif act == "upload":
+        import base64
+        f = body.get("file") or {}
+        name = Path(str(f.get("name") or "plugin.zip")).name
+        if not name.lower().endswith((".zip", ".json")):
+            raise ValueError("Drop a plugin .zip or a marketplace.json.")
+        with tempfile.TemporaryDirectory(prefix="meshpool-upload-") as t:
+            p = Path(t) / name
+            p.write_bytes(base64.b64decode(f.get("data") or ""))
+            done = install_plugin(str(p), body.get("names") or None)
+    elif act == "enable":
+        enable_plugin(body.get("name", ""), bool(body.get("on")))
+    elif act == "remove":
+        remove_plugin(body.get("name", ""))
+    else:
+        raise ValueError(f"Unknown plugin action {act!r}.")
+    return dict(api_view(), installed=done)
