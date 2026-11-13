@@ -27,7 +27,7 @@ from .common import evidence_id, load_rules, sha256, soffice_convert, summarize
 from .common import failure as F
 from .ooxml_check import check as ooxml_check
 
-RULES = [f"X{i}" for i in range(0, 14)]
+RULES = [f"X{i}" for i in range(0, 15)]
 CELL_RE = re.compile(r"^\$?([A-Z]{1,3})\$?(\d+)$")
 YEAR_RE = re.compile(r"^(fy|cy)?\s*'?(\d{2}|\d{4})\s*([aebfp]|act|actual|est|budget|forecast)?$", re.I)
 
@@ -563,6 +563,67 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
         failures.append(F("X11", "diff_report", "No previous version supplied; before/after diff not produced.",
                           status="not_run", severity="info"))
 
+    # X14 sign convention: a loss or cost held as a positive number must not be added to an income or total
+    sg = R["signs"]
+    cost_re, not_cost = re.compile(sg["cost_label_regex"]), re.compile(sg["benefit_label_regex"])
+    up = {k.upper(): d for k, d in names_raw}
+
+    def target(ref, host):
+        ref = ref.replace("$", "")
+        if ":" in ref:
+            return None
+        if "!" in ref:
+            sh, _, coord = ref.rpartition("!")
+            return sh.strip("'"), coord
+        if ref.upper() in up and up[ref.upper()] and "!" in str(up[ref.upper()]):
+            sh, _, coord = str(up[ref.upper()]).replace("$", "").rpartition("!")
+            return sh.strip("'"), coord
+        if re.fullmatch(r"[A-Z]{1,3}\d+", ref):
+            return host, ref
+        return None
+    sign_hits = []
+    for ws in wb.worksheets:
+        if roles[ws.title] in ("inputs", "cover", "checks"):
+            continue
+        for row in ws.iter_rows():
+            for c in row:
+                fx = c.value
+                if not (isinstance(fx, str) and fx.startswith("=") and "+" in fx):
+                    continue
+                try:
+                    toks = Tokenizer(fx).items
+                except Exception:
+                    continue
+                ops, prev, depth = [], "+", 0
+                for t in toks:
+                    if t.type in (Token.FUNC, Token.PAREN):
+                        depth += 1 if t.subtype == Token.OPEN else -1
+                        prev = None
+                    elif t.type == Token.OP_IN:
+                        prev = t.value
+                    elif t.type == Token.OPERAND:
+                        if depth == 0 and t.subtype == Token.RANGE:
+                            ops.append((prev, t.value))
+                        prev = None
+                kinds = []
+                for sign, ref in ops:
+                    tg = target(ref, ws.title)
+                    if not tg or tg[0] not in wb.sheetnames:
+                        kinds.append((sign, ref, None, None, False))
+                        continue
+                    lab = _label(wb[tg[0]], int(re.sub(r"\D", "", tg[1])))
+                    val = v(tg[0], tg[1])
+                    cost = bool(cost_re.search(lab)) and not not_cost.search(lab)
+                    kinds.append((sign, ref, lab, val, cost))
+                if not any(not k[4] for k in kinds):
+                    continue                                    # a sum of costs is fine
+                for sign, ref, lab, val, cost in kinds:
+                    if cost and sign == "+" and _is_num(val) and val > 0:
+                        sign_hits.append(f"{ws.title}!{c.coordinate} adds '{lab}' ({val:,.4g}, positive) in {fx}")
+    for h in sign_hits[:8]:
+        failures.append(F("X14", "sign_convention", f"{h}. A loss or cost must reduce the total: store it as a negative "
+                          "number (and say so in its label) or subtract it.", sheet=h.split("!")[0]))
+
     # X12 checks sheet and master flag
     chk_sheets = [s for s, r in roles.items() if r == "checks"]
     if not chk_sheets:
@@ -575,6 +636,8 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
                 for c in row:
                     if isinstance(c.value, bool):
                         flags.append(((s, c.coordinate), c.value))
+                    elif isinstance(c.value, str) and c.value.strip().upper() in ("OK", "ERROR", "PASS", "FAIL"):
+                        flags.append(((s, c.coordinate), c.value.strip().upper() in ("OK", "PASS")))
         master = None
         for n, dest in names_raw:
             if n in R["checks"]["master_flag_names"] and dest and "!" in str(dest):
