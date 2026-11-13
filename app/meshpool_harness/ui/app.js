@@ -1240,6 +1240,7 @@ function panelPreview(body) {
 
 /* ================================== settings ================================== */
 const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
 function openSettings(sec = "general") {
   closePop();
   $(".scrim")?.remove();
@@ -1482,6 +1483,7 @@ async function renderSection(sec) {
     };
     $("#skCreate").onclick = () => { if (!$("#skName").value.trim() || !$("#skBody").value.trim()) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Give the skill a name and instructions."; return; } skillAct({action: "create", name: $("#skName").value, description: $("#skDesc").value, body: $("#skBody").value}); };
     $("#skOpen").onclick = () => post("/api/skills", {action: "open"});
+  } else if (sec === "plugins") { await drawPlugins(b, close);
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
@@ -1517,6 +1519,7 @@ async function renderSection(sec) {
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
     $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
     $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    drawMcpLibrary(b);
   } else if (sec === "permissions") {
     const draw = async body => {
       const r = await post("/api/permissions", body || {});
@@ -1628,6 +1631,74 @@ async function contextPanel(box) {
     const instructions = $("#ctxIns", box).value.trim(); if (!instructions) return res("Paste the instructions first.", true);
     try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`); } catch (e) { res(e.message, true); }
   };
+}
+
+/* Settings, Plugins: built-in plugin groups (one switch each) and installed plugins in the Claude Code format.
+   Nothing in a plugin runs at install; its MCP servers stay off until the user turns each one on. */
+async function drawPlugins(b, close) {
+  let d;
+  try { d = await api("/api/plugins"); } catch (e) { b.innerHTML = `${close}<h3>Plugins</h3><div class="res bad">${esc(e.message)}</div>`; return; }
+  const say = (text, bad) => { RES("plRes").className = "res " + (bad ? "bad" : "ok"); RES("plRes").textContent = text; };
+  const act = async body => { try { const r = await post("/api/plugins", body); await loadSkills(); render(r); return r; } catch (e) { say(e.message, true); return null; } };
+  const installed = r => { if (!r?.installed?.length) return; const p = r.installed; const sv = p.reduce((n, x) => n + x.servers.length, 0); say(`Installed ${p.map(x => x.name).join(", ")}: ${p.reduce((n, x) => n + x.skills.length, 0)} skills${sv ? `, ${sv} MCP server${sv === 1 ? "" : "s"} (off until you turn them on)` : ""}.` + p.flatMap(x => x.notes).map(n => " " + n).join("")); };
+  const group = g => `<li><label class="switch"><input type="checkbox" data-pb="${esc(g.id)}" ${g.enabled ? "checked" : ""} aria-label="Use ${esc(g.name)}"><span></span></label><span class="tg"><b>${esc(g.name)}</b> <span class="badge modified">${g.skills.length} skills</span>${g.partly ? ` <span class="badge modified">Some on</span>` : ""}<small>${esc(g.description)}</small><small>${esc(g.source)}</small><details><summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">Skills it turns on</summary><small>${g.skills.map(s => "$" + esc(s.id)).join(", ")}</small></details></span></li>`;
+  const server = s => `<span style="display:flex;gap:8px;align-items:center;margin-top:6px"><label class="switch" title="Run this server"><input type="checkbox" data-ps="${esc(s.name)}" data-cmd="${esc(s.target)}" ${s.enabled ? "checked" : ""} ${s.present ? "" : "disabled"} aria-label="Turn on ${esc(s.name)}"><span></span></label><code>${esc(s.target)}</code></span>`;
+  const plugin = p => `<li><label class="switch"><input type="checkbox" data-pi="${esc(p.name)}" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(p.name)}"><span></span></label><span class="tg"><b>${esc(p.name)}</b>${p.version ? ` <span class="badge modified">${esc(p.version)}</span>` : ""}<small>${esc(p.description)}</small>${p.skills.length ? `<small>Skills: ${p.skills.map(s => "$" + esc(s)).join(", ")}</small>` : ""}${(p.server_status || []).map(server).join("")}<small>From ${esc(p.source)}</small></span><button class="iconbtn" data-pr="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.x}</button></li>`;
+  const render = v => {
+    d = v;
+    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the same format as Claude Code plugins. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
+      <h3 style="font-size:15px;margin:14px 0 6px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
+      <h3 style="font-size:15px;margin:14px 0 6px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
+      <div class="keyrow"><input id="plSrc" placeholder="Folder, .zip, git URL or marketplace.json" spellcheck="false"><button class="btn primary" id="plAdd">Install</button></div>
+      <div class="dropzone" id="plDrop" style="margin-top:8px" tabindex="0" role="button">Or drop a plugin .zip or a marketplace.json here<input type="file" id="plFile" accept=".zip,.json" hidden></div><div class="res" id="plRes"></div>`;
+    $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
+    $$("[data-pb]", b).forEach(x => x.onchange = () => act({action: "enable", name: x.dataset.pb, on: x.checked}));
+    $$("[data-pi]", b).forEach(x => x.onchange = () => act({action: "enable", name: x.dataset.pi, on: x.checked}));
+    $$("[data-pr]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Remove this plugin?", text: "Its skills, MCP servers and files are removed. Skills you had before stay.", ok: "Remove plugin", danger: true})) act({action: "remove", name: x.dataset.pr}); });
+    $$("[data-ps]", b).forEach(x => x.onchange = async () => {
+      if (x.checked && !await ask({title: "Turn on this server?", text: `It runs on this computer: ${x.dataset.cmd}`, ok: "Turn on"})) { x.checked = false; return; }
+      try { await post("/api/mcp", {name: x.dataset.ps, enabled: x.checked}); } catch (e) { say(e.message, true); x.checked = !x.checked; }
+    });
+    $("#plAdd").onclick = async () => { const src = $("#plSrc").value.trim(); if (!src) { $("#plSrc").focus(); return; } say("Installing..."); installed(await act({action: "install", source: src})); };
+    const upload = async f => { if (!f) return; const data = await new Promise(res => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.readAsDataURL(f); }); say("Installing..."); installed(await act({action: "upload", file: {name: f.name, data}})); };
+    const dz = $("#plDrop"); dz.onclick = () => $("#plFile").click(); $("#plFile").onchange = () => upload($("#plFile").files[0]);
+    dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
+    dz.ondrop = e => { e.preventDefault(); dz.classList.remove("over"); upload(e.dataTransfer.files[0]); };
+  };
+  render(d);
+}
+
+/* Settings, MCP servers: a library of well-known servers. Adding one puts it in the list switched off; the user fills
+   its settings (saved in meshpool.config on this computer) and turns it on. OAuth ones sign in through Connectors. */
+async function drawMcpLibrary(b) {
+  const box = document.createElement("div"); b.appendChild(box);
+  let d;
+  try { d = await api("/api/mcp-library"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const say = (text, bad) => { RES("mlRes").className = "res " + (bad ? "bad" : "ok"); RES("mlRes").textContent = text; };
+  const secret = n => /KEY|TOKEN|SECRET|PASSWORD|URI|STRING/.test(n);
+  const fields = e => e.settings.map(s => `<label class="field" style="margin-top:6px"><span>${esc(s.name)}</span><input data-ms="${esc(s.name)}" type="${secret(s.name) ? "password" : "text"}" placeholder="${esc(s.hint)}" autocomplete="off" spellcheck="false"></label>`).join("");
+  const button = e => e.transport === "connector" || e.transport === "oauth" ? (e.enabled ? "" : `<button class="btn" data-ma="${esc(e.id)}">Connect</button>`)
+    : !e.added ? `<button class="btn" data-ma="${esc(e.id)}">Add</button>` : e.enabled ? "" : `<button class="btn primary" data-mo="${esc(e.id)}">${e.settings.length ? "Save and turn on" : "Turn on"}</button>`;
+  const row = e => `<li data-me="${esc(e.id)}"><span class="tg"><b>${esc(e.name)}</b> ${e.enabled ? `<span class="badge added">On</span>` : e.added ? `<span class="badge modified">Added, off</span>` : ""}<small>${esc(e.description)}</small>${e.target ? `<code>${esc(e.target)}</code>` : ""}<small>${esc(e.license)} · <a href="${esc(e.docs)}" target="_blank" rel="noopener">Docs</a>${e.settings.length ? ` · Needs ${e.settings.map(s => esc(s.name)).join(", ")}` : ""}</small>${e.added && !e.enabled && e.settings.length && e.transport !== "connector" ? fields(e) : ""}</span>${button(e)}</li>`;
+  const draw = () => {
+    const cat = S.mcpLibCat || "";
+    box.innerHTML = `<h3 style="font-size:15px;margin:18px 0 4px">Library</h3><p class="lead" style="font-size:12.5px">Well-known MCP servers, checked to exist. Adding one puts it in the list above, switched off. Fill in its settings, then turn it on. Keys stay on this computer.</p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${["", ...d.categories].map(c => `<button class="btn${c === cat ? " primary" : ""}" data-mc="${c}">${c ? c[0].toUpperCase() + c.slice(1) : "All"}</button>`).join("")}</div>
+      <ul class="rows2">${d.library.filter(e => !cat || e.category === cat).map(row).join("")}</ul><div class="res" id="mlRes"></div>`;
+    $$("[data-mc]", box).forEach(x => x.onclick = () => { S.mcpLibCat = x.dataset.mc; draw(); });
+    $$("[data-ma]", box).forEach(x => x.onclick = async () => {
+      try {
+        const r = await post("/api/mcp-library", {action: "add", id: x.dataset.ma});
+        if (r.result.connector) { await post("/api/connectors", {action: "connect", id: r.result.connector}); S.connCache = null; d = r; draw(); say("Finish signing in in your browser. New threads can then use it."); return; }
+        renderSection("mcp");
+      } catch (e) { say(e.message, true); }
+    });
+    $$("[data-mo]", box).forEach(x => x.onclick = async () => {
+      const values = {}; $$(`[data-me="${x.dataset.mo}"] [data-ms]`, box).forEach(i => { if (i.value.trim()) values[i.dataset.ms] = i.value.trim(); });
+      try { await post("/api/mcp-library", {action: "configure", id: x.dataset.mo, values}); renderSection("mcp"); } catch (e) { say(e.message, true); }
+    });
+  };
+  draw();
 }
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
