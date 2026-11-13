@@ -58,7 +58,7 @@ Not testable in this Linux container, so checked by other means:
    `app/vendor/hermes`. Install `packaging/requirements-cli.txt` plus Hermes' own dependencies into the Python that
    runs the app.
 3. Make a fake home with one skill and one MCP server for each app the importer reads. Its layout is in
-   `harness-lab/QA.md`.
+   `harness-lab/notes/QA.md`.
 4. Remove every credential variable (`CLAUDE_*`, `ANTHROPIC_*`, `OPENAI_*`, cloud and GitHub tokens) from the
    app's environment. Otherwise a subscription harness signs in with your own account and makes real, paid calls,
    and it can write that sign-in into the fake home. `run_all.sh` does this.
