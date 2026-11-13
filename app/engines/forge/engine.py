@@ -48,8 +48,15 @@ def theme_from(task: str):
     return spec or None
 
 
+def density_from(task: str, options: dict | None = None, density: str | None = None) -> str:
+    """'for presenting', 'keynote', 'visual' -> present; 'send-ahead', 'pre-read', 'detailed', 'dense' -> read;
+    otherwise balanced. An explicit density (argument, options["density"], or 'density: x' in the request) wins."""
+    from engines.forge.density import detect
+    return detect(task, density or (options or {}).get("density"))
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
-          model: str | None = None, **_) -> dict:
+          model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
     from engines.forge.build import build
     from engines.forge.brief import complete
     # an open brief (audience, density, length, look) gets the recommended answers (engines/forge/brief.py)
@@ -58,11 +65,14 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         os.environ.setdefault("FORGE_MODEL", model)
     m = re.search(r"\b(\d{1,2})[- ]slide", task)
     slides = int(m.group(1)) if m else 10
-    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id, theme=theme_from(task))
+    mode = density_from(task, options, density)
+    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id, theme=theme_from(task),
+                density=mode)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
-    answer = (f"Built {Path(pptx).name}: {slides} slides in the forge design system, checked after rendering. "
+    answer = (f"Built {Path(pptx).name}: {slides} slides in the forge design system ({mode} density), checked after "
+              "rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],

@@ -187,7 +187,7 @@ def _frame(ctx, sl, n, part, box, look, i, s):
     used = 0.0
     if head:
         if L["heading"] == "tab":
-            bl = [{"text": head, "size": 13, "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
+            bl = [{"text": head, "size": R.bump(13), "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
             bl, ok = R._fit(bl, w - 0.24, 0.62, 11)
             th = max(0.36, R._need(bl, w - 0.24) + 0.1)
             tab = R._fill(sl, x, y, w, th, L["tab"], f"Tab{i}")
@@ -196,7 +196,7 @@ def _frame(ctx, sl, n, part, box, look, i, s):
                 ctx.miss(n, f"the heading of part {i}", 3)
             used = th
         else:
-            bl = [{"text": head, "size": 14, "bold": True, "numbers": False}]
+            bl = [{"text": head, "size": R.bump(14), "bold": True, "numbers": False}]
             bl, ok = R._fit(bl, w, 0.62, 12)
             hh = R._need(bl, w) + 0.02
             R._write(R._box(sl, x, y, w, hh, f"Heading{i}"), bl)
@@ -229,7 +229,7 @@ def p_chart(ctx, sl, n, part, box, look, i, s, card):
                 return p_stats(ctx, sl, n, {"items": st["items"]}, box, look, i, s, card)
             return p_text(ctx, sl, n, {"bullets": [_txt(v) for v in c.get("categories") or []]}, box, look, i, s, card)
     if part.get("unit"):
-        ub = [{"text": part["unit"], "size": 11, "numbers": False}]
+        ub = [{"text": part["unit"], "size": R.bump(11), "numbers": False}]
         uh = R._need(ub, w) + 0.02
         R._write(R._box(sl, x, y, w, uh, f"Unit{i}"), ub)
         y, h = y + uh + 0.04, h - uh - 0.04
@@ -291,9 +291,9 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
     for z in (40, 36, 32, 28, 24, 22, 20):
         ok = True
         for it in items:
-            rest = [{"text": it.get("label") or "", "size": 12, "numbers": False, "space_before": 4}]
+            rest = [{"text": it.get("label") or "", "size": R.bump(12), "numbers": False, "space_before": 4}]
             if it.get("delta"):
-                rest.append({"text": it["delta"], "size": 11, "bold": True, "numbers": False, "space_before": 2})
+                rest.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2})
             need = (_lines(it.get("value", ""), iw, z, head=True) * R._pitch(z, 1.0) / 72 + R._need(rest, iw))
             if _head_w(it.get("value", ""), z) > iw * 0.97 or need > th - 0.1:
                 ok = False
@@ -309,9 +309,9 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
         bl = [{"text": _plain(it.get("value", "")), "size": vsize, "bold": True, "heading": True, "numbers": False,
                "color": TC.ACCENT_1, "line_spacing": 1.0, "prov": it.get("prov")}]
         if it.get("label"):
-            bl.append({"text": it["label"], "size": 12, "numbers": False, "space_before": 4})
+            bl.append({"text": it["label"], "size": R.bump(12), "numbers": False, "space_before": 4})
         if it.get("delta"):
-            bl.append({"text": it["delta"], "size": 11, "bold": True, "numbers": False, "space_before": 2,
+            bl.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2,
                        "color": TC.TEXT_2})
         rest, ok = R._fit(bl[1:], iw, th - 0.1 - R._pitch(vsize, 1.0) / 72, FLOOR)
         if not ok:
@@ -324,7 +324,8 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
                 R._rule(sl, tx, ty + th + gap / 2, tw, TC.ACCENT_5, 0.5, f"ov_StatRuleH{i}_{j + 1}")
 
 
-def _text_blocks(part, color=TC.TEXT_1, lead_size=14, size=12):
+def _text_blocks(part, color=TC.TEXT_1, lead_size=None, size=None):
+    lead_size, size = lead_size or R.bump(14), size or R.bump(12)
     bl = []
     lead = part.get("lead") or part.get("title")
     if lead:
@@ -345,7 +346,8 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
     bl = _text_blocks(part)
     if not bl:
         return
-    bl = _fit_trim(R._grow(bl, w, h, 2), w, h, s, f"the text of part {i}", ctx, n)
+    bl = _fit_trim(R._grow(bl, w, h, 6 if R.DENSITY["mode"] == "present" else 2), w, h, s, f"the text of part {i}",
+                   ctx, n)                              # presenting: short text steps well up the scale
     if card is not None and not part.get("heading"):
         R._shape_text(card, bl, ctx, n, (x, y, w, h))   # the card is the text's own shape
         return
@@ -354,7 +356,7 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
 
 def p_callout(ctx, sl, n, part, box, look, i, s, card):
     x, y, w, h = box
-    bl = _text_blocks(part, TC.BACKGROUND_1, 16, 13)
+    bl = _text_blocks(part, TC.BACKGROUND_1, R.bump(16), R.bump(13))
     if not bl:
         return
     iw, ih = w - 0.5, h - 0.3
@@ -380,8 +382,8 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
         d, g = 0.2, 0.05
         sw = (w + (k - 1) * (d - g)) / k
         tw = sw - 2 * d - 0.14
-        need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": 12 + z, "bold": True},
-                                      {"text": _txt(st.get("text")), "size": 11 + z, "space_before": 4}], tw)
+        need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},
+                                      {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
                              for st in steps)
         bump = next((z for z in (3, 2, 1) if need(z) <= 0.55 * h), 0)   # one type size for every step
         ch = min(h, max(1.1, need(bump) + 0.5))           # as tall as the text needs, set a little above centre
@@ -393,10 +395,10 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
             shp = _shape(sl, kind, sx, y, sw, ch, f"ov_Step{i}_{j + 1}", fill=TC.TEXT_2 if on else surf)
             shp.adjustments[0] = min(1.0, d / min(sw, ch))
             fg = TC.BACKGROUND_1 if on else TC.TEXT_1
-            bl = [{"text": _txt(st.get("title")), "size": 12, "bold": True, "numbers": False,
+            bl = [{"text": _txt(st.get("title")), "size": R.bump(12), "bold": True, "numbers": False,
                    "color": TC.BACKGROUND_1 if on else TC.TEXT_2}]
             if st.get("text"):
-                bl.append({"text": _txt(st["text"]), "size": 11, "space_before": 4, "color": fg, "prov": st.get("prov")})
+                bl.append({"text": _txt(st["text"]), "size": R.bump(11), "space_before": 4, "color": fg, "prov": st.get("prov")})
             bl = _fit_trim(R._grow(bl, tw, ch - 0.25, bump), tw, ch - 0.25, s, f"step {j + 1} of part {i}", ctx, n)
             _in_shape(shp, bl, ctx, n, (0.07 if j else 0.12, 0.12, 0.07, 0.1), MSO_ANCHOR.TOP)
         return
@@ -411,11 +413,11 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
         badge = _shape(sl, MSO_SHAPE.PENTAGON, x, ry, bw, rh, f"ov_Step{i}_{j + 1}",
                        fill=TC.ACCENT_1 if on else TC.TEXT_2)
         badge.adjustments[0] = min(1.0, 0.18 / min(bw, rh))
-        bb = [{"text": _txt(st.get("title")), "size": 12, "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
+        bb = [{"text": _txt(st.get("title")), "size": R.bump(12), "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
         bb = _fit_trim(bb, bw - 0.3, rh - 0.08, s, f"step {j + 1} of part {i}", ctx, n)
         _in_shape(badge, bb, ctx, n, (0.1, 0.03, 0.06, 0.03), MSO_ANCHOR.MIDDLE)
         if st.get("text"):
-            tb = [{"text": _txt(st["text"]), "size": 12, "prov": st.get("prov")}]
+            tb = [{"text": _txt(st["text"]), "size": R.bump(12), "prov": st.get("prov")}]
             tb = _fit_trim(tb, tw - 0.04, rh - 0.06, s, f"step {j + 1} of part {i}", ctx, n)
             body = _shape(sl, MSO_SHAPE.RECTANGLE, tx, ry, tw, rh, f"ov_StepText{i}_{j + 1}")
             _in_shape(body, tb, ctx, n, (0.02, 0.02, 0.02, 0.02), MSO_ANCHOR.MIDDLE)
@@ -438,13 +440,13 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
 
         def lab(j, z):
             m = ms[j]
-            out = [{"text": _txt(m.get("label") or m.get("title")), "size": 12 + z, "numbers": False,
+            out = [{"text": _txt(m.get("label") or m.get("title")), "size": R.bump(12) + z, "numbers": False,
                     "align": PP_ALIGN.CENTER, "bold": bool(m.get("text")) or hl == j, "prov": m.get("prov")}]
             if m.get("text"):
-                out.append({"text": _txt(m["text"]), "size": 11 + z, "align": PP_ALIGN.CENTER, "space_before": 4})
+                out.append({"text": _txt(m["text"]), "size": R.bump(11) + z, "align": PP_ALIGN.CENTER, "space_before": 4})
             return out
         for z in (4, 2, 0):                              # the largest type at which the band takes <= 60% of the box
-            dates = [[{"text": _txt(m.get("date")), "size": 12 + z, "bold": True, "numbers": False,
+            dates = [[{"text": _txt(m.get("date")), "size": R.bump(12) + z, "bold": True, "numbers": False,
                        "color": TC.ACCENT_1, "align": PP_ALIGN.CENTER}] for m in ms]
             dh = max([R._need(d, cw) for d in dates if d[0]["text"]] or [0.0]) + 0.04
             ln = max(R._need(lab(j, z), cw) for j in range(len(ms))) + 0.04
@@ -476,16 +478,16 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
         ry = y + j * rh
         on = hl == j
         dd = dot * (1.4 if on else 1)
-        bl = [{"text": _txt(m.get("date")), "size": 12, "bold": True, "numbers": False, "color": TC.ACCENT_1},
-              {"text": _txt(m.get("label") or m.get("title")), "size": 12, "numbers": False, "bold": on,
+        bl = [{"text": _txt(m.get("date")), "size": R.bump(12), "bold": True, "numbers": False, "color": TC.ACCENT_1},
+              {"text": _txt(m.get("label") or m.get("title")), "size": R.bump(12), "numbers": False, "bold": on,
                "prov": m.get("prov")}]
         if m.get("text"):
-            bl.append({"text": _txt(m["text"]), "size": 11, "space_before": 2})
+            bl.append({"text": _txt(m["text"]), "size": R.bump(11), "space_before": 2})
         bl = [b for b in bl if b["text"]]
         tx, tw = x + 0.4, w - 0.4
         bl = _fit_trim(bl, tw, rh - 0.08, s, f"milestone {j + 1} of part {i}", ctx, n)
         need = min(rh - 0.04, R._need(bl, tw))
-        _shape(sl, MSO_SHAPE.OVAL, ax - dd / 2, ry + 0.02 + R._pitch(12) / 144 - dd / 2 + 0.03, dd, dd,
+        _shape(sl, MSO_SHAPE.OVAL, ax - dd / 2, ry + 0.02 + R._pitch(R.bump(12)) / 144 - dd / 2 + 0.03, dd, dd,
                f"ov_TLDot{i}_{j + 1}", fill=TC.ACCENT_3 if on else TC.ACCENT_1, line=TC.BACKGROUND_1, weight=1.5)
         R._write(R._box(sl, tx, ry, tw, max(need, rh - 0.04), f"ov_TLLabel{i}_{j + 1}"), bl, ctx, n)
 
@@ -508,7 +510,7 @@ def p_matrix2x2(ctx, sl, n, part, box, look, i, s, card):
     bot_h = 0.3 if xl else 0.0
     if yl:
         R._write(R._box(sl, x + gw, y, w - gw, top_h - 0.04, f"ov_MxYLabel{i}", MSO_ANCHOR.BOTTOM),
-                 [{"text": f"↑ {yl}", "size": 11, "bold": True, "numbers": False}])
+                 [{"text": f"↑ {yl}", "size": R.bump(11, 0.5), "bold": True, "numbers": False}])
     g = 0.08
     qx, qy = x + gw, y + top_h
     qw, qh = (w - gw - g) / 2, (h - top_h - bot_h - g) / 2
@@ -521,10 +523,10 @@ def p_matrix2x2(ctx, sl, n, part, box, look, i, s, card):
                      fill=TC.TEXT_2 if on else surf)
         bl = []
         if q.get("title"):
-            bl.append({"text": _txt(q["title"]), "size": 12, "bold": True, "numbers": False,
+            bl.append({"text": _txt(q["title"]), "size": R.bump(12, 0.5), "bold": True, "numbers": False,
                        "color": TC.BACKGROUND_1 if on else TC.TEXT_2})
         for it in q.get("items") or []:
-            bl.append({"text": _txt(it), "size": 11, "bullet": True, "space_before": 3, "color": fg})
+            bl.append({"text": _txt(it), "size": R.bump(11, 0.5), "bullet": True, "space_before": 3, "color": fg})
         if bl:
             bl = _fit_trim(R._grow(bl, qw - 0.24, qh - 0.16, 1), qw - 0.24, qh - 0.16, s,
                            f"quadrant {j + 1} of part {i}", ctx, n)
@@ -532,20 +534,20 @@ def p_matrix2x2(ctx, sl, n, part, box, look, i, s, card):
     if yl:                                               # y axis: High at the top, Low at the bottom, an arrow up
         _vline(sl, x + gw - 0.05, qy, 2 * qh + g, TC.TEXT_1, 0.75, f"ov_MxYAxis{i}", arrow=True)
         R._write(R._box(sl, x, qy, gw - 0.16, 0.24, f"ov_MxYHigh{i}"),
-                 [{"text": yhi, "size": 10, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+                 [{"text": yhi, "size": R.bump(10, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
         R._write(R._box(sl, x, qy + 2 * qh + g - 0.24, gw - 0.16, 0.24, f"ov_MxYLow{i}", MSO_ANCHOR.BOTTOM),
-                 [{"text": ylo, "size": 10, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+                 [{"text": ylo, "size": R.bump(10, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
     if xl:                                               # x axis: Low left, the label centred, High right
         by = qy + 2 * qh + g + 0.05
         ax = R._rule(sl, qx, by, w - gw, TC.TEXT_1, 0.75, f"ov_MxXAxis{i}")
         _arrow(ax)
         lw = max(R._need_w(t, 10, True) for t in (xlo, xhi)) + 0.1
         R._write(R._box(sl, qx, by + 0.03, lw, 0.22, f"ov_MxXLow{i}"),
-                 [{"text": xlo, "size": 10, "bold": True, "numbers": False}])
+                 [{"text": xlo, "size": R.bump(10, 0.5), "bold": True, "numbers": False}])
         R._write(R._box(sl, qx + lw, by + 0.03, w - gw - 2 * lw, 0.22, f"ov_MxXLabel{i}"),
-                 [{"text": f"{xl} →", "size": 11, "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}])
+                 [{"text": f"{xl} →", "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}])
         R._write(R._box(sl, x + w - lw, by + 0.03, lw, 0.22, f"ov_MxXHigh{i}"),
-                 [{"text": xhi, "size": 10, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+                 [{"text": xhi, "size": R.bump(10, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
 
 
 def _ball(sl, cx, cy, d, score, name):
@@ -578,10 +580,10 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     m = max(1, len(crit))
     lw = min(2.4, max(1.2, 0.34 * w))
     cw = (w - lw) / m
-    head = [[{"text": c, "size": 11, "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
+    head = [[{"text": c, "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
     hh = max([R._need(b, cw - 0.08) for b in head] or [0.3]) + 0.04
     if hh > 0.75:
-        head = [[dict(b[0], size=10)] for b in head]
+        head = [[dict(b[0], size=R.bump(10, 0.5))] for b in head]
         hh = min(0.9, max(R._need(b, cw - 0.08) for b in head) + 0.04)
     for c_, b in enumerate(head):
         R._write(R._box(sl, x + lw + c_ * cw + 0.04, y, cw - 0.08, hh, f"ov_HvHead{i}_{c_ + 1}", MSO_ANCHOR.BOTTOM), b)
@@ -599,7 +601,7 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     d = min(0.34, rh * 0.62, cw * 0.6)
     for r_, r in enumerate(keep):
         ry = body_y + r_ * rh
-        lb = [{"text": _txt(r.get("label")), "size": 12, "numbers": False, "bold": bool(r.get("highlight"))}]
+        lb = [{"text": _txt(r.get("label")), "size": R.bump(12), "numbers": False, "bold": bool(r.get("highlight"))}]
         lb = _fit_trim(lb, lw - 0.1, rh - 0.04, s, f"row {r_ + 1} of part {i}", ctx, n)
         R._write(R._box(sl, x, ry, lw - 0.1, rh, f"HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
         for c_ in range(m):
@@ -620,7 +622,7 @@ def p_quote(ctx, sl, n, part, box, look, i, s, card):
     bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18, "italic": True, "numbers": False,
            "heading": True, "prov": part.get("prov")}]
     if part.get("attribution"):
-        bl.append({"text": "— " + _txt(part["attribution"]).lstrip("—– -"), "size": 12, "bold": True,
+        bl.append({"text": "— " + _txt(part["attribution"]).lstrip("—– -"), "size": R.bump(12), "bold": True,
                    "numbers": False, "space_before": 10, "color": TC.TEXT_2})
     bh = y + h - ty
     bl = _fit_trim(R._grow(bl, w - 0.1, bh, 4), w - 0.1, bh, s, f"the quote of part {i}", ctx, n, 11)

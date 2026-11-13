@@ -73,7 +73,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 20, model: 
         try:
             from engines.forge.engine import solve as forge_solve
             res = forge_solve(task, workdir=workdir, task_id=task_id, client=client, model=model,
-                              files=kw.get("files"))
+                              files=kw.get("files"), density=kw.get("density"), options=kw.get("options"))
             if res.get("ok"):
                 return res
         except Exception as e:  # fall back to the previous engine rather than fail the user's task

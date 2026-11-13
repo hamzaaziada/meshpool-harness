@@ -361,12 +361,13 @@ def _dead_space(pdf_path: str, m: dict, R: dict, failures: list, stats: dict):
         charts = [(sh["x"], sh["y"], sh["w"], sh["h"]) for sh in s["shapes"] if sh["role"] == "chart" and sh["x"] is not None]
         e = page_empty(doc[i], W, H, Wd["body_top"], Wd["body_bottom"], filled=charts)
         worst.append(round(e["share"], 2))
-        if e["share"] > Wd["max_empty_share"]:
+        limit = (Wd.get("max_empty_share_by_density") or {}).get(s.get("density"), Wd["max_empty_share"])
+        if e["share"] > limit:
             failures.append(F("P20", "dead_space", f"Slide {s['n']}: {e['share']:.0%} of the body is one empty block "
                               f"({e['w_in']:.1f} x {e['h_in']:.1f} in, {where(e, W, H)}). Fill it with substance the "
                               "slide is missing (more evidence, a breakdown, a comparison, the implication), or merge "
                               "this slide with its neighbour. Never pad with filler.", slide=s["n"],
-                              measured=round(e["share"], 2), limit=Wd["max_empty_share"]))
+                              measured=round(e["share"], 2), limit=limit))
     stats["empty_share_by_slide"] = worst
     doc.close()
 
@@ -387,8 +388,29 @@ def _opens_cleanly(path, failures):
                           severity="info", fix_scope="renderer"))
 
 
+def slide_density(s: dict, R: dict, override: str | None = None) -> str:
+    """The density mode a slide is checked against: the caller's override, else the slide's own tag
+    ("density:present" in its name), else the rules' default ("read": today's dense caps)."""
+    D = R["density"]
+    if override:
+        return override
+    m = re.search(D.get("mode_regex") or r"density:([a-z]+)", s.get("name") or "")
+    mode = m.group(1) if m else None
+    return mode if mode in (D.get("modes") or {}) or mode == "read" else D.get("default_mode", "read")
+
+
+def density_caps(R: dict, mode: str) -> dict:
+    """P10 caps for a density mode: the base (read) caps with the mode's keys merged over them."""
+    from .common import _merge
+    D = R["density"]
+    over = (D.get("modes") or {}).get(mode)
+    return _merge(D, over) if over else D
+
+
 def validate(path: str, rules: dict | None = None, brief: dict | None = None, provenance: dict | None = None,
-             storyline: dict | None = None, render: bool | None = None) -> dict:
+             storyline: dict | None = None, render: bool | None = None, density: str | None = None) -> dict:
+    """density: check every slide against this mode's P10 caps and P20 threshold ("present", "balanced", "read");
+    by default each slide's own density tag decides."""
     rules = rules or load_rules()
     R = rules["pptx"]
     failures: list[dict] = []
@@ -420,6 +442,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     # ---------------- P1 render
     if render is None:
         render = R["render"]["enabled"]
+    for s in slides:
+        s["density"] = slide_density(s, R, density)
     if render:
         _render_check(path, m, R, failures, stats)
     else:
@@ -572,8 +596,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         if R["icons"]["forbid_emoji"] and s["emoji"]:
             failures.append(F("P9", "emoji", f"Slide {n}: remove {s['emoji']} emoji from the text.", slide=n))
 
-        # ---------------- P10 density
-        D = R["density"]
+        # ---------------- P10 density (caps per density mode: the slide's "density:<mode>" tag, or the call's)
+        D = density_caps(R, slide_density(s, R, density))
         cap = (D.get("by_archetype") or {}).get(s["archetype"], D["max_body_words"])
         if s["body_words"] > cap:
             failures.append(F("P10", "body_words", f"Slide {n}: {s['body_words']} words of body text; cut to "
@@ -929,9 +953,11 @@ if __name__ == "__main__":
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--text", action="store_true", help="print the compact repair text instead of JSON")
+    ap.add_argument("--density", choices=["present", "balanced", "read"],
+                    help="check against this density mode (default: each slide's own density tag, else read)")
     a = ap.parse_args()
     res = validate(a.pptx, load_rules(a.rules), _load(a.brief), _load(a.provenance), _load(a.storyline),
-                   render=False if a.no_render else None)
+                   render=False if a.no_render else None, density=a.density)
     res.pop("measurement")
     if a.out:
         Path(a.out).write_text(json.dumps(res, indent=1, default=str))

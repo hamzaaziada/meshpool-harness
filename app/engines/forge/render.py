@@ -28,6 +28,7 @@ from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from .common import positive_axis_ids
+from .density import condense
 from .template import default_template, layout
 
 ICONS = Path(__file__).resolve().parents[1] / "slides" / "icons"
@@ -44,6 +45,27 @@ T = {"title": 25, "sub": 18, "note": 8, "src": 9, "tag": 9, "label": 12, "body":
 DENSE = {"cell": 10, "lead": 10, "head": 14, "num": 20, "label": 10}            # challenge matrix (page 8)
 ARGUMENT = {"intro": 14, "bullet": 12, "callout": 12, "exhibit": 16, "unit": 12}  # exhibit + argument (page 3)
 FIRM = "Meshpool"
+_BASE = {"T": dict(T), "DENSE": dict(DENSE), "ARGUMENT": dict(ARGUMENT)}
+DENSITY = {"mode": "balanced", "bump": 1}       # deck density (engines/forge/density.py); set by render()
+
+
+def set_density(mode: str | None) -> str:
+    """Apply a density mode's type scale to T, DENSE and ARGUMENT in place (they are read at draw time, like FACE)."""
+    from .density import DEFAULT, SCALES, normalize as _norm
+    mode = _norm(mode) or DEFAULT
+    sc = SCALES[mode]
+    for name, table in (("T", T), ("DENSE", DENSE), ("ARGUMENT", ARGUMENT)):
+        table.clear()
+        table.update(_BASE[name])
+        table.update(sc[name])
+    DENSITY.update(mode=mode, bump=sc["bump"])
+    return mode
+
+
+def bump(size: float, k: float = 1.0) -> float:
+    """A part's base size in the current density mode (read 12 -> balanced 13 -> present 16); k < 1 for labels in
+    tight places (matrix axes, harvey column heads)."""
+    return size + int(round(DENSITY["bump"] * k))
 LEADING = 1.08                   # exact line pitch as a multiple of size (12 pt text on 13 pt, as in the reference);
                                  # exact points render identically in PowerPoint and LibreOffice, proportional does not
 
@@ -916,7 +938,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     cols, rows = t["columns"], t["rows"]
     hdr = 2 if groups else 1
     nrows = hdr + len(rows)
-    size_ = t.get("size", 12)
+    size_ = t.get("size") or T["cell"]
     from .common import font_file, wrap_lines
     f_reg, f_bold = _font("body"), _font("body", True)
     row_min = lambda sz: sz * 1.15 / 72 + 0.045                   # LibreOffice/PowerPoint minimum, measured
@@ -1437,6 +1459,14 @@ def a_closing(ctx, s, sl, n):
             keep_ms -= 1
         else:
             break
+    if keep_ms == 3:                                         # room to spare: larger type before larger gaps
+        for z in range(size + 1, size + 4):
+            bigger = [cells(st, z) for st in steps_]
+            nb = [max(_need(a, aw), _need(d, dw) if d else 0, _need(wh, ww) if wh else 0, 0.4) + 0.12
+                  for a, d, wh in bigger]
+            if sum(nb) > 0.8 * (bottom - top):
+                break
+            size, laid, need = z, bigger, nb
     if keep_ms < 3:
         cut = [f"{st.get('action')}: " + "; ".join((st.get("milestones") or [])[keep_ms:]) for st in steps
                if (st.get("milestones") or [])[keep_ms:]]
@@ -1498,7 +1528,7 @@ def a_challenge_matrix(ctx, s, sl, n):
             ba, bb = blocks(cells[0]), blocks(cells[1])
             for b in ba + bb:
                 b["size"] = size
-            lab = [{"text": r.get("label", ""), "size": size}]
+            lab = [{"text": r.get("label", ""), "size": size, "bold": True}]
             out.append((ba, bb, max(_need(ba, aw), _need(bb, bw), _need(lab, lw - 0.85), 0.45) + 0.08))
         return out
     size = DENSE["cell"]
@@ -1506,7 +1536,7 @@ def a_challenge_matrix(ctx, s, sl, n):
     while sum(x[2] for x in laid) > avail and size > s.get("min_size", 10):
         size -= 1
         laid = fit_rows(rows, size)
-    while size < T["cell"]:                                # short content: larger type before larger gaps
+    while size < T["cell"] + 2 * DENSITY["bump"]:          # short content: larger type before larger gaps
         bigger = fit_rows(rows, size + 1)
         if sum(x[2] for x in bigger) > avail * 0.97:
             break
@@ -1517,7 +1547,8 @@ def a_challenge_matrix(ctx, s, sl, n):
     if keep < len(rows):
         ctx.carry = dict(s, rows=rows[keep:], title=_cont_title(s["title"]), number_from=s.get("number_from", 1) + keep,
                          _cont=True)
-    gap = min(0.3, max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))   # never airy rows
+    gap = min(0.3 if DENSITY["mode"] == "read" else 0.42,                    # never airy rows
+              max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))
     y = top
     first = s.get("number_from", 1)
     for i, (r, (ba, bb, need)) in enumerate(zip(rows[:keep], laid[:keep])):
@@ -1526,7 +1557,7 @@ def a_challenge_matrix(ctx, s, sl, n):
                [{"text": str(first + i), "size": DENSE["num"], "bold": True, "heading": True, "numbers": False}])
         if r.get("icon"):
             _icon(sl, r["icon"], lx + 0.36, y + 0.03, 0.36, re.sub(r"\*\*", "", r.get("label", "")))
-        lab_h = min(rh - 0.1, _need([{"text": r.get("label", ""), "size": size}], lw - 0.85) + 0.06)
+        lab_h = min(rh - 0.1, _need([{"text": r.get("label", ""), "size": size, "bold": True}], lw - 0.85) + 0.06)
         _write(_box(sl, lx + 0.85, y + 0.04, lw - 0.85, lab_h, f"Label{i + 1}"),
                [{"text": r.get("label", ""), "size": size, "numbers": False}])
         _write(_box(sl, ax, y + 0.06, aw, rh - 0.1, f"A{i + 1}"), ba, ctx, n)
@@ -1610,6 +1641,8 @@ _NUMCELL = re.compile(r"^\s*([+\-−]?)\s*([$€£]?)\s*(\d[\d,]*(?:\.\d+)?)\s*(
 def _table_as_chart(t: dict):
     """A small table whose value columns are numbers in one unit -> clustered bar/column chart data (or None)."""
     rows = t.get("rows") or []
+    if t.get("total_row") and rows:                    # a total is not a category: it would dwarf the bars
+        rows = rows[:-1]
     cols = t.get("columns") or []
     if not 2 <= len(rows) <= 6 or len(cols) < 2:
         return None
@@ -1693,6 +1726,8 @@ def a_table_focus(ctx, s, sl, n):
     tx, tw = span(0, 7)
     ax, aw = span(8, 11)
     as_chart = _table_as_chart(t) if bullets else None
+    if as_chart and DENSITY["mode"] == "present" and len(as_chart["series"]) > 1:
+        as_chart = None                                    # presenting: one measure per chart, else the table
     side = None
     if bullets and not as_chart and len(t.get("columns") or []) <= 4 and natural < 0.72 * (bottom - y):
         side = _table(ctx, sl, n, dict(t), tx, y, tw, hgt, dry=True)   # measured at the width it will be drawn
@@ -1704,6 +1739,14 @@ def a_table_focus(ctx, s, sl, n):
             _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
             ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
         else:                                              # short table: table left, its argument right
+            base = t.get("size") or T["cell"]
+            top = min(20, base + (5 if DENSITY["mode"] == "present" else 4))
+            for z in range(top, base, -1):                    # larger type before a block of air under the table
+                need = _table(ctx, sl, n, dict(t, size=z, _pad=0.16), tx, y, tw, hgt, dry=True)
+                ctx.carry_rows = None
+                if need <= 0.9 * hgt:
+                    t = dict(t, size=z)
+                    break
             _table(ctx, sl, n, dict(t, _pad=0.16), tx, y, tw, hgt)
         blocks = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
                   if tk.get("text") else [])
@@ -1802,14 +1845,17 @@ DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
-           carry: bool = True, theme=None) -> dict:
+           carry: bool = True, theme=None, density: str | None = None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
     does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
     theme: a palette name ("navy", "ocean", "forest", "burgundy", "graphite", "mono") or a dict with "palette",
     "fonts" ("serif", "sans", "calibri", "cambria") and slot -> hex overrides; colours stay theme slots, so the deck
-    recolours in PowerPoint (Design > Variants) too."""
+    recolours in PowerPoint (Design > Variants) too.
+    density: "present", "balanced" (default) or "read" (density.py): the type scale and how much text a slide keeps
+    on the page; what a mode cuts goes to the speaker notes. A slide's own "density" overrides the deck's."""
     from .template import theme_spec
+    DENSITY["deck"] = set_density(density)
     spec = theme_spec(theme)
     FACE["head"], FACE["body"] = spec["fonts"]["major"], spec["fonts"]["minor"]
     template = template or default_template(theme)
@@ -1824,6 +1870,8 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
             res = _render(slides, out_path, template, carry)
     except Exception as e:                                   # QA aid only: never fail the build on it
         res["errors"].append(f"label check skipped: {type(e).__name__}")
+    finally:
+        set_density(DENSITY["deck"])
     return res
 
 
@@ -1878,7 +1926,9 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     queue = list(slides)
     n = 0
     while queue:
-        s = normalize(queue.pop(0))
+        s = queue.pop(0)
+        mode = set_density(s.get("density") or DENSITY.get("deck"))
+        s = condense(normalize(s), mode)
         n += 1
         ctx.carry = None
         if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
@@ -1890,7 +1940,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             errors.append(f"slide {n}: archetype '{arch}' is not in the library {sorted(ARCHETYPES)}")
             fn = a_chart_takeaway if s.get("chart") else a_challenge_matrix
         sl = prs.slides.add_slide(layout(prs, "Title Slide" if arch in DIVIDERS else "Title Only"))
-        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')}")
+        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}")
         try:
             fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
@@ -1906,7 +1956,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                 fb = dict(s, archetype="argument_only", chart=None,
                           blocks=[{"text": "", "bullets": bl + list(s.get("bullets") or [])}])
             try:
-                sl._element.find(qn("p:cSld")).set("name", f"arch:{fb['archetype']} node:{s.get('node', '')}")
+                sl._element.find(qn("p:cSld")).set("name", f"arch:{fb['archetype']} node:{s.get('node', '')} density:{mode}")
                 ARCHETYPES[fb["archetype"]](ctx, fb, sl, n)
                 _footer(ctx, fb, sl, n)
             except Exception as e2:
