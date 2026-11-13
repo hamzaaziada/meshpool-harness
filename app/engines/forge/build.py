@@ -29,6 +29,14 @@ STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 ARCH_HELP = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields. Dense is good when it is organised.
 - cover: title, subtitle, "date" (e.g. "Board meeting, March 2026").
+- grid: a slide assembled from PARTS on a grid when one exhibit is not enough (or too much). "layout": full, halves,
+  halves_v, thirds, quarters, main_side (2/3 + 1/3), side_main, main_stack (left half + two stacked quarters right),
+  stack_main; "look": editorial | boxed | minimal | bold; "parts": one per region, each {"type", "heading", ...}:
+  chart {"chart": as above}; table {"table": as above}; stats {"items": [{"value": "34%", "label", "delta"}]};
+  text {"lead", "bullets"}; callout {"text" or "bullets"}; process {"steps": [{"title", "text"}]};
+  timeline {"milestones": [{"date", "label"}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
+  harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"}.
+  Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
