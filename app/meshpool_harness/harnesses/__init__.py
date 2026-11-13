@@ -13,20 +13,18 @@ from meshpool_harness import config as C
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
-     "description": ("Best for: coding in your project, with your MCP servers, connectors and skills. Edits code, "
-                    "runs commands and tests, and can use a browser. Meshpool's coding test (13 Nov 2026, same model "
-                    "for every agent): 18 of 20 tasks solved, ahead of Codex CLI.")},
+     "description": ("Best for coding in your project: edits code, runs commands and tests, uses your connected "
+                    "apps, skills and a browser. Solved 18 of 20 tasks on Meshpool's coding test.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
-     "description": ("Best for: documents, spreadsheets, decks, data analysis and research. Makes Word, Excel and "
-                    "PowerPoint files with Meshpool's office engines; needs nothing else installed.")},
+     "description": ("Best for documents, spreadsheets, decks, data and research. Makes real Word, Excel and "
+                    "PowerPoint files.")},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
-      "description": ("Best for: simple coding tasks at low cost. Pi is the small open-source coding agent by "
-                      "Mario Zechner, bundled with Meshpool. On Meshpool's coding test it solved the most "
-                      "(19 of 20), quickly and at the lowest cost.")}
+      "description": ("Best for fast, low-cost coding. A small open-source coding agent; it solved the most on "
+                      "Meshpool's coding test (19 of 20).")}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
-        "description": ("Best when you are not sure: picks the harness that does each kind of task best, and "
-                        "tells you which one and why.")}
+        "description": ("Best when you are not sure: picks a good agent for each task and tells you which one and "
+                        "why.")}
 # Subscriptions: the official Claude Code and Codex agents, through the Agent Client Protocol adapters. They sign in
 # with the user's own Claude or ChatGPT account, so usage comes out of that subscription, not the Meshpool key.
 CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"
@@ -36,14 +34,14 @@ SUBSCRIPTIONS = [
      "command": "npx", "args": ["-y", CLAUDE_ACP], "models": "harness", "login": "claude", "share_mcp": True,
      "env_unset": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
      "setup": "Sign in with your Claude account first: Settings, Harnesses, Claude, Sign in.",
-     "description": ("Best for: hard coding tasks, on your own Claude Pro or Max plan (usage comes from that plan). "
-                    "Uses your Meshpool connectors, skills and MCP servers.")},
+     "description": ("Best for hard coding tasks, on your own Claude Pro or Max plan (usage counts against that "
+                    "plan). Uses your connected apps and skills.")},
     {"id": "chatgpt-subscription", "name": "ChatGPT (your subscription)", "mode": "code", "type": "acp",
      "command": "npx", "args": ["-y", CODEX_ACP], "models": "harness", "login": "codex", "share_mcp": True,
      "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
      "setup": "Sign in with your ChatGPT account first: Settings, Harnesses, ChatGPT, Sign in.",
-     "description": ("Best for: terminal and command-line work, on your own ChatGPT Plus, Pro or Business plan (usage "
-                    "comes from that plan). Uses your Meshpool connectors, skills and MCP servers.")},
+     "description": ("Best for terminal and command-line work, on your own ChatGPT Plus, Pro or Business plan "
+                    "(usage counts against that plan). Uses your connected apps and skills.")},
 ]
 # Codex CLI on the Meshpool key: the same official Codex agent (through the same ACP adapter), pointed at the Meshpool
 # endpoint and model by its own config in the Meshpool data folder. No ChatGPT account needed.
@@ -53,15 +51,14 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "prepare
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
          "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
          "install": "It needs Node.js, which the Meshpool app includes; from the command line, install Node.js first.",
-         "description": ("Best for: terminal and command-line work. OpenAI's open-source Codex agent, running on your "
-                         "Meshpool key and model. It edits files in your project without asking and asks before anything "
-                         "outside it; Undo reverses its changes. On Meshpool's coding test it solved 17 of 20.")}
+         "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent on your Meshpool "
+                         "key. It edits files in your project without asking and asks before anything outside it; "
+                         "Undo reverses its changes.")}
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
             "chatgpt-subscription", "codex"}
-HERMES_NOTE = ("Best for: ongoing work where memory matters. Hermes by Nous Research remembers what it learns, "
-               "builds its own skills, uses the web, files and terminal, and makes Word, Excel and PowerPoint files. "
-               "Bundled with Meshpool; runs on your Meshpool key and model.")
+HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across threads, uses "
+               "the web, files and terminal, and makes Office files.")
 
 
 def vendored_hermes() -> Path | None:

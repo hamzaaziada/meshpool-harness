@@ -355,7 +355,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .ctx button.danger{color:var(--del)}
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide (QA: 250px at 1024) */
 .app.autoside{--sw:0px}.app.autoside .side{display:none}
-@media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),42vw)}}
+@media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),max(340px,32vw))}}
 @media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow)}}
 @media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:268px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 10px 10px}}
 
@@ -365,7 +365,8 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 @container main (max-width:1180px){.tbtn span{display:none}.tbtn{padding:6px}.topbar .chip.use{display:none}}
 @container main (max-width:860px){.topbar .title{max-width:none}}
 #pPill .lbl{flex:none}
-@container main (max-width:760px){#hPill .lbl,#aPill .lbl,#pPill .lbl{display:none}}
+@container main (max-width:760px){#aPill .lbl,#pPill .lbl{display:none}#hPill .lbl,#mPill .lbl{max-width:120px}}
+@container main (max-width:520px){#hPill .lbl{display:none}}
 @container main (max-width:640px){#topbar .chip:not(#projChip):not(#brChip){display:none}}
 
 .dlg-scrim{z-index:80}
@@ -530,3 +531,8 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .onb .bigbtn{background:var(--pool);color:var(--pool-ink)}
 .pop .opt .od{white-space:normal}
 .statgrid+table th,.utable th{text-align:left}
+
+.work .rows .appr.done{border:0;background:none;box-shadow:none;margin:0;padding:3px 12px 5px 35px;font-size:12.5px;color:var(--ink-3);display:flex;gap:6px}
+.work .rows .appr.done b{font-weight:400}
+@container main (max-width:860px){.topbar #projChip{display:none}}
+@container main (max-width:720px){.topbar #branchChip{display:none}}
