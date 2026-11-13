@@ -108,6 +108,9 @@ Finance kit (all live formulas; raw numbers are blue inputs; results are workboo
       ebitda_ltm-total_debt+cash)/diluted_shares","high":"=..."}}, ...], marker={{"label":"Offer price ($/share)",
       "value":"=offer_price"}})   # table + floating-bar chart + a low <= high check
   Name the tabs Comps, Precedents, DCF (not "Valuation" for a tab holding typed peer data).
+Research hand-off: when the folder has report.md and sources.json from a research step, take each assumption's
+Source and Evidence from the passage behind it: from engines.research.library import Corpus;
+src = Corpus(".").assumption_source("S3.p12") -> {{"source": ..., "evidence": ...}} (pass them to book.add).
 Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weighting):
   from engines.sheets import spreading as S
   facts = S.fetch_companyfacts(S.cik_for_ticker("ACME"))      # SEC EDGAR XBRL; User-Agent from $SEC_USER_AGENT

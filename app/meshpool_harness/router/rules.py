@@ -1,7 +1,8 @@
 """Deterministic router rules. Decides most requests with no model call.
 
 Output: (engines: list[str], confidence: float, reason: str). Engines in chain order.
-Chain order when several output kinds are requested: code -> data -> sheets -> slides.
+Chain order when several output kinds are requested: research -> code -> data -> sheets -> slides (research collects
+outside sources first; the deliverable engines then build on its sourced report and sources.json).
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import os
 import re
 from pathlib import Path
 
-ORDER = ["code", "data", "sheets", "slides"]
+ORDER = ["research", "code", "data", "sheets", "slides"]
 
 EXT = {
     "slides": {".pptx", ".ppt", ".key", ".odp"},
@@ -34,6 +35,15 @@ OUT = {
               r"\bpr\b|commit|compile|build (fails|error|is broken)|lint|type ?error|unit tests?|cli|script|"
               r"dockerfile|makefile|ci pipeline|terminal|bash|shell command|install|dependency|npm|pip)\b", 1.5)],
 }
+# research: the request needs outside sources (the web, filings) rather than the attached files alone
+OUT["research"] = [
+    (r"\b(research (report|brief|memo|note|summary)|sourced (report|memo|brief)|with (sources|citations)|"
+     r"cite (your |the )?sources|primer on|deep dive (on|into)|industry (overview|primer)|due diligence on|"
+     r"market (map|landscape|sizing)|competitive landscape)\b", 3.0),
+    (r"\b(research|investigate|find out|look into|dig into|diligence|landscape|competitors?|industry (analysis|"
+     r"report|trends)|market (size|share|outlook|trends)|tam\b|what('s| is| are) (the )?(latest|current)|"
+     r"latest (news|developments)|recent developments|earnings (call|release|results)|guidance|10-k|10-q|"
+     r"annual report|filings?|consensus|peers?|precedent transactions)\b", 1.5)]
 # phrases that look like one engine but are not ("data" in "data pipeline code" is code)
 NEG = {
     "data": [r"\bdata (pipeline|loader|class|model) (code|bug|test)", r"\bcsv (parser|reader|writer) (bug|code)"],
@@ -108,6 +118,9 @@ def decide(request: str, files: list[str] | None = None, output_format: str | No
     if any(Path(f).suffix.lower() in EXT["sheets"] for f in files) and re.search(r"\b(analy|insight|trend|why|explain)", t):
         sc["data"] += 1.5
 
+    if files and sc["research"] < 3:              # attached files answer the question unless it asks for research
+        sc["research"] = 0.0
+
     if _repo_signal(workdir):
         sc["code"] += 1.0 if re.search(CODE_INTENT_VERBS, t) else 0.4
         reasons.append("repo present")
@@ -134,6 +147,8 @@ def decide(request: str, files: list[str] | None = None, output_format: str | No
             chain.append("data")
         if sc["code"] >= 3 and re.search(CODE_INTENT_VERBS, t):
             chain.insert(0, "code")
+        if sc["research"] >= 1.5:
+            chain.insert(0, "research")
         chain += deliverables
     else:
         chain = [top_e]
