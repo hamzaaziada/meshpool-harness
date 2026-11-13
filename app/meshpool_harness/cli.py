@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 
 from meshpool_harness import config as _config  # noqa: E402
 
-ENGINES = ("research", "code", "data", "sheets", "slides", "forge", "general", "browser")
+ENGINES = ("research", "credit", "code", "data", "sheets", "slides", "forge", "general", "browser")
 
 
 def _engine(name):
@@ -75,7 +75,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                      f"{prev['answer']}\nFiles: {', '.join(prev.get('artifacts', []))}")
         if len(r.engines) > 1:
             task += f"\n\nYou are step {i + 1} of {len(r.engines)} ({' -> '.join(r.engines)}); do only the {name} part."
-        kw = {"files": inputs} if name in ("data", "sheets", "research") else {}
+        kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
         if name == "slides" and researched:          # the deck builds on the research report (forge facts)
             kw = {"files": inputs}
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine

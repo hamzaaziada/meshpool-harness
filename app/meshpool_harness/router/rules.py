@@ -44,6 +44,10 @@ OUT["research"] = [
      r"report|trends)|market (size|share|outlook|trends)|tam\b|what('s| is| are) (the )?(latest|current)|"
      r"latest (news|developments)|recent developments|earnings (call|release|results)|guidance|10-k|10-q|"
      r"annual report|filings?|consensus|peers?|precedent transactions)\b", 1.5)]
+# credit: a lender's analysis of a borrower (its own pipeline: spread -> cash flow -> DSCR -> capacity -> memo)
+CREDIT = (r"\b(credit (memo|analysis|review|approval|request)|dscr|debt service coverage|cash available for debt "
+          r"service|debt capacity|loan (request|approval|underwriting|application)|underwrit\w+ (the|a|this) loan|"
+          r"covenant (tests?|compliance)|global cash flow|borrower)\b")
 # phrases that look like one engine but are not ("data" in "data pipeline code" is code)
 NEG = {
     "data": [r"\bdata (pipeline|loader|class|model) (code|bug|test)", r"\bcsv (parser|reader|writer) (bug|code)"],
@@ -95,6 +99,8 @@ def decide(request: str, files: list[str] | None = None, output_format: str | No
            workdir: str | None = None) -> tuple[list[str], float, str]:
     files = files or []
     t = request.lower()
+    if len(re.findall(CREDIT, t)) >= 1 and not re.search(r"\b(code|function|bug|test)s?\b", t):
+        return ["credit"], 0.9, "credit analysis request"
     sc = _score_text(request)
     reasons = []
 
