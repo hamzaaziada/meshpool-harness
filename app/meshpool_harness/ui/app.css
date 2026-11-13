@@ -568,7 +568,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .onb-card{padding-bottom:90px}
 
 /* 11: the hint line keeps its space, so the message box does not move when a task starts */
-.hintline{min-height:15px}
+.hintline{min-height:18px;line-height:18px;height:18px;overflow:hidden}
 #intrBtn:disabled{display:none}
 /* 15: labels on the top-bar buttons whenever there is room */
 @container main (min-width:1000px){.topbar .tbtn span{display:inline}.topbar .tbtn{padding:5px 8px}}
