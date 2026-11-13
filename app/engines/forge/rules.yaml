@@ -96,6 +96,13 @@ pptx:
     forbidden_locks: [noSelect, noMove, noResize, noTextEdit, noRot, noUngrp, noCrop]
   accessibility:                # P18
     max_reading_order_inversions: 0
+  consistency:                  # P19: the same element looks and sits the same on every slide
+    geometry_tol_in: 0.03       # title box, content margins, source line, slide number
+    title_sizes_max: 1          # one title size across content slides (references: 24pt on every page)
+    title_faces_max: 1
+    body_faces_max: 1
+    chart_label_sizes_max: 1
+    min_slides: 3               # fewer content slides than this: not checked
 
 xlsx:
   recalc:

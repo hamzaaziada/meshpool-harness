@@ -29,7 +29,7 @@ from .common import load_rules, soffice_convert, summarize
 from .common import failure as F
 from .measure_pptx import measure, public
 
-RULES = [f"P{i}" for i in range(1, 19)]
+RULES = [f"P{i}" for i in range(1, 20)]
 
 # a small verb lexicon + inflection rules: enough to tell "Revenue grew 12% on pricing" from "Revenue overview"
 _VERBS = set("""
@@ -572,6 +572,59 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     elif len(main) != want:
         failures.append(F("P16", "slide_count", f"The main section has {len(main)} slides; the brief asks for {want}. "
                           "Move backup material to the appendix section.", measured=len(main), limit=want))
+
+    # ---------------- P19 cross-slide consistency
+    K = R["consistency"]
+    body_slides = [s for s in content if s.get("consistency") and s["n"] not in stats.get("inferred_divider_slides", [])]
+    if len(body_slides) >= K["min_slides"]:
+        tol = K["geometry_tol_in"]
+
+        def spread(key, idx=None):
+            vals = [(s["n"], s["consistency"][key] if idx is None else s["consistency"][key][idx])
+                    for s in body_slides if s["consistency"].get(key) is not None]
+            if len(vals) < 2:
+                return None, []
+            mode = Counter(round(v, 2) for _, v in vals).most_common(1)[0][0]
+            return mode, [n for n, v in vals if abs(v - mode) > tol]
+        for i, name in enumerate(("left edge", "top", "width", "height")):
+            mode, odd = spread("title_box", i)
+            if odd:
+                failures.append(F("P19", "title_position", f"Title {name} differs from the deck's {mode:.2f}in on slides "
+                                  f"{', '.join(map(str, odd[:8]))}. Every title sits in the same place.",
+                                  slide=odd[0], measured=len(odd), limit=0, fix_scope="renderer"))
+        sizes = Counter(s["consistency"]["title_size"] for s in body_slides if s["consistency"]["title_size"])
+        if len(sizes) > K["title_sizes_max"]:
+            mode = sizes.most_common(1)[0][0]
+            odd = [s["n"] for s in body_slides if s["consistency"]["title_size"] not in (None, mode)]
+            failures.append(F("P19", "title_size", f"Titles use {len(sizes)} sizes ({', '.join(f'{x:g}' for x in sizes)}pt); "
+                              f"slides {', '.join(map(str, odd[:8]))} differ from {mode:g}pt. Shorten those titles "
+                              "instead of shrinking them.", slide=odd[0] if odd else None, measured=len(sizes),
+                              limit=K["title_sizes_max"]))
+        tfaces = {s["consistency"]["title_face"] for s in body_slides if s["consistency"]["title_face"]}
+        if len(tfaces) > K["title_faces_max"]:
+            failures.append(F("P19", "title_face", f"Titles use {len(tfaces)} typefaces ({', '.join(sorted(tfaces))}).",
+                              fix_scope="renderer", measured=len(tfaces), limit=K["title_faces_max"]))
+        bfaces = {f for s in body_slides for f in s["consistency"]["body_faces"]}
+        if len(bfaces) > K["body_faces_max"]:
+            failures.append(F("P19", "body_face", f"Body text uses {len(bfaces)} typefaces ({', '.join(sorted(bfaces))}).",
+                              fix_scope="renderer", measured=len(bfaces), limit=K["body_faces_max"]))
+        mode, odd = spread("content_left")
+        if odd:
+            failures.append(F("P19", "content_margin", f"Content starts at a different left margin from the deck's "
+                              f"{mode:.2f}in on slides {', '.join(map(str, odd[:8]))}.", slide=odd[0],
+                              measured=len(odd), limit=0, fix_scope="renderer"))
+        mode, odd = spread("source_y")
+        if odd:
+            failures.append(F("P19", "source_position", f"Source line sits at a different height from the deck's "
+                              f"{mode:.2f}in on slides {', '.join(map(str, odd[:8]))}.", slide=odd[0],
+                              fix_scope="renderer"))
+        cl = {x for s in body_slides for x in s["consistency"]["chart_label_sizes"]}
+        if len(cl) > K["chart_label_sizes_max"]:
+            failures.append(F("P19", "chart_labels", f"Chart labels use {len(cl)} sizes ({', '.join(f'{x:g}' for x in sorted(cl))}pt).",
+                              fix_scope="renderer", measured=len(cl), limit=K["chart_label_sizes_max"]))
+    else:
+        failures.append(F("P19", "consistency", f"Only {len(body_slides)} content slides; cross-slide consistency not "
+                          "checked.", status="not_run", severity="info"))
 
     rules_status = summarize(failures, RULES)
     return {"file": str(path), "sha256": m["sha256"], "rules": rules_status, "failures": failures, "stats": stats,

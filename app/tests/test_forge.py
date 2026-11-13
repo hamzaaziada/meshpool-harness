@@ -214,3 +214,21 @@ def test_bad_workbook_fails_each_defect(tmp_path):
 def test_r1c1_and_cycles():
     assert VX._r1c1("=B2*Inputs!$C$3", 2, 3) == VX._r1c1("=C2*Inputs!$C$3", 2, 4)
     assert VX._tarjan({"a": {"b"}, "b": {"a"}, "c": {"a"}}) == [["b", "a"]] or len(VX._tarjan({"a": {"b"}, "b": {"a"}})) == 1
+
+
+def test_p19_catches_inconsistent_titles(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    prs = Presentation()
+    for k, size in enumerate((28, 28, 22, 28)):
+        s = prs.slides.add_slide(prs.slide_layouts[5])        # Title Only
+        s.shapes.title.text = f"Costs fell {k + 2}% after the plant closed"
+        s.shapes.title.text_frame.paragraphs[0].runs[0].font.size = Pt(size)
+        if k == 3:
+            s.shapes.title.left = Inches(1.2)
+    p = tmp_path / "c.pptx"
+    prs.save(p)
+    r = VP.validate(str(p), render=False)
+    msgs = [f["message"] for f in r["failures"] if f["rule"] == "P19"]
+    assert r["rules"]["P19"] == "fail"
+    assert any("Titles use 2 sizes" in m for m in msgs) and any("Title left edge" in m for m in msgs)

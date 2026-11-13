@@ -464,6 +464,19 @@ def measure(path: str, rules: dict | None = None) -> dict:
         top = [s for s in rec["shapes"] if s["depth"] == 0 and s["x"] is not None and s["role"] not in ("footer",)]
         rec["left_edges"] = sorted({round(s["x"], 2) for s in top})
         rec["autofit"] = dict(Counter(s.get("autofit", "none") for s in texts))
+        tsh = next((s for s in texts if s["role"] in ("title", "title_inferred")), None)
+        content_x = [s["x"] for s in top if s["role"] not in ("footer", "footnote", "line") and s["w"] < W - 0.05]
+        rec["consistency"] = {
+            "title_box": [round(v, 2) for v in (tsh["x"], tsh["y"], tsh["w"], tsh["h"])] if tsh and tsh["x"] is not None else None,
+            "title_size": max(p["size"] for p in tsh["paras"]) * tsh.get("font_scale", 1.0) if tsh else None,
+            "title_face": tsh["paras"][0]["face"] if tsh else None,
+            "body_faces": sorted({p["face"] for s in texts if s["role"] == "body" for p in s["paras"] if p["face"]}),
+            "content_left": round(min(content_x), 2) if content_x else None,
+            "source_y": round(src[0]["y"], 2) if src else None,
+            "slide_number_box": next(([round(s["x"], 2), round(s["y"], 2)] for s in rec["shapes"]
+                                      if s["ph_type"] == "sldNum" and s["x"] is not None), None),
+            "chart_label_sizes": sorted({x for c in rec["charts"] for x in c["label_sizes"]}),
+        }
         slides.append(rec)
 
     out = {
