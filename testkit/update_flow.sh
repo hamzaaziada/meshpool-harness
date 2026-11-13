@@ -3,14 +3,14 @@
 # restarts, and comes back on the new version. A local server stands in for GitHub. Usage: update_flow.sh WORKDIR PYTHON
 set -u
 W="$1"; PY="$2"; R="$(cd "$(dirname "$0")/.." && pwd)"
-rm -rf "$W"; mkdir -p "$W/inst" "$W/rel/meshpool-harness-2.9.0/app" "$W/srv" "$W/home"
-for d in meshpool_harness engines profiles defaults; do cp -r "$R/app/$d" "$W/inst/"; cp -r "$R/app/$d" "$W/rel/meshpool-harness-2.9.0/app/"; done
-cp "$R/app/requirements.txt" "$W/inst/"; cp "$R/app/requirements.txt" "$W/rel/meshpool-harness-2.9.0/app/"
-sed -i 's/__version__ = "[^"]*"/__version__ = "2.8.0"/' "$W/inst/meshpool_harness/__init__.py"
-sed -i 's/__version__ = "[^"]*"/__version__ = "2.9.0"/' "$W/rel/meshpool-harness-2.9.0/app/meshpool_harness/__init__.py"
-tar czf "$W/srv/src.tgz" -C "$W/rel" meshpool-harness-2.9.0
+rm -rf "$W"; mkdir -p "$W/inst" "$W/rel/meshpool-harness-0.2.0/app" "$W/srv" "$W/home"
+for d in meshpool_harness engines profiles defaults; do cp -r "$R/app/$d" "$W/inst/"; cp -r "$R/app/$d" "$W/rel/meshpool-harness-0.2.0/app/"; done
+cp "$R/app/requirements.txt" "$W/inst/"; cp "$R/app/requirements.txt" "$W/rel/meshpool-harness-0.2.0/app/"
+sed -i 's/__version__ = "[^"]*"/__version__ = "0.1.0"/' "$W/inst/meshpool_harness/__init__.py"
+sed -i 's/__version__ = "[^"]*"/__version__ = "0.2.0"/' "$W/rel/meshpool-harness-0.2.0/app/meshpool_harness/__init__.py"
+tar czf "$W/srv/src.tgz" -C "$W/rel" meshpool-harness-0.2.0
 PORT=8781
-printf '{"tag_name":"v2.9.0","body":"Test release","html_url":"http://127.0.0.1:%s/","assets":[]}' $PORT > "$W/srv/latest.json"
+printf '{"tag_name":"v0.2.0","body":"Test release","html_url":"http://127.0.0.1:%s/","assets":[]}' $PORT > "$W/srv/latest.json"
 (cd "$W/srv" && nohup "$PY" -m http.server $PORT --bind 127.0.0.1 > "$W/srv.log" 2>&1 &)
 printf 'MESHPOOL_BASE_URL=http://127.0.0.1:8911/v1\nMESHPOOL_API_KEY=test-key-1234\n' > "$W/home/meshpool.config"
 pkill -f "ui --port 8782" ; sleep 1

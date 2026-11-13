@@ -13,21 +13,18 @@ from meshpool_harness import config as C
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
-     "description": ("Best for: coding in your project, with your MCP servers, connectors and skills. Edits code, "
-                    "runs commands and tests, and can use a browser. Meshpool's coding test (12 Nov 2026, same model "
-                    "for every agent): 7 of 9 tasks solved.")},
+     "description": ("Best for coding in your project: edits code, runs commands and tests, uses your connected "
+                    "apps, skills and a browser. Solved 18 of 20 tasks on Meshpool's coding test.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
-     "description": ("Best for: documents, spreadsheets, decks, data analysis and research. Makes Word, Excel and "
-                    "PowerPoint files with Meshpool's office engines and checks every deck and workbook against "
-                    "Meshpool's consulting-quality rules; needs nothing else installed.")},
+     "description": ("Best for documents, spreadsheets, decks, data and research. Makes real Word, Excel and "
+                    "PowerPoint files and checks each one before it reaches you.")},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
-      "description": ("Best for: simple coding tasks at low cost. Pi is the small open-source coding agent by "
-                      "Mario Zechner, bundled with Meshpool. On Meshpool's coding test it solved the most "
-                      "(8 of 9).")}
+      "description": ("Best for fast, low-cost coding. A small open-source coding agent; it solved the most on "
+                      "Meshpool's coding test (19 of 20).")}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
-        "description": ("Best when you are not sure: picks the harness that does each kind of task best, and "
-                        "tells you which one and why.")}
+        "description": ("Best when you are not sure: picks a good agent for each task and tells you which one and "
+                        "why.")}
 # Subscriptions: the official Claude Code and Codex agents, through the Agent Client Protocol adapters. They sign in
 # with the user's own Claude or ChatGPT account, so usage comes out of that subscription, not the Meshpool key.
 CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"
@@ -37,21 +34,31 @@ SUBSCRIPTIONS = [
      "command": "npx", "args": ["-y", CLAUDE_ACP], "models": "harness", "login": "claude", "share_mcp": True,
      "env_unset": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
      "setup": "Sign in with your Claude account first: Settings, Harnesses, Claude, Sign in.",
-     "description": ("Best for: hard coding tasks, on your own Claude Pro or Max plan (usage comes from that plan). "
-                    "Uses your Meshpool connectors, skills and MCP servers.")},
+     "description": ("Best for hard coding tasks, on your own Claude Pro or Max plan (usage counts against that "
+                    "plan). Uses your connected apps and skills.")},
     {"id": "chatgpt-subscription", "name": "ChatGPT (your subscription)", "mode": "code", "type": "acp",
      "command": "npx", "args": ["-y", CODEX_ACP], "models": "harness", "login": "codex", "share_mcp": True,
      "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
      "setup": "Sign in with your ChatGPT account first: Settings, Harnesses, ChatGPT, Sign in.",
-     "description": ("Best for: terminal and command-line work, on your own ChatGPT Plus, Pro or Business plan (usage "
-                    "comes from that plan). Uses your Meshpool connectors, skills and MCP servers.")},
+     "description": ("Best for terminal and command-line work, on your own ChatGPT Plus, Pro or Business plan "
+                    "(usage counts against that plan). Uses your connected apps and skills.")},
 ]
+# Codex CLI on the Meshpool key: the same official Codex agent (through the same ACP adapter), pointed at the Meshpool
+# endpoint and model by its own config in the Meshpool data folder. No ChatGPT account needed.
+CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "prepare": "codex", "models": "meshpool",
+         # Codex's read-only mode refuses to edit rather than asking; in Workspace access it edits the project and
+         # asks before anything outside it. Meshpool's Undo covers every change.
+         "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
+         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+         "install": "It needs Node.js, which the Meshpool app includes; from the command line, install Node.js first.",
+         "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent on your Meshpool "
+                         "key. It edits files in your project without asking and asks before anything outside it; "
+                         "Undo reverses its changes.")}
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
-            "chatgpt-subscription"}
-HERMES_NOTE = ("Best for: ongoing work where memory matters. Hermes by Nous Research remembers what it learns, "
-               "builds its own skills, uses the web, files and terminal, and makes Word, Excel and PowerPoint files. "
-               "Bundled with Meshpool; runs on your Meshpool key and model.")
+            "chatgpt-subscription", "codex"}
+HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across threads, uses "
+               "the web, files and terminal, and makes Office files.")
 
 
 def vendored_hermes() -> Path | None:
@@ -81,6 +88,27 @@ def _bundled_hermes() -> dict | None:
             "models": "meshpool", "command": sys.executable, "args": ["-m", "acp_adapter"], "env": env, "description": HERMES_NOTE}
 
 
+def codex_home() -> Path:
+    return C.home() / "codex"
+
+
+def prepare_codex() -> None:
+    """Point Codex at the Meshpool endpoint and model (its own config.toml in the Meshpool data folder). The key is
+    read from MESHPOOL_API_KEY in the environment, never written to the file."""
+    home = codex_home()
+    home.mkdir(parents=True, exist_ok=True)
+    base = os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1"
+    model = os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    if not os.environ.get("MESHPOOL_API_KEY") and os.environ.get("OPENAI_API_KEY"):
+        os.environ["MESHPOOL_API_KEY"] = os.environ["OPENAI_API_KEY"]
+    q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    (home / "config.toml").write_text(
+        f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
+        "\n"
+        f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
+        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
+
+
 def prepare_hermes() -> None:
     """Point the bundled Hermes at the Meshpool endpoint, model and key (written to its own config in the
     Meshpool data folder, next to meshpool.config)."""
@@ -108,6 +136,9 @@ def prepare_hermes() -> None:
     sec = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
     sec["allow_lazy_installs"] = False          # no pip downloads at runtime; never write into the signed app
     cfg["security"] = sec
+    ap = cfg.get("approvals") if isinstance(cfg.get("approvals"), dict) else {}
+    ap["mode"] = "manual"                       # every command comes to Meshpool, which applies the user's setting;
+    cfg["approvals"] = ap                       # Hermes's own "smart" mode auto-approved deletes
     try:
         from meshpool_harness import skills as SK
         SK.sync_to(home / "skills" / "meshpool")           # the user's Meshpool skills, for Hermes too
@@ -187,6 +218,7 @@ def load_all() -> list[dict]:
     if bh:
         out.append(dict(bh, available=True, builtin=True))
     out += [dict(b, available=True, builtin=True) for b in BUILTIN[1:]]
+    out.append(dict(CODEX, env={"CODEX_HOME": str(codex_home())}, available=_available(CODEX), builtin=True))
     for sub in SUBSCRIPTIONS:
         out.append(dict(sub, available=_available(sub), builtin=True, subscription=True,
                         signed_in=signed_in(sub["login"])))
@@ -282,10 +314,8 @@ def default_for(mode: str) -> str:
     want = (os.environ.get(f"MH_HARNESS_{mode.upper()}") or C.read().get(f"MH_HARNESS_{mode.upper()}") or "").strip()
     if want and any(d["id"] == want and d.get("available") and not d.get("error") for d in load_all()):
         return want
-    rows = [d for d in load_all() if d.get("mode") == mode and not d.get("error")]
-    for d in sorted(rows, key=lambda d: not d.get("builtin")):
-        if d.get("default") and d.get("available") and d["id"] not in ("meshpool-code", "meshpool-work", "pi"):
-            return d["id"]
+    # Meshpool's own harnesses are the defaults: they passed every task in the practical check (13 Nov 2026) and
+    # need nothing else installed. Hermes and the others stay one click away in the harness picker.
     return "meshpool-code" if mode == "code" else "meshpool-work"
 
 

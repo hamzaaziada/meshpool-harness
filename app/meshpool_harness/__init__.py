@@ -1,5 +1,5 @@
 
-__version__ = "2.7.0"
+__version__ = "0.1.0"
 __author__ = "Meshpool"
 
 from .presets import apply as _apply_preset  # noqa: E402

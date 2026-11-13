@@ -186,8 +186,9 @@ def _native_window(url: str) -> bool:
         webview.settings["ALLOW_DOWNLOADS"] = True
         webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
         dark = _prefers_dark()
-        win = webview.create_window("Meshpool", url, width=1380, height=900, min_size=(940, 620),
-                                    background_color="#0B131F" if dark else "#F5F8FC", text_select=True)
+        from meshpool_harness.ui.window import window_size
+        win = webview.create_window("Meshpool", url, background_color="#0B131F" if dark else "#F5F8FC",
+                                    text_select=True, **window_size(webview))
         WINDOW[0] = win
         kw = {"gui": gui, "private_mode": False, "storage_path": str(C.runs_dir() / "webview")}
         ico = C.APP.parent / "Meshpool.ico"

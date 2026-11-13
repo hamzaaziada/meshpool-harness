@@ -234,7 +234,7 @@ def get_settings() -> dict:
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
-            "native": NATIVE[0], "platform": sys.platform,
+            "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
 
 
@@ -298,12 +298,25 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection() -> dict:
+def test_connection(values: dict | None = None) -> dict:
+    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
     C.load_into_env(override=True)
     from meshpool_harness.cli import ping
-    if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-        return {"ok": False, "detail": "No API key saved yet."}
-    return ping()
+    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")}
+    try:
+        for k, v in (values or {}).items():
+            if k in keep and str(v).strip():
+                os.environ[k] = str(v).strip()
+        if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            return {"ok": False, "detail": "No API key saved yet."}
+        return ping()
+    finally:
+        if values:
+            for k, v in keep.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 def route_preview(body: dict) -> dict:
@@ -535,7 +548,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
             if u.path == "/api/test":
-                return self._send(200, test_connection())
+                return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
                 from meshpool_harness import updater as UP
                 return self._send(200, UP.check(force=bool(self._json().get("force"))))
@@ -683,7 +696,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = W._inside(W.check_root(b.get("root", "")), b.get("path", ""))
                 if not p.exists():
                     raise ValueError("That file is gone.")
-                reveal(p)
+                try:
+                    reveal(p)
+                except OSError:
+                    return self._send(400, {"error": f"There's no app on this computer to open {p.name}. It is at: {p}"})
                 return self._send(200, {"ok": True})
             if u.path == "/api/attach":
                 import base64
@@ -748,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/term":
                 b = self._json()
-                return self._send(200, W.term_run(b.get("root", ""), b.get("command", "")))
+                return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
             m = re.fullmatch(r"/api/term/(\w+)/stop", u.path)
             if m:
                 return self._send(200, W.term_stop(m.group(1)))

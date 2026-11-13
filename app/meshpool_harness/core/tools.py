@@ -474,6 +474,10 @@ class Workspace:
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8")
                 elif bash:
                     r = self._proc([bash, "-c", command], env, timeout_s)
+                elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
+                    r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                    "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
+                                   env, timeout_s, encoding="utf-8")
                 else:
                     r = self._proc(command, env, timeout_s, shell=True)
             code, out = r.returncode, (r.stdout + ("\n" + r.stderr if r.stderr else ""))

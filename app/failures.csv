@@ -16,3 +16,5 @@ timestamp,model,profile,task_id,category,caught,detail
 2026-11-12T15:14:31Z,mock,deepseek,t,repeat_failure,True,python -m pytest -q tests
 2026-11-12T15:14:32Z,mock,deepseek,t,error_not_quoted,True,FAILED tests/test_calc.py::test_add - assert -1 == 5
 2026-11-13T14:29:00Z,deepseek-v4.1-flash,deepseek,req-582079e8-sheets,turn_cap,False,turn cap 30 reached
+2026-11-13T14:52:15Z,deepseek-v4.1-flash,deepseek,req-31f1f3f6-sheets,tool_error,True,writes must stay inside the workdir /tmp/claude-0/-home-user-meshpool-harness/24bc71e4-4861-5705-9681-86c31317da60/scratchpad/nvcrwv/work2/Meshpool outputs/20261113-145010-sheets; got /tmp/claude-0/-home-user-meshpool-harness/24bc71e4-4861-5705-9681-86c31317da60/scratchpad/nvcrwv/work2/build_workboo
+2026-11-13T14:53:05Z,deepseek-v4.1-flash,deepseek,req-31f1f3f6-sheets,tool_format,True,write_file: missing required argument 'path'

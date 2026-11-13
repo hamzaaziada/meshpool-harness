@@ -399,17 +399,38 @@ def _open_pr(r: Path, body: dict) -> dict:
 TERMS: dict[str, dict] = {}
 
 
-def _shell_cmd(command: str) -> list[str]:
+SHELLS_WIN = {"powershell": "PowerShell", "cmd": "Command Prompt", "bash": "Git Bash"}
+
+
+def shells() -> dict:
+    """The shells the Terminal panel offers on this computer, and the default."""
     if os.name == "nt":
+        have = {k: v for k, v in SHELLS_WIN.items() if k != "bash" or (os.environ.get("MH_BASH")
+                                                                        and os.path.exists(os.environ["MH_BASH"]))}
+        return {"shells": have, "default": "powershell"}
+    sh = os.environ.get("SHELL") or "/bin/bash"
+    return {"shells": {"login": Path(sh).name if os.path.exists(sh) else "sh"}, "default": "login"}
+
+
+def _shell_cmd(command: str, shell: str = "", nt: bool | None = None) -> list[str]:
+    nt = os.name == "nt" if nt is None else nt
+    if nt:
         bash = os.environ.get("MH_BASH")
-        return [bash, "-lc", command] if bash and os.path.exists(bash) else ["cmd", "/c", command]
+        shell = shell or "powershell"
+        if shell == "bash" and bash and os.path.exists(bash):
+            return [bash, "-lc", command]
+        if shell == "cmd":
+            return ["cmd", "/d", "/s", "/c", command]
+        # PowerShell, with UTF-8 output so accents and symbols come through
+        return ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command]
     sh = os.environ.get("SHELL") or "/bin/bash"
     if not os.path.exists(sh):
         sh = "/bin/sh"
     return [sh, "-lc", command]
 
 
-def term_run(root: str, command: str) -> dict:
+def term_run(root: str, command: str, shell: str = "") -> dict:
     r = check_root(root)
     if not command.strip():
         raise ValueError("Type a command.")
@@ -417,7 +438,7 @@ def term_run(root: str, command: str) -> dict:
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "rc": None, "start": time.time(), "p": None}
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
-    p = subprocess.Popen(_shell_cmd(command), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW,
                          **({} if os.name == "nt" else {"start_new_session": True}))
     t["p"] = p
