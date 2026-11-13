@@ -591,13 +591,24 @@ def research(question: str, queries: list | None = None, max_sources: int = 6, r
         return "No results. " + ("; ".join(errors) if errors else "Try other words.")
     terms = _terms(question + " " + " ".join(qs))
     pages = {}
-    with ThreadPoolExecutor(6) as ex:
-        futs = {ex.submit(fetch, r["url"]): r for r in ranked[: max_sources + 4]}
-        for f in as_completed(futs, timeout=90):
+    # Read pages in parallel, but never wait on stragglers: stop once enough good pages are in or the time budget is
+    # spent (MH_RESEARCH_S, default 15 s). A page still loading is listed under "Other results" instead.
+    ex = ThreadPoolExecutor(6)
+    futs = {ex.submit(fetch, r["url"]): r for r in ranked[: max_sources + 4]}
+    good = 0
+    try:
+        for f in as_completed(futs, timeout=float(os.environ.get("MH_RESEARCH_S", "15"))):
             try:
                 pages[futs[f]["url"]] = f.result()
+                good += len(pages[futs[f]["url"]].get("text") or "") >= 200
             except Exception:                              # noqa: BLE001 - a dead source is skipped, not fatal
                 pass
+            if good >= max_sources:
+                break
+    except TimeoutError:
+        pass
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     out, n, budget = [], 0, max(1200, 16000 // max_sources)
     for r in ranked:
         p = pages.get(r["url"])

@@ -23,6 +23,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from meshpool_harness import pace as PACE
 from meshpool_harness import config as C
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -96,7 +97,7 @@ Rules
 - If the user denies a tool call, do not retry it. Take another approach or ask.
 - Long outputs are cut. The full text is saved to a file you can read.
 - Tools whose names start with mcp__ come from MCP servers the user connected. Use them when they fit.
-- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. For research, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler. Use Markdown code blocks for code."""
 
@@ -154,7 +155,7 @@ Rules
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
 - Never print or store secrets such as API keys or tokens.
 - If the user denies a tool call, do not retry it. Take another approach or ask.
-- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. For research, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler."""
 
@@ -280,6 +281,7 @@ class Agent:
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
         self.max_steps = max_steps
+        self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
         self.created = time.time()
@@ -413,11 +415,18 @@ class Agent:
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
+            wrapped = False
             for step in range(self.max_steps):
                 self._check_stop()
                 self._take_inbox()
                 self._maybe_compact()
+                if self.pace_deadline and not wrapped and step and (
+                        time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
+                    wrapped = True                      # a quick request ran long: answer now, no more tools
+                    self.messages.append({"role": "user", "content": PACE.WRAP})
+                    self._no_tools = True
                 msg, streamed = self._chat(turn)
+                self._no_tools = False
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 content = msg.get("content") or ""
                 keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
@@ -533,7 +542,8 @@ class Agent:
         model = self.current_model()
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
-        body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(), "tool_choice": "auto"}
+        body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
+                "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])

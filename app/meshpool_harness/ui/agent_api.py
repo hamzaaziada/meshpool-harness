@@ -336,6 +336,24 @@ class Session:
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
+                from meshpool_harness import pace as PACE
+                quick = (not self.plan and not self.scheduled
+                         and PACE.classify(text, bool(images)) == "quick")
+                if quick:
+                    body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
+                    if hasattr(self.agent, "pace_deadline"):
+                        self.agent.pace_deadline = time.time() + PACE.QUICK_S
+                    elif self.harness["type"] == "pi" and hasattr(self.agent, "steer"):
+                        def wrap(agent=self.agent, turn=self.t_turn):
+                            time.sleep(PACE.QUICK_S + 10)
+                            if self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False):
+                                try:
+                                    agent.steer(PACE.WRAP)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        threading.Thread(target=wrap, daemon=True).start()
+                elif hasattr(self.agent, "pace_deadline"):
+                    self.agent.pace_deadline = 0
                 if self.ctx_pending:
                     self.ctx_pending = False
                     try:
