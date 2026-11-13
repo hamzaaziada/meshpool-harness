@@ -161,3 +161,16 @@ def test_builtin_catalog_groups_bundled_skills(home):
     assert off["enabled"] is False and not SK.get("legal-review-contract")["enabled"]
     P.remove_plugin("legal")                                    # built-ins are switched off, not deleted
     assert SK.get("legal-review-contract") is not None
+
+
+def test_folded_description_and_nested_plugin_folder(home, tmp_path):
+    from meshpool_harness import plugins as P, skills as SK
+    root = tmp_path / "download" / "wrapper" / "folded"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"name": "folded"}')
+    (root / "skills" / "long").mkdir(parents=True)
+    (root / "skills" / "long" / "SKILL.md").write_text(
+        "---\nname: long\ndescription: >\n  Spread over\n  two lines.\n---\n\nDo it.\n")
+    (tmp_path / "download" / "other").mkdir()
+    [rec] = P.install_plugin(str(tmp_path / "download"))
+    assert rec["name"] == "folded" and SK.get("folded-long")["description"] == "Spread over two lines."
