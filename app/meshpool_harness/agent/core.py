@@ -685,6 +685,8 @@ class Agent:
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
+        if name in ("edit", "write_file") and self._diff(name, args) == "(no change)":
+            return True, ""                    # nothing would change: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
         if group in self.always:
             return True, ""

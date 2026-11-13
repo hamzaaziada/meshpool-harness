@@ -57,9 +57,10 @@ const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(bod
 // Shorten at a word boundary with an ellipsis (the full text stays in the tooltip).
 function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); const i = c.lastIndexOf(" "); return (i > n * 0.6 ? c.slice(0, i) : c).replace(/[,;:.]$/, "") + "…"; }
 
-function toast(text, ms = 2600) {
+function toast(text, ms = 2600, action) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
+  if (action) { const b = document.createElement("button"); b.className = "tact"; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); ms = Math.max(ms, 6000); }
   setTimeout(() => t.remove(), ms);
 }
 
@@ -168,13 +169,17 @@ function modeHarness(m = S.appMode) {
 }
 function setAppMode(m) {
   if (m === S.appMode && !S.cur) return;
+  if (S.cur?.id) store("last_" + S.appMode, S.cur.id);
   S.appMode = m; store("appmode", m);
   $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === m));
   $("#app").dataset.mode = m;
   S.draft.harness = modeHarness(m);
   if (S.panel && !PANELS[m].includes(S.panel)) { S.panel = null; store("panel", null); }
+  const last = store("last_" + m);
+  if (last && S.threads.some(t => t.id === last && !t.archived && (t.kind || "code") === m)) { renderSide(); renderBar(); openThread(last); return; }
   newThread();
 }
+const GIT_WORD = {"??": "new", "A": "added", "M": "changed", "D": "deleted", "R": "renamed", "AM": "added", "MM": "changed", "U": "conflict", "UU": "conflict"};
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
@@ -233,7 +238,7 @@ function renderSide() {
   let html = "";
   if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(thHTML).join("")}</ul>`;
   html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
-  if (!byProj.size) html += `<div class="empty-side">Add a folder to start. Meshpool works inside the folders you choose.</div>`;
+  if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
   // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
   const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
   const order = [...byProj].sort((a, z) => last(z[1]) - last(a[1]));
@@ -318,6 +323,9 @@ async function threadAct(id, action) {
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
   if (action === "delete" && S.cur?.id === id) newThread();
   await loadThreads(); renderTop();
+  if (action === "archive") toast("Thread archived", 6000, {label: "Undo", fn: () => threadAct(id, "unarchive")});
+  else if (action === "delete") toast("Thread deleted");
+  else if (action === "unarchive") toast("Thread restored");
 }
 async function renameThread(id) {
   const t = S.threads.find(x => x.id === id); const n = await ask({title: "Rename thread", value: t?.title || "", ok: "Rename"});
@@ -442,11 +450,11 @@ function renderBar() {
   $("#stopBtn")?.addEventListener("click", stopNow);
   $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Interrupt."); } });
   const root = curRoot();
-  $("#hintline").innerHTML = c.busy ? `Enter adds to this task · Interrupt (${MOD}Enter) stops it and does your message instead · Esc stops`
+  $("#hintline").innerHTML = c.busy ? `Enter adds to this task · ${MOD}Enter does it now instead · Esc stops`
     : root ? `Working in <b>${esc(projName(root))}</b>${S.cur ? "" : ` · <button class="linkbtn" id="chgProj" style="font-size:11.5px;padding:0">change folder</button>`}` : "";
   $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
   const inp = $("#input");
-  inp.placeholder = c.busy ? "Add to this task, or type a new instruction and press Interrupt" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis. / for commands, $ for skills" : "Ask Meshpool to build, fix or explain something. / for commands, $ for skills";
+  inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis. / for commands, $ for skills" : "Ask Meshpool to build, fix or explain something. / for commands, $ for skills";
 }
 async function setPlan(on) {
   if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/plan`, {on, since: 1e9})); } catch (e) { return toast(e.message); } }
@@ -498,7 +506,7 @@ async function sendNow(interrupt) {
       const v = await post("/api/agent", {workdir: root, harness: S.draft.harness || modeHarness(), kind: S.appMode, model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
       S.draft.plan = false;
       openThread(v.id, true);
-      if (S.appMode === "cowork" && !S.panel && !store("cw_panel_closed")) togglePanel("progress", true);
+      if (S.appMode === "cowork" && !S.panel && !store("cw_panel_closed") && innerWidth >= 1400) togglePanel("progress", true);
     }
     const files = atts.filter(a => !a.image);
     if (files.length) {
@@ -591,7 +599,7 @@ function harnessPop(anchor) {
   const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For cowork"], ["sub", "Your subscriptions"], [other, "Other harnesses"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
-    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name)}${h.available === false ? " (not installed)" : h.subscription && !h.signed_in ? " (sign in first)" : ""}<span class="od">${esc(clip(h.description || "", 150))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.available === false ? " · not installed" : h.subscription && !h.signed_in ? " · sign in first" : ""}<span class="od">${esc(clip(h.description || "", 150))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
   }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage harnesses</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
@@ -822,9 +830,11 @@ function applyEv(ev) {
       break; }
     case "approval": {
       closeGroup();
-      const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(o.label)}</button>`).join("")
+      const OPT = {allow_once: "Allow", allow_always: "Allow for this thread", reject_once: "Deny", reject_always: "Always deny"};
+      const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
         : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this thread</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Optional: tell it what to do instead" aria-label="Note for the agent">`;
-      const d = add(`<b>${esc(ev.title)}</b>${ev.detail ? `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>` : ""}<div class="acts">${opts}</div>`, "appr");
+      const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
+      const d = add(`<b>${esc(title)}</b>${ev.detail ? `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>` : ""}<div class="acts">${opts}</div>`, "appr");
       d.id = "appr-" + ev.id;
       $$("button", d).forEach(b => b.onclick = async () => {
         $$("button", d).forEach(x => x.disabled = true);
@@ -832,7 +842,7 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? "Denied." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
+    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? "Denied." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
@@ -852,7 +862,7 @@ function applyEv(ev) {
       settleSteps("");
       closeGroup();
       const u = ev.turn || {};
-      const foot = add(u.calls ? `${u.calls} call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} in · ${fmt(u.out)} out` : "", "turnfoot");
+      const foot = add(u.calls ? `<span class="stat">${u.calls} call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} in · ${fmt(u.out)} out</span>` : "", "turnfoot");
       cur.lastFoot = foot;
       const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
       if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(foot); }
@@ -873,7 +883,7 @@ function bindFoot(foot) {
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
 }
 async function undoTurn(n) {
-  if (!await ask({title: `Undo turn ${n}?`, text: "Files go back to how they were before this turn, and the conversation is cut there. Later turns are undone too.", ok: "Undo", danger: true})) return;
+  if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); clearTimeout(S.cur.pollT); S.cur.total = 0; S.cur.next = 0; S.cur.log = []; S.cur.epoch = -2; $("#col").innerHTML = ""; S.cur.turn = 0; S.cur.group = null; S.cur.live = null; S.cur.tools = {}; poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
@@ -969,7 +979,7 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this thread</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Turn ${t.n}: ${esc(t.title)}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel ? `<button class="btn danger" id="dundo">${ICON.undo} Undo turn</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
@@ -1065,7 +1075,7 @@ async function panelGit(body) {
     <div><h4>Branch</h4><div class="row" style="margin-top:6px"><select id="gbr">${g.branches.map(b => `<option ${b === g.branch ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
       <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
-    <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
+    <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
     <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
     <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
@@ -1115,7 +1125,7 @@ async function gitAct(b) {
 }
 function panelPreview(body) {
   const url = store("preview") || "http://localhost:3000";
-  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><iframe class="preview" id="pframe" title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" style="padding:6px 12px">Start your app first (for example ask Meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
   const go = () => { let u = $("#purl").value.trim(); if (!/^https?:\/\//.test(u)) u = "http://" + u; store("preview", u); $("#pframe").src = u; };
   $("#pgo").onclick = go; $("#purl").onkeydown = e => { if (e.key === "Enter") go(); };
   $("#pext").onclick = () => openExternal($("#purl").value);
@@ -1123,7 +1133,7 @@ function panelPreview(body) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and keys"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Harnesses"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Harnesses"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 function openSettings(sec = "general") {
   closePop();
   $(".scrim")?.remove();
@@ -1136,7 +1146,8 @@ function openSettings(sec = "general") {
   renderSection(sec);
 }
 async function renderSection(sec) {
-  const b = $("#mbody"); b.innerHTML = "";
+  const b = $("#mbody"); b.classList.add("loading");
+  new MutationObserver((_, o) => { b.classList.remove("loading"); b.scrollTop = 0; o.disconnect(); }).observe(b, {childList: true});
   const close = `<button class="iconbtn mclose" aria-label="Close settings">${ICON.x}</button>`;
   const done = () => $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
   await loadSettings();
@@ -1181,7 +1192,7 @@ async function renderSection(sec) {
     const keys = [[`${MOD}N`, "New thread"], [`${MOD}K`, "Search threads"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}E`, "Show or fold steps"],
       [`${MOD}⇧D`, "Diff panel"], [`${MOD}J`, "Terminal"], [`${MOD},`, "Settings"], ["Enter", "Send"], ["Shift+Enter", "New line"],
       ["/", "Commands"], ["$", "Skills"], ["Esc", "Close a menu or dialog"], [`${MOD}S`, "Save the open file"]];
-    b.innerHTML = `${close}<h3>Appearance and keys</h3><p class="lead">How Meshpool looks on this computer.</p>
+    b.innerHTML = `${close}<h3>Appearance and shortcuts</h3><p class="lead">How Meshpool looks on this computer.</p>
       <label class="field"><span>Theme</span><select id="apTheme"><option value="system">Match the system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <label class="field"><span>Text size</span><select id="apSize"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></label>
       <label class="field"><span>Steps</span><select id="apSteps"><option value="1">Show every step as the agent works</option><option value="0">Fold steps into a summary</option></select></label>
@@ -1422,9 +1433,10 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "chat"], ["responses", "responses"]], MH_HARNESS_PROFILE: [["minimal", "minimal (v2)"], ["", "v1 (full guards)"]]};
-    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL"].includes(x.key));
-    b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Settings file: <code>${esc(S.settings.path)}</code></p>
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "Standard"], ["responses", "Responses API"]], MH_HARNESS_PROFILE: [["minimal", "Recommended"], ["", "Older, stricter checks"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
+    // Search keys and the GitHub token have their own pages (Web search, Connectors).
+    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
+    b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
       <div style="display:flex;gap:8px"><button class="btn primary" id="adSave">Save</button><button class="btn" id="adData">Open the data folder</button></div><div class="res" id="adRes"></div>`;
@@ -1473,7 +1485,7 @@ async function importPanel(box, onDone) {
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
   if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
-  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}" ${r.exists || r.suggested === false ? "" : "checked"}><span class="tg"><b>${r.kind === "skill" ? "$" : ""}${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
+  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${r.kind === "skill" ? "$" : ""}${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
   box.innerHTML = `${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
     ${f.mcp.length ? `<h3 class="onb-h">MCP servers (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">Servers keep the keys and settings they had in the other app. They are saved only on this computer.</p>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div><div class="res" id="impRes"></div>`;
