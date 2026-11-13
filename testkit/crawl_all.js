@@ -86,7 +86,9 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
   await crawl("home (cowork)", async () => { await closeLayers(); await p.evaluate(() => { if (S.cur) newThread(); if (S.appMode !== "cowork") setAppMode("cowork"); }); await p.waitForTimeout(150); });
   await crawl("home (code)", async () => { await closeLayers(); await p.evaluate(() => { if (S.cur) newThread(); if (S.appMode !== "code") setAppMode("code"); }); await p.waitForTimeout(150); });
 
+  const listed = (await api("/api/harnesses")).harnesses.map(x => x.id);
   for (const [hid, kind] of [["meshpool-code", "code"], ["pi", "code"], ["hermes", "cowork"], ["meshpool-work", "cowork"]]) {
+    if (!listed.includes(hid)) { console.log(`SKIP [${hid}] not installed here`); continue; }   // e.g. no Pi or Hermes in a cloud container
     const mk = async (mode, text) => {
       const v = await api("/api/agent", {workdir: proj, harness: hid, kind, mode});
       await p.evaluate(([id, k]) => { if (S.appMode !== k) setAppMode(k); openThread(id); }, [v.id, kind]);

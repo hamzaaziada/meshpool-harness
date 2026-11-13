@@ -33,7 +33,9 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
   const curId = () => p.evaluate(() => S.cur?.id);
   const busyNow = async () => { const id = await curId(); return id && (await st(id)) === "working"; };
 
+  const listed = (await api("/api/harnesses")).harnesses.map(x => x.id);
   for (const [hid, kind] of [["meshpool-code", "code"], ["pi", "code"], ["hermes", "cowork"], ["meshpool-work", "cowork"]]) {
+    if (!listed.includes(hid)) { console.log(`SKIP [${hid}] not installed here`); continue; }   // e.g. no Pi or Hermes in a cloud container
     const T = s => `[${hid}] ${s}`;
     // 1. Stop button
     await newIn(hid, kind, "auto"); await send("long task please");
@@ -87,7 +89,8 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
     check(T("model and plan changes mid-run do not break the task"), (await st(id)) === "working");
     // 8. Harness picker mid-run starts a new thread and leaves the running one alone
     await p.click("#hPill"); await p.waitForTimeout(300);
-    const other = await p.$(`.pop .opt[data-id="${hid === "meshpool-code" ? "pi" : "meshpool-code"}"]`);
+    const want = hid === "meshpool-code" ? "pi" : "meshpool-code";
+    const other = await p.$(`.pop .opt[data-id="${listed.includes(want) ? want : "meshpool-auto"}"]`) || await p.$(`.pop .opt[data-id]:not([data-id="${hid}"])`);
     if (other) await other.click(); else await p.keyboard.press("Escape");
     await p.waitForTimeout(600);
     check(T("picking another harness mid-run opens a new thread"), await p.evaluate(() => !S.cur));
@@ -150,7 +153,7 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
   }
   // 16. Two runs at once: stop one, the other keeps going
   await newIn("meshpool-code", "code", "auto"); await send("long task please"); await p.waitForTimeout(2000); const a = await curId();
-  await newIn("pi", "code", "auto"); await send("long task please"); await p.waitForTimeout(2000); const c = await curId();
+  await newIn(listed.includes("pi") ? "pi" : "meshpool-code", "code", "auto"); await send("long task please"); await p.waitForTimeout(2000); const c = await curId();
   await waitState(a, ["working"]); await waitState(c, ["working"]);
   await p.click("#stopBtn"); await waitState(c, ["idle"], 6000);
   check("two runs: stopping one leaves the other running", (await st(a)) === "working" && (await st(c)) === "idle");
