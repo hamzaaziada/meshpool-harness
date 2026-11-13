@@ -408,6 +408,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 name = CN.finish(q.get("state", [""])[0], q.get("code", [None])[0], q.get("error", [None])[0])
                 msg, ok = f"{name} is connected. You can close this tab and go back to Meshpool.", True
+                cid = CN.LAST_FINISHED[0]
+                r = CN.check(cid) if cid else {"ok": True, "tools": []}
+                if r["ok"]:
+                    msg = f"{name} is connected ({len(r['tools'])} tools). You can close this tab and go back to Meshpool."
+                else:
+                    msg, ok = f"{name} signed in, but the connection test failed: {r['error']}", False
             except Exception as e:  # noqa: BLE001
                 msg, ok = str(e), False
             page = ("<!doctype html><meta charset=utf-8><title>Meshpool</title><body style=\"font:15px -apple-system,"
@@ -759,19 +765,34 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import mcp_apps as CN
                 b = self._json()
                 act, cid = b.get("action"), b.get("id", "")
-                if act == "connect":
-                    redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
-                    url = CN.begin(cid, redirect)
+                redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
+                if act in ("connect", "client"):
+                    if act == "client":                  # the user's own client, for apps that do not register others
+                        CN.set_client(cid, b.get("client_id", ""), b.get("client_secret", ""))
+                    try:
+                        url = CN.begin(cid, redirect)
+                    except CN.NeedsClient as e:
+                        return self._send(200, {"needs_client": cid, "redirect": e.redirect, "message": str(e),
+                                                "connectors": CN.listing()})
                     webbrowser.open(url)
                     return self._send(200, {"url": url, "connectors": CN.listing()})
+                if act == "check":
+                    r = CN.check(cid)
+                    return self._send(200, dict(r, connectors=CN.listing()))
                 if act == "custom":
-                    c = CN.add_custom(b.get("name", ""), b.get("url", ""), b.get("token", ""))
+                    c = CN.add_custom(b.get("name", ""), b.get("url", ""), b.get("token", ""),
+                                      b.get("client_id", ""), b.get("client_secret", ""))
+                    n = len(c.get("tools") or [])
                     if c["auth"] == "oauth":
-                        redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
-                        url = CN.begin(c["id"], redirect)
+                        try:
+                            url = CN.begin(c["id"], redirect)
+                        except CN.NeedsClient as e:
+                            return self._send(200, {"id": c["id"], "needs_client": c["id"], "redirect": e.redirect,
+                                                    "message": str(e), "connectors": CN.listing()})
                         webbrowser.open(url)
                         return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
-                    return self._send(200, {"id": c["id"], "connectors": CN.listing()})
+                    return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
+                                            "message": f"Connected: {n} tool{'s' * (n != 1)}. New threads can use it."})
                 if act == "github_found":
                     r = CN.github_use_found()
                     C.load_into_env(override=True)

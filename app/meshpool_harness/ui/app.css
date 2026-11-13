@@ -610,3 +610,11 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .scopeopt[aria-checked="false"]{box-shadow:none}
 .th .tm{flex:none}
 table.t td.n,table.t th:not(:first-child){text-align:right}
+
+.cnbar{display:flex;flex-direction:column;gap:8px;margin:4px 0 10px}
+.cnbar input{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px}
+.cnbar input:focus,.cform input:focus,#cnl .keyrow input:focus{outline:none;border-color:var(--focus)}
+details .keyrow input{flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.cnchips{display:flex;gap:6px;flex-wrap:wrap}
+.ownclient{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.ownclient .keyrow input{min-width:0}

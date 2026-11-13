@@ -23,6 +23,7 @@ HELP = """Commands
   /auto            switch between asking before changes and allowing them
   /model [id]      show or change the model for this session
   /mcp             MCP servers and their tools
+  /connect [app]   connect an app (Notion, Gmail, Slack...) or an MCP server by URL; no app lists them
   /tokens          tokens used in this session
   /init            ask the agent to write MESHPOOL.md (project notes it reads every session)
   /import          bring your context from ChatGPT, Claude or Gemini (instructions and memory)
@@ -466,6 +467,19 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
                     term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
                            f"{u['out']:,} output tokens.")
+                elif cmd == "connect":
+                    from meshpool_harness.agent import connect_cli
+                    if not arg.strip():
+                        connect_cli.listing(st)
+                    else:
+                        ok, cid = connect_cli.connect(arg.strip(), st=st)
+                        if ok and mcp:                    # its tools work in this session at once
+                            from meshpool_harness import mcp_apps as CN
+                            spec = CN.servers().get(cid)
+                            if spec:
+                                mcp.add(cid, spec)
+                        elif ok:
+                            term.p(st.dim("  New sessions use it."))
                 elif cmd == "import":
                     from meshpool_harness.agent import onboard
                     onboard.context_step(st)
