@@ -223,7 +223,8 @@ class Session:
                 break
         self.pending = None
         self.state = "working"
-        self.emit({"type": "approval_done", "id": p["id"], "decision": p["decision"]})
+        shown = p["decision"] if p.get("answered") else "stopped"
+        self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
         return p["decision"], p["note"]
 
     def answer(self, aid: int, decision: str, note: str = ""):
@@ -233,6 +234,7 @@ class Session:
         allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
         p["note"] = note
+        p["answered"] = True
         p["ev"].set()
 
     def _body(self, text: str, images: list | None) -> str:
@@ -257,6 +259,10 @@ class Session:
         if self.state in ("working", "waiting") and interrupt:
             self.emit({"type": "status", "text": "Interrupted. Working on your new message instead."})
             self._interrupting = True
+            with self.lock:                          # messages waiting in the queue go with the new one, not lost
+                queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
+            if queued:
+                text = "\n\n".join([*queued, text])
             self.stop()
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:
