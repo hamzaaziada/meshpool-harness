@@ -34,6 +34,9 @@ and the mock model (no paid calls). The set-up is at the end of this page.
 | 27 | Command line: `meshpool check`, `meshpool run` | CLI | `journeys.py` |
 | 28 | Code tools when turned on (`MH_OBSERVE`, `MH_NAV`, `MH_LINT_EDIT`): probe, symbol, edit check | Code | `journeys.py` (second app) |
 | 29 | Click every control in every state (home, finished thread, mid-run, waiting for approval), two levels deep | all | `crawl_all.js` |
+| 30 | Nothing jumps or flickers: layout stays still while a task runs and settles in one step on every click; scroll, menus and typing survive live updates | all | `jitter.js` |
+| 31 | Update from inside the app: the update bar appears, Update now installs, Restart comes back on the new version | n/a | `update_flow.sh` |
+| 32 | Real tasks on the real model (paid, about $1): code fixes, a web page, Word, Excel, PowerPoint, PDF, editing a contract, invoices to Excel, letters | Code, Work, Pi, Hermes, Auto | `practical/practical.py` |
 
 Not testable in this Linux container, so checked by other means:
 
@@ -65,4 +68,4 @@ Not testable in this Linux container, so checked by other means:
 
    For journey 28, start a second app with `MH_OBSERVE=1 MH_NAV=1 MH_LINT_EDIT=1`.
 6. Run, in order: `e2e_full.py`, `journeys.py`, `ui_crawl.js`, `about.js`, `intr.js`, `modes.js`, `v24.js`,
-   `midrun.js`, `crawl_all.js`.
+   `midrun.js`, `crawl_all.js`, `jitter.js`, `update_flow.sh`.
