@@ -13,6 +13,14 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Git for Windows (Windows only) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
 
+## Bundled content (icons and skills)
+
+| Component | License | Source |
+|---|---|---|
+| Lucide icons 0.460.0 (`app/engines/slides/icons`) | ISC | https://lucide.dev (npm lucide-static) |
+| Tabler Icons 3.51.0, outline set without brand logos (`app/engines/icons/tabler`) | MIT | https://tabler.io/icons (npm @tabler/icons) |
+| Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
+
 ## Python packages
 
 | Package | Version | License |
