@@ -17,6 +17,8 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
+    ("MH_PROVIDER", "Provider", "meshpool", "What Meshpool runs on: meshpool (your Meshpool key), custom (another "
+     "provider's key), claude or chatgpt (your subscription)."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),

@@ -426,7 +426,8 @@ class Session:
                 if self.cp:
                     try:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
-                        if t is None and self.cp.disabled:
+                        if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
+                            self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})

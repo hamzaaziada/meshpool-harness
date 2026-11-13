@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from meshpool_harness import config as C
+from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
 from meshpool_harness.ui import workbench as W
 
@@ -235,7 +236,8 @@ def get_settings() -> dict:
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
-            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
+            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
+            "ready": HR.ready(), "provider": HR.provider()}
 
 
 def save_settings(body: dict) -> dict:
@@ -302,7 +304,7 @@ def test_connection(values: dict | None = None) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
     C.load_into_env(override=True)
     from meshpool_harness.cli import ping
-    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")}
+    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL")}
     try:
         for k, v in (values or {}).items():
             if k in keep and str(v).strip():
@@ -556,6 +558,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
+            if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
+                HR.use_provider((self._json() or {}).get("provider", ""))
+                return self._send(200, get_settings())
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
@@ -640,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, request_permission(b["id"]) if b.get("id") else permissions())
             if u.path == "/api/install-cli":
                 from meshpool_harness.ui.desktop import install_cli
-                return self._send(200, install_cli())
+                return self._send(200, install_cli(admin=True))
             if u.path == "/api/agent":
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":

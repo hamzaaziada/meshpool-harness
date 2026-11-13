@@ -122,7 +122,8 @@ class Checkpoints:
                     continue
                 count += 1
                 if count > MAX_FILES:
-                    self.disabled = f"This folder has more than {MAX_FILES:,} files, so per-turn changes are not tracked."
+                    self.disabled = ("This folder is too big to track changes in, so Undo is off here. "
+                                     "Work in a smaller folder to turn it back on.")
                     return None
                 prev = self._last.get(rel)
                 if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns:

@@ -436,6 +436,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 
 .onb-h{font-size:13px;font-weight:600;color:var(--ink-2);margin:16px 0 6px}
 .scope{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.scope.prov{grid-template-columns:repeat(2,1fr);margin:4px 0 12px}
 .scopeopt{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;cursor:pointer}
 .scopeopt b{font-size:13.5px}.scopeopt small{font-size:12px;color:var(--ink-3);line-height:1.35}
 .scopeopt:hover{border-color:var(--ink-3)}.scopeopt[aria-checked="true"]{border-color:var(--pool);box-shadow:0 0 0 1px var(--pool) inset}

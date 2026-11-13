@@ -24,12 +24,10 @@ On first launch, paste your Meshpool API key. Then choose where Meshpool can wor
 There are three ways to run Meshpool.
 
 1. **Desktop app:** download it above.
-2. **Command line** on macOS or Linux:
+2. **Command line.** One command installs it and walks you through setup in the terminal. On macOS or Linux:
 
    ```sh
    curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | sh
-   meshpool login
-   meshpool
    ```
 
    On Windows, in PowerShell:
@@ -38,17 +36,13 @@ There are three ways to run Meshpool.
    irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
    ```
 
-   The command line installer needs Python 3.10 or later.
+   Setup asks what Meshpool runs on (your Meshpool API key, another provider's key, or your Claude or ChatGPT subscription), where it works and what it may do without asking. Then the session starts. Later, type `meshpool` in any project folder; `meshpool setup` changes your choices. If your computer has no Python 3.10 or later, the installer downloads a private copy.
 
 3. **In your browser on localhost:** after installing the command line, run `meshpool ui`. It opens the full app at `http://127.0.0.1:8765`. It runs only on your computer and is not reachable from other machines.
 
 ### Use your Claude or ChatGPT subscription
 
-Meshpool can run tasks on your own Claude Pro or Max plan, or on your ChatGPT Plus, Pro or Business plan. It does this through the official Claude Code and Codex agents.
-
-1. Open **Settings**, then **Harnesses**.
-2. Choose **Sign in** next to **Claude (your subscription)** or **ChatGPT (your subscription)**.
-3. Pick that harness for a thread.
+Meshpool can run on your own Claude Pro or Max plan, or on your ChatGPT Plus, Pro or Business plan, instead of an API key. Pick it in the first setup step, in the app or in the terminal, or later in **Settings**, **Account and key**, **Runs on**. Meshpool signs you in through the official Claude Code or Codex sign-in, and usage counts against that plan.
 
 Your Meshpool connectors, skills and MCP servers work with it too. This needs Node.js, which the desktop app includes.
 

@@ -344,3 +344,37 @@ def remove(hid: str) -> None:
     if not p.exists():
         raise KeyError(hid)
     p.unlink()
+
+
+# ---------- the provider chosen at sign-up -------------------------------------------------------------------------
+# "meshpool" (the Meshpool key), "custom" (another provider's OpenAI-compatible key and base URL), or a subscription:
+# "claude" or "chatgpt". A subscription becomes the default agent for new threads in both modes, so it is used in
+# place of an API key.
+PROVIDERS = {"claude": "claude-subscription", "chatgpt": "chatgpt-subscription"}
+LOGINS = {"claude": "claude", "chatgpt": "codex"}
+
+
+def provider() -> str:
+    return (C.read().get("MH_PROVIDER") or os.environ.get("MH_PROVIDER") or "meshpool").strip() or "meshpool"
+
+
+def use_provider(which: str) -> None:
+    if which not in ("meshpool", "custom", *PROVIDERS):
+        raise ValueError(f"Unknown provider: {which}")
+    hid = PROVIDERS.get(which, "")
+    C.write({"MH_PROVIDER": which, "MH_HARNESS_CODE": hid, "MH_HARNESS_COWORK": hid})
+    os.environ["MH_PROVIDER"] = which
+    for k in ("MH_HARNESS_CODE", "MH_HARNESS_COWORK"):
+        if hid:
+            os.environ[k] = hid
+        else:
+            os.environ.pop(k, None)
+
+
+def ready() -> bool:
+    """Whether Meshpool has something to run on: an API key, or a signed-in subscription chosen as the provider."""
+    vals = C.read()
+    if vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+        return True
+    p = provider()
+    return p in PROVIDERS and signed_in(LOGINS[p])
