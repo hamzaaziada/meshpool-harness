@@ -27,9 +27,10 @@ from pathlib import Path
 
 from .common import load_rules, soffice_convert, summarize
 from .common import failure as F
+from .ooxml_check import check as ooxml_check
 from .measure_pptx import measure, public
 
-RULES = [f"P{i}" for i in range(1, 20)]
+RULES = [f"P{i}" for i in range(0, 20)]
 
 # a small verb lexicon + inflection rules: enough to tell "Revenue grew 12% on pricing" from "Revenue overview"
 _VERBS = set("""
@@ -46,7 +47,10 @@ act adopt align allocate apply automate benchmark build cap centralise centraliz
 digitise digitize divest double-down eliminate establish exit fund hire integrate launch merge modernise modernize
 negotiate outsource partner pilot price prioritise prioritize prune redesign refocus reinvest renegotiate replace
 reprice restructure rethink shut simplify standardise standardize stop streamline test upgrade
-face shape matter drive lack outweigh hinge rest lie set keep put let""".split())
+face shape matter drive lack outweigh hinge rest lie set keep put let
+jump surge soar climb slip slide slump plunge tumble dip rebound recover edge outstrip top spike bottom flatten level
+plateau cluster cost total average comprise outnumber dominate signal suggest indicate point mean imply contract
+decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 
@@ -60,7 +64,9 @@ def _has_verb(title: str) -> bool:
             if w.endswith(suf) and w[: -len(suf)] + cut in _VERBS:
                 return True
     irregular = {"grew", "fell", "rose", "won", "lost", "made", "drove", "led", "took", "gave", "held", "paid", "spent",
-                 "sold", "built", "brought", "came", "went", "cut", "hit", "beat", "split", "set", "kept", "left", "met"}
+                 "sold", "built", "brought", "came", "went", "cut", "hit", "beat", "split", "set", "kept", "left", "met",
+                 "drew", "sank", "shrank", "swung", "stood", "began", "became", "outgrew", "overtook", "underwent",
+                 "saw", "found", "got", "ran", "spun", "slid", "bore"}
     return any(w in irregular for w in re.findall(r"[a-z]+", title.lower()))
 
 
@@ -203,31 +209,110 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
             failures.append(F("P1", "render_pages", f"LibreOffice rendered {len(pages)} pages for "
                               f"{len(m['slides'])} slides.", fix_scope="renderer"))
         tol = R["render"]["box_tolerance_in"]
+        W, H = m["slide_size_in"]
         for (pw, spans), s in zip(pages, m["slides"]):
-            sx = m["slide_size_in"][0] / pw
-            boxes = [(sh["x"], sh["y"], sh["w"], sh["h"]) for sh in s["shapes"]
-                     if sh["x"] is not None and (sh["text"] or sh["role"] in ("chart", "table"))]
-            stray = []
+            k = W / pw
+            texts = [sh for sh in s["shapes"] if sh["x"] is not None and sh["text"]]
+            frames = [sh for sh in s["shapes"] if sh["x"] is not None and sh["role"] in ("chart", "table")]
+            norm = lambda t: re.sub(r"\s+", "", t)
+            outside, collide, off = [], [], []
+            boxes, tspans = [], []
             for text, (x0, y0, x1, y1) in spans:
-                cx, cy = (x0 + x1) / 2 * sx, (y0 + y1) / 2 * sx
-                if not any(bx - tol <= cx <= bx + bw + tol and by - tol <= cy <= by + bh + tol for bx, by, bw, bh in boxes):
-                    stray.append(text[:40])
-            if stray:
+                bx0, by0, bx1, by1 = x0 * k, y0 * k, x1 * k, y1 * k
+                if bx1 > W + 0.02 or by1 > H + 0.02 or bx0 < -0.02 or by0 < -0.02:
+                    off.append(text[:30])
+                key = norm(text)[:14]
+                cx_, cy_ = (bx0 + bx1) / 2, (by0 + by1) / 2
+                in_table = any(f["role"] == "table" and f["x"] - tol <= cx_ <= f["x"] + f["w"] + tol and
+                               f["y"] - tol <= cy_ <= f["y"] + f["h"] + tol for f in frames)
+                in_chart = any(f["role"] == "chart" and f["x"] - tol <= cx_ <= f["x"] + f["w"] + tol and
+                               f["y"] - tol <= cy_ <= f["y"] + f["h"] + tol for f in frames)
+                if in_table:
+                    tspans.append((bx0, by0, bx1, by1, text))
+                    continue
+                if in_chart:
+                    continue                          # chart labels are laid out by their frame
+                owners = [sh for sh in texts if len(key) >= 8 and key in norm(sh["text"])]
+                if not owners:                       # short spans, chart labels: must sit inside some text box or frame
+                    inside = any(f["x"] - tol <= (bx0 + bx1) / 2 <= f["x"] + f["w"] + tol and
+                                 f["y"] - tol <= (by0 + by1) / 2 <= f["y"] + f["h"] + tol for f in frames + texts)
+                    if not inside:
+                        outside.append(text[:30])
+                    boxes.append((bx0, by0, bx1, by1, text))
+                    continue
+                inside_own = [sh for sh in owners if sh["x"] - tol <= bx0 and bx1 <= sh["x"] + sh["w"] + tol
+                              and sh["y"] - tol <= by0 and by1 <= sh["y"] + sh["h"] + tol]
+                own = min(owners, key=lambda sh: abs(sh["x"] - bx0) + abs(sh["y"] - by0))
+                if not inside_own and (by1 > own["y"] + own["h"] + tol or by0 < own["y"] - tol or
+                                       bx1 > own["x"] + own["w"] + tol):
+                    outside.append(f"{text[:30]} ({own['name']})")
+                boxes.append((bx0, by0, bx1, by1, text))
+            for f in frames:                          # a table must render inside its own frame
+                if f["role"] != "table":
+                    continue
+                mine = [t for t in tspans if f["x"] - tol <= (t[0] + t[2]) / 2 <= f["x"] + f["w"] + tol and t[1] >= f["y"] - tol]
+                if mine and max(t[3] for t in mine) > f["y"] + f["h"] + tol:
+                    outside.append(f"table rows run {max(t[3] for t in mine) - f['y'] - f['h']:.2f}in past the table frame")
+            for a in boxes:                           # and table text must not collide with any other text
+                for b in tspans:
+                    ix = min(a[2], b[2]) - max(a[0], b[0])
+                    iy = min(a[3], b[3]) - max(a[1], b[1])
+                    if ix > 0.03 and iy > 0.04:
+                        collide.append(f"'{a[4][:20]}' x table '{b[4][:20]}'")
+            for i in range(len(boxes)):
+                a = boxes[i]
+                for b in boxes[i + 1:]:
+                    ix = min(a[2], b[2]) - max(a[0], b[0])
+                    iy = min(a[3], b[3]) - max(a[1], b[1])
+                    if ix > 0.03 and iy > 0.04:
+                        collide.append(f"'{a[4][:20]}' x '{b[4][:20]}'")
+            if outside:
                 failures.append(F("P1", "render_outside_box",
-                                  f"Slide {s['n']}: after rendering, text sits outside its box ({'; '.join(stray[:3])}). "
-                                  f"Shorten the text in that box.", slide=s["n"], measured=len(stray)))
+                                  f"Slide {s['n']}: after rendering, text runs past its box: {'; '.join(outside[:3])}. "
+                                  "Cut words in that box.", slide=s["n"], measured=len(outside)))
+            if collide:
+                failures.append(F("P1", "render_collision", f"Slide {s['n']}: rendered text overlaps other text: "
+                                  f"{'; '.join(collide[:3])}.", slide=s["n"], measured=len(collide), fix_scope="renderer"))
+            if off:
+                failures.append(F("P1", "render_off_slide", f"Slide {s['n']}: text renders off the slide: "
+                                  f"{'; '.join(off[:3])}.", slide=s["n"], measured=len(off)))
+
+
+def _opens_cleanly(path, failures):
+    """P0: the file opens in Office without a repair prompt (schema + cross-part checks, ooxml_check.py)."""
+    try:
+        r = ooxml_check(path)
+    except Exception as e:  # a file we cannot even unzip
+        failures.append(F("P0", "package", f"Not a readable Office package: {e}", fix_scope="renderer"))
+        return
+    for pr in r["problems"][:20]:
+        failures.append(F("P0", pr["check"], f"{pr['part']}: {pr['detail']}. Office would offer to repair "
+                          "this file.", fix_scope="renderer"))
+    if r["schema_validation"] == "not_run":
+        failures.append(F("P0", "schema", "Office schemas not installed; only package and relationship checks "
+                          "ran (python -m engines.forge.ooxml_check --install-schemas).", status="not_run",
+                          severity="info", fix_scope="renderer"))
 
 
 def validate(path: str, rules: dict | None = None, brief: dict | None = None, provenance: dict | None = None,
              storyline: dict | None = None, render: bool | None = None) -> dict:
     rules = rules or load_rules()
     R = rules["pptx"]
-    m = measure(path, rules)
+    failures: list[dict] = []
+    _opens_cleanly(path, failures)
+    try:
+        m = measure(path, rules)
+    except Exception as e:  # the package is too broken to read: report P0 and stop
+        failures.append(F("P0", "package", f"python-pptx cannot read the deck ({type(e).__name__}: {e}).",
+                          fix_scope="renderer"))
+        status = {r: "not_run" for r in RULES}                # nothing else could be evaluated
+        status["P0"] = "fail"
+        return {"file": str(path), "sha256": None, "rules": status, "failures": failures,
+                "stats": {}, "evidence": [], "measurement": {}}
     try:
         _template_geometry(path, m)
     except Exception:
         pass
-    failures: list[dict] = []
     stats = dict(m["summary"])
     W, H = m["slide_size_in"]
     slides = m["slides"]
@@ -295,8 +380,10 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                                   f"bottom ({ov['grows_to_in']:.2f}in of {H:.2f}in); cut the text.", slide=n,
                                   shape=sh["name"]))
             tf = R["text_fit"]
+            body_floor = tf.get("min_dense_pt", tf["min_body_pt"]) if s["archetype"] in tf.get("dense_archetypes", []) \
+                else tf["min_body_pt"]
             floor = {"title": tf["min_title_pt"], "title_inferred": tf["min_title_pt"], "footnote": tf["min_footnote_pt"],
-                     "footer": tf["min_footnote_pt"]}.get(sh["role"], tf["min_body_pt"])
+                     "footer": tf["min_footnote_pt"]}.get(sh["role"], body_floor)
             small = [p["size"] * scale for p in sh["paras"] if p["size"] * scale < floor - 0.01]
             if small:
                 failures.append(F("P5", "font_below_minimum", f"Slide {n}, {sh['name']}: text is {min(small):g}pt, below "
@@ -315,15 +402,16 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
 
         # ---------------- P7 master usage and grid snap
         if not is_title_exempt or not re.search(R["layout"]["title_exempt_layouts"], s["layout"] or ""):
-            tph = [sh for sh in s["shapes"] if sh["role"] == "title"]
+            tph = [sh for sh in s["shapes"] if sh["role"] == "title" and sh["ph_type"] is not None]
             if not tph:
                 failures.append(F("P7", "no_title_placeholder", f"Slide {n}: no filled title placeholder (layout "
                                   f"'{s['layout']}').", slide=n, fix_scope="renderer"))
         edges, (cl, cr) = _grid(m, R)
         tol = R["layout"]["snap_tolerance_in"]
         for sh in s["shapes"]:
-            if sh["depth"] or sh["x"] is None or sh["role"] in ("footer", "line"):
-                continue
+            if sh["depth"] or sh["x"] is None or sh["role"] in ("footer", "line") or \
+                    sh["name"].startswith(R["layout"]["overlap_declare_prefix"]):
+                continue                      # declared overlays (labels, icons, callouts) sit where the data puts them
             if sh["ph_type"] is not None and not sh.get("own_xfrm"):
                 continue                      # geometry inherited from the layout: on the template by definition
             off = []
@@ -341,8 +429,9 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                               f"{R['layout']['grid_columns']} grid columns.", slide=n, fix_scope="renderer"))
         top = [sh for sh in s["shapes"] if sh["depth"] == 0 and sh["x"] is not None]
         for sh in top:
-            if sh["role"] in ("footer",) or (sh["x"] <= 0.01 and sh["w"] >= W - 0.02):
-                continue           # full-bleed bands are allowed
+            if sh["role"] in ("footer",) or (sh["x"] <= 0.01 and sh["w"] >= W - 0.02) or \
+                    sh["name"].startswith(R["layout"]["overlap_declare_prefix"]) or sh["x"] + sh["w"] >= W - 0.01:
+                continue           # full-bleed bands and declared overlays (labels, callouts) are allowed
             if sh["x"] < cl - tol or sh["x"] + sh["w"] > cr + tol:
                 if sh["role"] not in ("picture",) and not (sh["x"] <= 0.01 or sh["x"] + sh["w"] >= W - 0.01):
                     failures.append(F("P8", "outside_margin", f"Slide {n}, {sh['name']}: outside the safe margins.",
@@ -367,10 +456,10 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
 
         # ---------------- P9 icons and decoration
         icons = s["icons"]
-        if len(icons) > R["icons"]["max_per_slide"]:
+        icap = (R["icons"].get("max_per_slide_by_archetype") or {}).get(s["archetype"], R["icons"]["max_per_slide"])
+        if len(icons) > icap:
             failures.append(F("P9", "too_many_icons", f"Slide {n}: {len(icons)} icons; keep at most "
-                              f"{R['icons']['max_per_slide']}, only where they carry meaning.", slide=n,
-                              measured=len(icons), limit=R["icons"]["max_per_slide"]))
+                              f"{icap}, only where they carry meaning.", slide=n, measured=len(icons), limit=icap))
         for ic in icons:
             if ic["set"] not in R["icons"]["allowed_sets"]:
                 failures.append(F("P9", "icon_set", f"Slide {n}, {ic['shape']}: icon is not from the approved set "
@@ -601,7 +690,7 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 return None, []
             mode = Counter(round(v, 2) for _, v in vals).most_common(1)[0][0]
             return mode, [n for n, v in vals if abs(v - mode) > tol]
-        for i, name in enumerate(("left edge", "top", "width", "height")):
+        for i, name in enumerate(("left edge",)):      # top, width and height vary with subtitle and archetype
             mode, odd = spread("title_box", i)
             if odd:
                 failures.append(F("P19", "title_position", f"Title {name} differs from the deck's {mode:.2f}in on slides "

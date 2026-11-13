@@ -67,6 +67,22 @@ def finish_check(answer, artifacts, ws):
 
 
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 20, model: str = "deepseek-v4.1-flash",
+          client=None, phase: str = "phase_2_build", **kw) -> dict:
+    """Decks go through the forge design system unless MH_DECK_ENGINE=v1; v1 is the fallback if forge fails."""
+    if os.environ.get("MH_DECK_ENGINE", "forge") != "v1":
+        try:
+            from engines.forge.engine import solve as forge_solve
+            res = forge_solve(task, workdir=workdir, task_id=task_id, client=client, model=model,
+                              files=kw.get("files"))
+            if res.get("ok"):
+                return res
+        except Exception as e:  # fall back to the previous engine rather than fail the user's task
+            print(f"forge engine failed ({type(e).__name__}: {e}); using the v1 slides engine", file=sys.stderr)
+    return _solve_v1(task, workdir=workdir, task_id=task_id, max_turns=max_turns, model=model, client=client,
+                     phase=phase)
+
+
+def _solve_v1(task: str, *, workdir: str, task_id: str, max_turns: int = 20, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build") -> dict:
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     client = client or LiveClient(phase)

@@ -10,8 +10,9 @@ Tools
   convert_document(path, to)          -> docx/pptx/xlsx to PDF and back, through LibreOffice when installed
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
-  check_deck(path, slide_count?)      -> the 18 forge deck rules, each failure as a fix instruction (engines/forge)
-  check_workbook(path)                -> the 13 forge workbook rules after a headless recalculation
+  check_deck(path, slide_count?)      -> the forge deck rules (P0-P19), each failure as a fix instruction
+  check_workbook(path)                -> the forge workbook rules (X0-X13) after a headless recalculation
+  check_document(path)                -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
 
 Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 240 s, under the usual 300 s MCP

@@ -294,7 +294,8 @@ def measure(path: str, rules: dict | None = None) -> dict:
         for lay in m.slide_layouts:
             layouts.append(lay.name)
 
-    deck_faces, size_hist = Counter(), {"title": Counter(), "body": Counter(), "footnote": Counter(), "chart_labels": Counter()}
+    deck_faces, size_hist = Counter(), {"title": Counter(), "body": Counter(), "subtitle": Counter(), "footnote": Counter(),
+                                        "chart_labels": Counter()}
     scheme_n = srgb_n = 0
     srgb_vals = Counter()
     shape_name_patterns = Counter()
@@ -345,7 +346,10 @@ def measure(path: str, rules: dict | None = None) -> dict:
             if kind == "cxnSp" or (el.find(".//" + qn("a:prstGeom")) is not None and
                                    el.find(".//" + qn("a:prstGeom")).get("prst") in ("line", "straightConnector1")):
                 connected = el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
-                if not connected:
+                ln = el.find(".//" + qn("a:ln"))
+                weight_pt = int(ln.get("w")) / 12700 if ln is not None and ln.get("w") else 0.75
+                axis = w is not None and (w < 0.02 or h < 0.02)       # horizontal or vertical rule
+                if not connected and (not axis or weight_pt > R["icons"].get("max_rule_weight_pt", 1.5)):
                     rec["decorative_lines"] += 1
                 srec["role"] = "line"
             if uri == CHART_URI:
@@ -392,6 +396,8 @@ def measure(path: str, rules: dict | None = None) -> dict:
                     ppr = p._p.find(qn("a:pPr"))
                     run = next((r for r in p.runs if r.text.strip()), None)
                     rpr = run._r.find(qn("a:rPr")) if run is not None else None
+                    if rpr is None and p._p.find(qn("a:fld")) is not None:     # field-only paragraph (slide number)
+                        rpr = p._p.find(qn("a:fld")).find(qn("a:rPr"))
                     sz = (rpr.get("sz") if rpr is not None else None) or _first_attr(chain, "a:defRPr", "sz")
                     size = int(sz) / 100 if sz else 18.0
                     face = None
@@ -411,14 +417,21 @@ def measure(path: str, rules: dict | None = None) -> dict:
                     sb = _first_attr([ppr] + chain, "a:spcBef/a:spcPts", "val")
                     sa = _first_attr([ppr] + chain, "a:spcAft/a:spcPts", "val")
                     ls = _first_attr([ppr] + chain, "a:lnSpc/a:spcPct", "val")
+                    lpts = _first_attr([ppr] + chain, "a:lnSpc/a:spcPts", "val")
                     paras.append({"text": txt, "size": size, "face": face, "bold": bool(bold), "level": lvl,
                                   "bullet": _bullet([ppr] + chain) if ptype is not None or ppr is not None else False,
                                   "marL_in": _in(marl), "space_before_pt": int(sb) / 100 if sb else 0.0,
                                   "space_after_pt": int(sa) / 100 if sa else 0.0,
-                                  "line_spacing": int(ls) / 100000 if ls else 1.0})
+                                  "line_spacing": int(ls) / 100000 if ls else 1.0,
+                                  "pitch_pt": int(lpts) / 100 if lpts else None})
                     rec["emoji"] += len(EMOJI.findall(txt))
                 srec["paras"] = paras
                 srec["text"] = "\n".join(p["text"] for p in paras)
+                mrole = re.match(r"role_(title|subtitle|numeral|body|footnote)_", sh.name or "")
+                if srec["role"] is None and mrole:
+                    srec["role"] = mrole.group(1)
+                if srec["role"] is None and el.findall(".//a:fld[@type='slidenum']", NS):
+                    srec["role"] = "footer"
                 if srec["role"] is None:
                     if ptype in TITLE_TYPES:
                         srec["role"] = "title"
@@ -433,7 +446,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
                         srec["role"] = "subtitle"
                     else:
                         srec["role"] = "body"
-                role_key = {"title": "title", "body": "body", "subtitle": "body", "footnote": "footnote",
+                role_key = {"title": "title", "body": "body", "subtitle": "subtitle", "footnote": "footnote",
                             "footer": "footnote"}.get(srec["role"])
                 if role_key:
                     for p in paras:
@@ -464,7 +477,8 @@ def measure(path: str, rules: dict | None = None) -> dict:
         rec["notes_text"] = (slide.notes_slide.notes_text_frame.text if slide.has_notes_slide and
                              slide.notes_slide.notes_text_frame else "")
         top = [s for s in rec["shapes"] if s["depth"] == 0 and s["x"] is not None and s["role"] not in ("footer",)]
-        rec["left_edges"] = sorted({round(s["x"], 2) for s in top})
+        rec["left_edges"] = sorted({round(s["x"], 2) for s in top if not s["name"].startswith("ov_")
+                                    and s["role"] not in ("footnote", "line")})
         rec["autofit"] = dict(Counter(s.get("autofit", "none") for s in texts))
         tsh = next((s for s in texts if s["role"] in ("title", "title_inferred")), None)
         content_x = [s["x"] for s in top if s["role"] not in ("footer", "footnote", "line") and s["w"] < W - 0.05]
@@ -472,7 +486,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
             "title_box": [round(v, 2) for v in (tsh["x"], tsh["y"], tsh["w"], tsh["h"])] if tsh and tsh["x"] is not None else None,
             "title_size": max(p["size"] for p in tsh["paras"]) * tsh.get("font_scale", 1.0) if tsh else None,
             "title_face": tsh["paras"][0]["face"] if tsh else None,
-            "body_faces": sorted({p["face"] for s in texts if s["role"] == "body" for p in s["paras"] if p["face"]}),
+            "body_faces": sorted({p["face"] for s in texts if s["role"] in ("body", "subtitle") for p in s["paras"] if p["face"]}),
             "content_left": round(min(content_x), 2) if content_x else None,
             "source_y": round(src[0]["y"], 2) if src else None,
             "slide_number_box": next(([round(s["x"], 2), round(s["y"], 2)] for s in rec["shapes"]
@@ -516,7 +530,7 @@ def _overflow(s: dict, metric_map: tuple, R: dict) -> dict | None:
         exact = exact and ok
         n = wrap_lines(p["text"], width - p["marL_in"], size, path, tf["wrap_safety"]) if s.get("wrap") != "none" else 1
         lines += n
-        line_h = size * tf["line_height"] * p["line_spacing"] / 72
+        line_h = (p["pitch_pt"] * scale if p.get("pitch_pt") else size * tf["line_height"] * p["line_spacing"]) / 72
         need += n * line_h + (p["space_before_pt"] + p["space_after_pt"]) / 72
     over_in = need - height
     over_lines = max(0, round(over_in / line_h + 0.49)) if line_h and over_in > tf["overflow_tolerance_in"] else 0

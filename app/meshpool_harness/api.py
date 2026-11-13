@@ -24,7 +24,7 @@ import os
 import time
 import traceback
 
-ENGINES = ("code", "browser", "data", "sheets", "slides", "agent", "agent-work")
+ENGINES = ("code", "browser", "data", "sheets", "slides", "forge", "agent", "agent-work")
 
 
 def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | None = None,

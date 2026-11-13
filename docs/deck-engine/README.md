@@ -1,19 +1,22 @@
-# Forge: Hebbia-grade decks and workbooks for Meshpool Work
+# Forge: consulting-grade decks and workbooks for the Meshpool agent
 
-Forge is the deck and workbook quality layer of Meshpool Work (Cowork). The model writes structured content only. A
+Forge is the Meshpool agent's deck engine and its deck/workbook quality layer. The model writes structured content only. A
 deterministic renderer builds native OOXML, and deterministic validators decide whether a file ships. That way the
 quality doesn't depend on which model writes the content.
 
 **Where it stands (13 Nov 2026):**
 
-- The validators, measurers, schemas and Cowork tools are built and tested.
-- The current slides renderer does not yet meet the spec.
-- The McKinsey one-shot rebuild test fails today, mainly on source lines, exhibit depth and type.
+- The design system (`design-grammar.md`), renderer, builder, validators, measurers and schemas are built and tested.
+- Exact rebuilds of McKinsey reference pages and content-only builds on two topics pass the render check with no overlap or overflow.
+- The first one-shot rebuild through the previous slides engine failed (`mckinsey-rebuild-test.md`); forge v2 replaced that engine.
+- Every forge deck, the agent's Word documents and recalculated workbooks validate against the Office schemas
+  (P0/X0), so PowerPoint, Word and Excel should open them without the repair prompt.
 - No Hebbia file has been measured yet, because none was supplied.
 
 | Document | What it holds |
 |---|---|
-| [engine-spec.md](engine-spec.md) | slide JSON schema, 28-archetype library, renderer contract, workbook block schema, all rules (P1–P19, X1–X13) |
+| [design-grammar.md](design-grammar.md) | the design system every deck gets, measured on McKinsey reference pages, and what keeps it from breaking |
+| [engine-spec.md](engine-spec.md) | slide JSON schema, 28-archetype library, renderer contract, workbook block schema, all rules (P0–P19, X0–X13) |
 | [pipeline-spec.md](pipeline-spec.md) | stage contracts, toolkit with versions and licences, Excel → dashboard → PBIP, cloud packaging |
 | [hebbia-deck-anatomy.md](hebbia-deck-anatomy.md) | the measurement template for Hebbia files, pipeline hypotheses H1–H6, our deck measured the same way |
 | [mckinsey-rebuild-test.md](mckinsey-rebuild-test.md) | the one-shot rebuild test, results and the bar to pass |
@@ -25,19 +28,17 @@ quality doesn't depend on which model writes the content.
 
 ## Use it
 
-In Meshpool Work, three tools on the `meshpool-office` MCP server are read-only and run without asking:
-
-- `check_deck(path, slide_count?)`: rules P1–P19, each failure written as a fix instruction;
-- `check_workbook(path)`: rules X1–X13 after a headless recalculation;
-- `measure_office_file(path, pages?)`: how a .pptx, .xlsx or .pdf is built.
-
-Every `make_deck` / `make_spreadsheet` job report now ends with a forge QA line.
+Every deck request to the Meshpool agent uses forge: `meshpool run "…" --engine slides` (or `--engine forge`) and
+Meshpool Work's office task both go through it. `MH_DECK_ENGINE=v1` selects the previous engine.
 
 From the command line (in `app/`):
 
 ```bash
+python -m engines.forge.build brief.md out_dir --slides 10          # brief -> checked deck.pptx
 python -m engines.forge.validate_pptx deck.pptx --text [--brief brief.json --provenance provenance.json]
 python -m engines.forge.validate_xlsx model.xlsx --text [--recompute recompute.json --before old.xlsx]
+python -m engines.forge.ooxml_check deck.pptx report.docx model.xlsx   # opens in Office without repair?
+python -m engines.forge.ooxml_check --install-schemas                   # once: fetch the ECMA-376 schemas
 python -m engines.forge.measure_pptx deck.pptx --summary
 python -m engines.forge.measure_pdf reference.pdf [--pages 53-76]
 python -m engines.forge.rebuild_eval reference.pdf out_dir --slides 12

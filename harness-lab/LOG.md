@@ -192,11 +192,17 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 
 - Forge (`app/engines/forge`, docs in `docs/deck-engine/`): validators for 19 deck rules (P1-P19) and 13 workbook
   rules (X1-X13), deck/PDF/workbook anatomy measurers, rules config, slide and workbook JSON schemas, scorecard,
-  9 tests. Exposed in Cowork as read-only tools on meshpool-office: check_deck, check_workbook, measure_office_file;
-  every make_deck/make_spreadsheet report now ends with a forge QA line.
+  9 tests. Forge v2 (design grammar measured on McKinsey pages, render.py + build.py) is now the default deck engine
+  behind `--engine slides`; the old engine stays behind MH_DECK_ENGINE=v1. MCP tools in meshpool-office:
+  check_deck, check_workbook, check_document, measure_office_file.
 - 17 public consulting decks measured (1,186 pages) to calibrate thresholds; blind visual review of our sample deck
   (overall consultant-made 2/5 vs 4-5 for reference pages).
 - McKinsey one-shot rebuild test (`engines/forge/rebuild_eval.py`): fails today. Titles and consistency are good;
   0% source lines vs 50-87%, Calibri only, thin exhibits. $0.015 per rebuild; key spend now $2.63.
 - Handoff open issues: 1 (cowork default) -> Meshpool Work; 2 (Markdown reports) -> Work writes .docx with
-  make_document and runs check_deck/check_workbook on deliverables. Unit tests 151 passed.
+  make_document. Practical office run finished: Meshpool Work 4/4 and Auto 4/4 (contract, invoices, pdf, letters);
+  Pi not installed in this container. Unit tests 151 passed.
+- Opens-without-repair check (P0/X0, `ooxml_check.py`): every XML part against the ECMA-376 Transitional schemas,
+  with the forms Office itself writes accepted. It found negative chart axis ids in every python-pptx chart (forge
+  and the v1 engine); fixed. Also fixed: a plain-string `source` crashed the renderer; the title-verb check missed
+  chart verbs ("jumped"). Unit tests 155 passed, 8 skipped.

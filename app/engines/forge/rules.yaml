@@ -30,6 +30,7 @@ pptx:
       Calibri: Carlito
       Calibri Light: Carlito
       Cambria: Caladea
+      Georgia: Gelasio
       Arial: Liberation Sans
       Helvetica: Liberation Sans
       Arial Narrow: Liberation Sans Narrow
@@ -37,17 +38,19 @@ pptx:
       Courier New: Liberation Mono
   text_fit:                     # P5
     min_body_pt: 12
-    min_footnote_pt: 9
+    min_footnote_pt: 8          # reference decks: footnotes 8 pt, source 9 pt
     min_title_pt: 20
-    wrap_safety: 0.95           # PowerPoint wraps a little earlier than raw advance widths
-    line_height: 1.2            # single spacing as a multiple of font size
+    wrap_safety: 0.97           # PowerPoint wraps a little earlier than raw advance widths
+    line_height: 1.15           # Arial single spacing as a multiple of font size (calibrated on renders)
+    min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
+    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument]
     overflow_tolerance_in: 0.04
   colors:                       # P6
     srgb_exceptions: []         # hex values allowed as hardcoded colours (e.g. "FFFFFF" for knockout text)
     check_charts: true
   layout:                       # P7, P8
-    grid_columns: 12
-    gutter_in: 0.25             # used only when the template does not define the grid
+    grid_columns: 24
+    gutter_in: 0.125            # used only when the template does not define the grid
     margin_in: 0.5              # used only when the template does not define the margins
     snap_tolerance_in: 0.05
     edge_check: [left, right]
@@ -57,11 +60,13 @@ pptx:
     allow_panel_containment: true   # a text-free filled panel fully containing other shapes is not an overlap
   icons:                        # P9
     max_per_slide: 4
+    max_per_slide_by_archetype: {challenge_matrix: 6}
     max_icon_size_in: 1.0
     tag_prefix: "icon:"         # alt text "icon:<set>:<name>" identifies an icon and its set
     allowed_sets: [lucide]
     forbid_gradients: true
-    forbid_decorative_lines: true
+    forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
+    max_rule_weight_pt: 1.5
     forbid_emoji: true
   density:                      # P10
     max_body_words: 80          # default for narrative archetypes
@@ -77,12 +82,19 @@ pptx:
       kpi_tiles: 50
       table_highlight: 40       # words outside the table; table cells are counted separately
       quote_voice: 60
+      challenge_matrix: 260      # reference page: ~230 words in 5 rows x 2 lenses
+      exhibit_argument: 170      # reference page: ~150 words of argument beside the exhibit
+      table_focus: 60
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
       recommendations_now_next_later: 12
       timeline_roadmap: 12
       options_evaluation: 12
       case_example: 9
       two_exhibits: 6
+      text_matrix: 15
+      executive_summary: 10
+      challenge_matrix: 20
+      exhibit_argument: 10
   titles:                       # P11
     max_words: 15
     max_lines: 2

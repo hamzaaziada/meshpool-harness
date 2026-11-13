@@ -14,7 +14,6 @@ python -m engines.forge.validate_pptx /abs/path/hebbia.pptx --out hebbia.qa.json
 python -m engines.forge.validate_xlsx /abs/path/hebbia.xlsx --out hebbia.xlsx.qa.json              # step 3 + X1-X13
 ```
 
-In Cowork, the same measurement is the `measure_office_file` tool.
 
 ## What gets measured, and where each answer lands
 

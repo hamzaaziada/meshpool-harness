@@ -1,7 +1,7 @@
 # Forge pipeline spec: storyline first, design mock second, native file last
 
 Each stage reads one file and writes one file in a shared workspace, so any stage can be rerun or swapped to another
-model. In Meshpool Work (Cowork) the stages are tools on the `meshpool-office` MCP server. In the cloud they are the
+model. In the Meshpool agent the stages run inside the forge engine (`engines/forge/build.py`). In the cloud they are the
 same tools behind a job queue (§5).
 
 ```
@@ -20,26 +20,23 @@ brief + sources ─► 1 intake ─► facts.json ─► 2 storyline ─► stor
 | 3 Content | one storyline node + its facts | one slide JSON (`schemas/slide.schema.json`) | any | JSON Schema valid; every number has provenance (P13); archetype limits (P10) |
 | 4 Design mock (off by default) | slide JSON + theme tokens | `mock/<id>.png`, then `layout_spec.json`: grid columns per element, hierarchy, chart type, emphasis | image model, then vision model | layout snapped to template grid and archetypes; anything not expressible is reported, never hacked in; numbers and text in the mock are ignored |
 | 5 Native build | slide JSON, layout spec, template, rules | `deck.pptx`, `provenance.json`, `brief.json`, `storyline.json` | none | renderer contract (engine-spec §4) |
-| 6 Render + QA | `deck.pptx` | `qa.json` (`validate_pptx`), `png/*.png`, contact sheet, vision diff vs mock | vision model (review only) | P1–P19 |
+| 6 Render + QA | `deck.pptx` | `qa.json` (`validate_pptx`), `png/*.png`, contact sheet, vision diff vs mock | vision model (review only) | P0–P19 |
 | 7 Repair | `qa.json` failures with `fix_scope = content` | revised slide JSON for failing slides only | same as stage 3 | ≤3 rounds, then remaining failures go into the notes as `[QA]` lines and the report |
 
 Workbooks follow the same shape: intake → model block (`schemas/workbook_block.schema.json`) → builder → LibreOffice
-recalc → `validate_xlsx` (X1–X13) → repair, with X7 fed by the builder's own Python recompute.
+recalc → `validate_xlsx` (X0–X13) → repair, with X7 fed by the builder's own Python recompute.
 
-### What runs in Cowork today
+### What runs today
 
-| Tool (meshpool-office MCP) | Stage | Status |
+| Piece | Stage | Status |
 |---|---|---|
-| `read_document` | 1 intake (PDF, Office, Power BI, OCR) | shipped |
-| `make_deck`, `make_spreadsheet`, `analyze_data` (and `office_task` in Meshpool Work) | 2–5, current engines | shipped; forge QA lines now appended to every job report |
-| `check_deck` | 6 QA, P1–P19 | **new** (read-only, auto-allowed) |
-| `check_workbook` | 6 QA, X1–X13 | **new** (read-only, auto-allowed) |
-| `measure_office_file` | reverse-engineering a reference .pptx/.xlsx/.pdf | **new** (read-only, auto-allowed) |
-| `python -m engines.forge.rebuild_eval` | eval: one-shot rebuild of a reference deck | **new** (CLI; spends model calls) |
-| template-placeholder renderer, storyline approval gate, design-mock stage, logo fetch, PBIP export | 2, 4, 5 | **to build** (see open-questions.md) |
-
-Meshpool Work's system prompt now tells it to run `check_deck`/`check_workbook` on every deliverable and fix the
-content failures. It also writes memos and reports as .docx, which was handoff issue 2.
+| `read_document` (OCR, PDF, Office, Power BI) | 1 intake | shipped |
+| `engines/forge/build.py`: storyline call, per-slide content calls, schema gate, render, render check, repair (<= 3 rounds) | 2, 3, 5, 6, 7 | **new**; default deck engine (`--engine slides` or `forge`) |
+| `engines/forge/render.py`: the design grammar | 5 | **new** |
+| `validate_pptx` (P0-P19, render check), `validate_xlsx` (X0-X13) | 6 | **new** |
+| `ooxml_check.py`: opens in Office without repair (P0/X0; also `check_document` for .docx) | 6 | **new** |
+| `rebuild_eval.py`: one-shot rebuild of a reference deck | eval | **new** |
+| design-mock loop with `gpt-image-2` and a separate vision reviewer | 4 | blocked: the Meshpool gateway does not expose `/v1/images/generations` yet |
 
 ## 2. Out-of-the-box toolkit (chosen, pinned, licensed)
 
@@ -67,7 +64,7 @@ rest in muted `tx2`, and a source line.
 
 ## 3. Excel → dashboard → Power BI
 
-1. **Model.** The workbook builder creates Inputs/Calc/Outputs/Checks from the model block under X1–X13.
+1. **Model.** The workbook builder creates Inputs/Calc/Outputs/Checks from the model block under X0–X13.
 2. **Dashboard tab.** One message per page; 3–6 KPI cards, each with a comparison value (prior period, plan or first
    period); ≤4 native charts. Every value is a formula into Outputs/Calc (X9). Theme colours only, no 3D effects.
 3. **Power BI Project (PBIP).** From the workbook's clean tables (one per Calc block, long format: period, line,
@@ -86,8 +83,10 @@ Status: not built. `read_document` already reads .pbix/.pbit (pages, visuals, DA
 
 ## 4. Running in a cloud workspace
 
-- **Container:** Python 3.12+, LibreOffice 24.x, the metric-compatible fonts (Carlito, Caladea, Liberation) plus
-  the client template fonts, the bundled OCR models, and pinned wheels for the toolkit above.
+- **Container:** Python 3.12+, LibreOffice 24.x, the metric-compatible fonts (Carlito, Caladea, Liberation, Gelasio)
+  plus the client template fonts, the bundled OCR models, pinned wheels for the toolkit above, and the ECMA-376
+  Transitional schemas (`python -m engines.forge.ooxml_check --install-schemas` at image build time; not bundled in
+  the repo).
 - **Job queue:** renders, recalcs and builds run as jobs (the office server already runs engines as background
   jobs with `office_job_status`). LibreOffice uses one throwaway profile per job, so jobs parallelise.
 - **Tools over MCP:** each stage is a tool that reads and writes files in the shared workspace
@@ -97,7 +96,8 @@ Status: not built. `read_document` already reads .pbix/.pbit (pages, visuals, DA
 
 ## 5. Evaluation harness
 
-- `validate_pptx` / `validate_xlsx`: the rules (CI: `app/tests/test_forge.py`, 9 tests, good and bad fixtures).
+- `validate_pptx` / `validate_xlsx`: the rules (CI: `app/tests/test_forge.py`: good and bad fixtures, including
+  packages Office would repair).
 - `scorecard.py`: every file × every rule → `docs/deck-engine/scorecard.csv`.
 - `rebuild_eval.py`: **the McKinsey one-shot test.** Text-only brief from a reference PDF, one build, then the same
   measurements on both decks plus side-by-side contact sheets for a blind vision review.
