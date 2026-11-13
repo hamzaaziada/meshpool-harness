@@ -14,8 +14,8 @@ BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
      "description": ("Best for: coding in your project, with your MCP servers, connectors and skills. Edits code, "
-                    "runs commands and tests, and can use a browser. Meshpool's coding test (12 Nov 2026, same model "
-                    "for every agent): 7 of 9 tasks solved.")},
+                    "runs commands and tests, and can use a browser. Meshpool's coding test (13 Nov 2026, same model "
+                    "for every agent): 18 of 20 tasks solved, ahead of Codex CLI.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
      "description": ("Best for: documents, spreadsheets, decks, data analysis and research. Makes Word, Excel and "
                     "PowerPoint files with Meshpool's office engines; needs nothing else installed.")},
@@ -23,7 +23,7 @@ BUILTIN = [
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
       "description": ("Best for: simple coding tasks at low cost. Pi is the small open-source coding agent by "
                       "Mario Zechner, bundled with Meshpool. On Meshpool's coding test it solved the most "
-                      "(8 of 9).")}
+                      "(19 of 20), quickly and at the lowest cost.")}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
         "description": ("Best when you are not sure: picks the harness that does each kind of task best, and "
                         "tells you which one and why.")}
@@ -279,10 +279,8 @@ def default_for(mode: str) -> str:
     want = (os.environ.get(f"MH_HARNESS_{mode.upper()}") or C.read().get(f"MH_HARNESS_{mode.upper()}") or "").strip()
     if want and any(d["id"] == want and d.get("available") and not d.get("error") for d in load_all()):
         return want
-    rows = [d for d in load_all() if d.get("mode") == mode and not d.get("error")]
-    for d in sorted(rows, key=lambda d: not d.get("builtin")):
-        if d.get("default") and d.get("available") and d["id"] not in ("meshpool-code", "meshpool-work", "pi"):
-            return d["id"]
+    # Meshpool's own harnesses are the defaults: they passed every task in the practical check (13 Nov 2026) and
+    # need nothing else installed. Hermes and the others stay one click away in the harness picker.
     return "meshpool-code" if mode == "code" else "meshpool-work"
 
 

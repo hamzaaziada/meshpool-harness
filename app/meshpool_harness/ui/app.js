@@ -12,6 +12,13 @@ function ago(t) {
   if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m"; if (s < 86400) return Math.floor(s / 3600) + "h";
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
+// Paths as people read them: ~/Documents/report instead of /Users/name/Documents/report.
+function shortPath(p) {
+  p = String(p || ""); const h = S.settings?.user_home;
+  if (h && (p === h || p.startsWith(h + "/") || p.startsWith(h + "\\"))) p = "~" + p.slice(h.length);
+  const parts = p.split(/[\\/]/);
+  return p.length > 48 && parts.length > 3 ? "…/" + parts.slice(-2).join("/") : p;
+}
 const RES = id => document.getElementById(id) || {className: "", textContent: "", innerHTML: ""};   // results outlive a re-render
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem("mp_" + k)); localStorage.setItem("mp_" + k, JSON.stringify(v)); } catch (e) { return null; } }
 
@@ -975,7 +982,7 @@ function panelProgress(body) {
     </section>
     <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
     <section><h4>Context</h4><ul class="ctxl">
-      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small>${esc(curRoot())}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
+      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
       <li>${ICON.cpu}<span><b>${esc(v.harness?.name || "")}</b><small>${esc(v.model || "")}</small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
@@ -1063,7 +1070,7 @@ async function openFile(root, rel, node) {
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
   S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null};
-  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(root)}</span>\n`}</pre><div class="term-in"><span style="color:var(--ink-3);font-family:var(--mono)">$</span><input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
+  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in"><span style="color:var(--ink-3);font-family:var(--mono)">$</span><input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
   const save = () => { S.term.html = out.innerHTML; };
   inp.onkeydown = async e => {
