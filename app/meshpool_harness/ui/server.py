@@ -461,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 return self._send(200, IM.scan())
+            if u.path == "/api/import-context":
+                from meshpool_harness import importer as IM
+                return self._send(200, {"prompt": IM.context_prompt()})
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -593,6 +596,23 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 return self._send(200, HRS.login({"claude-subscription": "claude",
                                                   "chatgpt-subscription": "codex"}.get(b.get("id", ""), b.get("id", ""))))
+            if u.path == "/api/import-context":
+                # context from ChatGPT, Claude or another assistant: pasted answer, pasted instructions, or an export
+                from meshpool_harness import importer as IM
+                b = self._json()
+                if b.get("file"):
+                    import base64
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
+                        tf.write(base64.b64decode(b["file"].get("data", "")))
+                    try:
+                        return self._send(200, IM.import_export(tf.name))
+                    finally:
+                        os.unlink(tf.name)
+                if b.get("instructions"):
+                    return self._send(200, {"skill": IM.import_instructions_as_skill(
+                        b.get("name", ""), b["instructions"], b.get("description", ""))})
+                return self._send(200, IM.import_context_text(b.get("text", "")))
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])
