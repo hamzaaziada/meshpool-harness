@@ -181,8 +181,10 @@ class Session:
                 # conversions and document reading. Its own office_task covers slides, sheets and data only.
                 from meshpool_harness.harnesses.acp import office_server
                 spec = office_server([self.workdir])
-                extra = {spec["name"]: {"command": spec["command"], "args": spec["args"],
-                                        "env": {e["name"]: e["value"] for e in spec["env"]}}}
+                env_ = {e["name"]: e["value"] for e in spec["env"]}
+                env_.setdefault("OFFICE_WAIT_S", "280")       # this client waits 330 s, so engines may run longer
+                extra = {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_,
+                                        "timeout": 330}}
             self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp

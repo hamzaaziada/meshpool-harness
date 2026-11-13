@@ -15,8 +15,9 @@ Tools
   check_document(path)                -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
 
-Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 240 s, under the usual 300 s MCP
-timeout); a longer job returns a job id to check with office_job_status. Files go to "<project>/Meshpool outputs".
+Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
+timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
+office_job_status. Files go to "<project>/Meshpool outputs".
 """
 from __future__ import annotations
 
@@ -32,7 +33,8 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[2]
 JOBS: dict[str, dict] = {}
-WAIT = float(os.environ.get("OFFICE_WAIT_S", "240"))
+WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s client timeout; a longer job returns
+                                                       # a job id for office_job_status instead of timing out
 
 
 def _project() -> Path:

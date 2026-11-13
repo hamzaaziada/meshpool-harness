@@ -172,6 +172,28 @@ def _box(sl, x, y, w, h, name, anchor=MSO_ANCHOR.TOP, pad=0.0):
     return tb
 
 
+def _shape_text(shp, blocks, ctx, n, area, anchor=MSO_ANCHOR.TOP):
+    """Write the body into the shape itself (its own text frame, insets set so the text sits in `area`), so a person
+    editing the deck edits one object, not a text box floating on a box."""
+    sx, sy = shp.left / 914400, shp.top / 914400
+    sw, sh = shp.width / 914400, shp.height / 914400
+    x, y, w, h = area
+    tf = shp.text_frame
+    tf.word_wrap = True
+    bp = tf._txBody.find(qn("a:bodyPr"))
+    for c in list(bp):
+        bp.remove(c)
+    for k in list(bp.attrib):
+        del bp.attrib[k]
+    tf.margin_left, tf.margin_top = Inches(max(0.0, x - sx)), Inches(max(0.0, y - sy))
+    tf.margin_right, tf.margin_bottom = Inches(max(0.0, sx + sw - x - w)), Inches(max(0.0, sy + sh - y - h))
+    tf.vertical_anchor = anchor
+    for b in blocks:
+        b.setdefault("align", PP_ALIGN.LEFT)
+    _write(shp, blocks, ctx, n)
+    return shp
+
+
 def _write(tb, blocks, ctx=None, n=None):
     """blocks: dicts {text, size, color, bold, bullet, level, space_before, align, italic, numbers, heading, prov}."""
     tf = tb.text_frame
@@ -471,58 +493,73 @@ def _bubble(ctx, sl, n, c, x, y, w, h):
 
 
 def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
-    """Annotated bubble chart drawn as native shapes with exact geometry: axes crossing at reference values,
-    tick labels, circles sized by area, and a collision-free label solver (labels never overlap each other, any
-    bubble or the axes). Identical in PowerPoint and LibreOffice; every element stays editable."""
+    """Native bubble chart (editable data, axes crossing at reference values) with think-cell style labels: a
+    collision-free solver picks each label's spot (never over another label, a bubble or the tick labels), and the
+    label is the chart's own data label moved there, so it stays attached to its point when the data is edited."""
     pts = c["points"]
     (x0, x1), (y0, y1) = c["x_range"], c["y_range"]
     tick = T["label"]
-    pl, pb = x + 0.55, y + h - 0.32                       # plot left (after y tick labels), plot bottom (above x ticks)
+    title_h = 0.3 if c.get("x_title") else 0.0
+    pl, pb = x + 0.55, y + h - 0.32 - title_h             # plot left (after y tick labels), plot bottom (above x ticks)
     pw, ph = x + w - pl - 0.05, pb - y - 0.05
     to = lambda xv, yv: (pl + (xv - x0) / (x1 - x0) * pw, pb - (yv - y0) / (y1 - y0) * ph)
     xc = c.get("x_cross", x0)
     yc = c.get("y_cross", y0)
     ax_x, _ = to(xc, y0)
     _, ax_y = to(x0, yc)
-    _rule(sl, pl, ax_y, pw, TC.TEXT_1, 0.75, "ov_AxisX")
-    v = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(ax_x), Inches(pb - ph), Inches(ax_x), Inches(pb))
-    v.name = "ov_AxisY"
-    _strip_style(v)
-    v.line.color.theme_color = TC.TEXT_1
-    v.line.width = Pt(0.75)
-    occupied = []
-    xm, ym = c.get("x_major", (x1 - x0) / 7), c.get("y_major", (y1 - y0) / 7)
-    k = 0
-    while x0 + k * xm <= x1 + 1e-9:
-        xv = round(x0 + k * xm, 6)
-        tx, _ = to(xv, y0)
-        lab = f"{xv:g}"
-        _write(_box(sl, tx - 0.3, pb + 0.04, 0.6, 0.24, f"ov_TickX{k}"),
-               [{"text": lab, "size": tick, "numbers": False, "align": PP_ALIGN.CENTER, "line_spacing": 1.1}])
-        k += 1
-    occupied.append((pl - 0.1, pb, pw + 0.2, 0.3))
-    k = 0
-    while y0 + k * ym <= y1 + 1e-9:
-        yv = round(y0 + k * ym, 6)
-        _, ty = to(x0, yv)
-        _write(_box(sl, x, ty - 0.11, 0.5, 0.22, f"ov_TickY{k}"),
-               [{"text": f"{yv:g}", "size": tick, "numbers": False, "align": PP_ALIGN.RIGHT, "line_spacing": 1.1}])
-        k += 1
-    occupied.insert(1, (x, y, 0.53, h))
-    leaders = []
+    # one native bubble chart; its plot area is pinned to the geometry the label solver works in
+    cd = BubbleChartData()
+    se_ = cd.add_series(c.get("series_name", "items"))
+    for p in pts:
+        se_.add_data_point(p["x"], p["y"], p.get("size", 1))
+    h_frame = h - title_h
+    gf = sl.shapes.add_chart(XL_CHART_TYPE.BUBBLE, Inches(x), Inches(y), Inches(w), Inches(h_frame), cd)
+    positive_axis_ids(gf.chart)
+    gf.name = "Chart"
+    ch = gf.chart
+    ch.has_legend = False
+    ch.has_title = False
+    ch.font.size = Pt(tick)
+    ch.font.color.theme_color = TC.TEXT_1
+    plot = ch.plots[0]
     smax = max(p.get("size", 1) for p in pts)
     dmax = c.get("max_diameter", 0.95)
+    plot.bubble_scale = int(max(10, min(300, round(dmax / (0.25 * min(pw, ph)) * 100))))
+    ser = plot.series[0]
+    for i, p in enumerate(pts):
+        pt = ser.points[i]
+        pt.format.fill.solid()
+        pt.format.fill.fore_color.theme_color = TC.ACCENT_3 if p.get("focus") else (TC.ACCENT_5 if p.get("muted") else TC.TEXT_2)
+        pt.format.line.color.theme_color = TC.BACKGROUND_1
+        pt.format.line.width = Pt(0.75)
+    xm, ym = c.get("x_major", (x1 - x0) / 7), c.get("y_major", (y1 - y0) / 7)
+    for ax, (lo, hi), major in ((ch.category_axis, (x0, x1), xm), (ch.value_axis, (y0, y1), ym)):
+        ax.has_major_gridlines = False
+        ax.tick_labels.font.size = Pt(tick)
+        ax.format.line.color.theme_color = TC.TEXT_1
+        ax.format.line.width = Pt(0.75)
+        ax.tick_label_position = XL_TICK_LABEL_POSITION.LOW
+        ax.minimum_scale, ax.maximum_scale, ax.major_unit = lo, hi, major
+    ch.category_axis.crosses_at = yc                         # the x axis crosses the y axis at y = y_cross
+    ch.value_axis.crosses_at = xc
+    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+    lay = pa.find(qn("c:layout"))
+    if lay is None:
+        lay = pa.makeelement(qn("c:layout"), {})
+        pa.insert(0, lay)
+    for k_ in list(lay):
+        lay.remove(k_)
+    ml = lay.makeelement(qn("c:manualLayout"), {})
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", (pl - x) / w),
+                     ("c:y", (pb - ph - y) / h_frame), ("c:w", pw / w), ("c:h", ph / h_frame)):
+        ml.append(ml.makeelement(qn(tag), {"val": f"{val:.5f}" if isinstance(val, float) else val}))
+    lay.append(ml)
+    occupied = [(pl - 0.1, pb, pw + 0.2, 0.3), (x, y, 0.53, h)]     # tick-label bands
+    leaders = []
     circles = []
     for i, p in enumerate(pts):
         cx, cy = to(p["x"], p["y"])
         d = max(0.07, dmax * (p.get("size", 1) / smax) ** 0.5)
-        o = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(cx - d / 2), Inches(cy - d / 2), Inches(d), Inches(d))
-        o.name = f"ov_Bubble{i + 1}"
-        _strip_style(o)
-        o.fill.solid()
-        o.fill.fore_color.theme_color = TC.ACCENT_3 if p.get("focus") else (TC.ACCENT_5 if p.get("muted") else TC.TEXT_2)
-        o.line.color.theme_color = TC.BACKGROUND_1
-        o.line.width = Pt(0.75)
         circles.append((cx, cy, d / 2))
     for a in c.get("annotations") or []:
         ax_, ay_ = to(a["x"], a["y"])
@@ -588,32 +625,46 @@ def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
         if __import__("os").environ.get("FORGE_LABEL_DEBUG"):
             print("LABEL", p["label"][:26], pos, size, round(bx, 2), round(by, 2), "score", round(best_score, 1))
         inside = pos == "c"
-        al = PP_ALIGN.LEFT if pos == "r" else PP_ALIGN.RIGHT if pos == "l" else PP_ALIGN.CENTER
         color = TC.ACCENT_3 if focus else (TC.BACKGROUND_1 if inside else TC.TEXT_1)
-        _write(_box(sl, bx, by, lw, lh, f"ov_Label{i + 1}", MSO_ANCHOR.MIDDLE if inside else MSO_ANCHOR.TOP),
-               [{"text": p["label"], "size": size - (2 if inside else 0), "bold": focus, "numbers": False,
-                 "color": color, "align": al, "line_spacing": 1.1}])
+        lsize = size - (2 if inside else 0)
+        words, lines_, cur = p["label"].split(), [], ""
+        for wd in words:                                   # the solver's line breaks, kept in the native label
+            trial = (cur + " " + wd).strip()
+            if cur and _need_w(trial, lsize, focus) > lw - 0.16 + 1e-6:
+                lines_.append(cur)
+                cur = wd
+            else:
+                cur = trial
+        lines_.append(cur)
+        dl = ser.points[i].data_label
+        dl.has_text_frame = True
+        tf_ = dl.text_frame
+        for li, line in enumerate(lines_):
+            para = tf_.paragraphs[0] if li == 0 else tf_.add_paragraph()
+            para.alignment = PP_ALIGN.CENTER
+            _rich(para, line, lsize, color, focus, numbers=False)
+        bp_ = tf_._txBody.find(qn("a:bodyPr"))
+        if bp_ is not None:
+            bp_.set("wrap", "none")                         # the solver's line breaks are final: no re-wrapping
+        dl.position = XL_LABEL_POSITION.CENTER
+        dLbl = dl._dLbl
+        lay_ = dLbl.find(qn("c:layout"))
+        if lay_ is None:
+            lay_ = dLbl.makeelement(qn("c:layout"), {})
+            dLbl.insert(1, lay_)
+        for k_ in list(lay_):
+            lay_.remove(k_)
+        mlx = lay_.makeelement(qn("c:manualLayout"), {})
+        mlx.append(mlx.makeelement(qn("c:x"), {"val": f"{(bx + lw / 2 - cx) / w:.5f}"}))
+        mlx.append(mlx.makeelement(qn("c:y"), {"val": f"{(by + lh / 2 - cy) / h_frame:.5f}"}))
+        lay_.append(mlx)
         occupied.append((bx, by, lw, lh))
-        nx_, ny_ = min(max(cx, bx), bx + lw), min(max(cy, by), by + lh)
-        far = max(0.0, ((nx_ - cx) ** 2 + (ny_ - cy) ** 2) ** 0.5 - r)
-        if far > 0.15 and not inside:                     # leader line from the bubble edge to the label
-            ex = bx if al == PP_ALIGN.LEFT else (bx + lw if al == PP_ALIGN.RIGHT else bx + lw / 2)
-            ey = by + lh / 2 if al != PP_ALIGN.CENTER else (by + lh if by < cy else by)
-            vx, vy = ex - cx, ey - cy
-            dist = (vx * vx + vy * vy) ** 0.5 or 1
-            sx, sy = cx + vx / dist * r, cy + vy / dist * r
-            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(sx), Inches(sy), Inches(ex), Inches(ey))
-            leaders.append((sx, sy, ex, ey))
-            ln.name = f"ov_Leader{i + 1}"
-            _strip_style(ln)
-            ln.line.color.theme_color = TC.TEXT_1
-            ln.line.width = Pt(0.5)
-    if c.get("x_title"):
-        _write(_box(sl, x + w - 3.2, pb + 0.3, 3.2, 0.26, "ov_XTitle"),
+    if c.get("x_title"):                                   # below the chart frame, not laid over it
+        _write(_box(sl, x + w - 3.2, y + h_frame + 0.02, 3.2, 0.26, "XTitle"),
                [{"text": c["x_title"], "size": tick, "numbers": False, "align": PP_ALIGN.RIGHT}])
     data = "; ".join(f"{p.get('label') or 'point'}: x={p['x']}, y={p['y']}, size={p.get('size', 1)}" for p in pts)
-    ctx.alt_note = f"Bubble chart. {data}"[:900]
-    return None
+    _alt(gf, f"Bubble chart. {data}"[:900])
+    return gf
 
 
 def _place(p, i, size, focus, cx, cy, r, circles, occupied, leaders, cost):
@@ -1211,8 +1262,8 @@ def a_argument_only(ctx, s, sl, n):
         cw = RIGHT - LEFT - 0.5
         ch = min(1.6, _need(cbl, cw) + 0.25)
         cy = BODY_B - ch
-        _fill(sl, LEFT, cy, RIGHT - LEFT, ch, TC.TEXT_2, "ov_SoWhat")
-        _write(_box(sl, LEFT + 0.25, cy + 0.06, cw, ch - 0.1, "ov_SoWhatText", MSO_ANCHOR.MIDDLE), cbl, ctx, n)
+        band = _fill(sl, LEFT, cy, RIGHT - LEFT, ch, TC.TEXT_2, "ov_SoWhat")
+        _shape_text(band, cbl, ctx, n, (LEFT + 0.25, cy + 0.06, cw, ch - 0.1), MSO_ANCHOR.MIDDLE)
         top_h = cy - 0.2 - BODY_Y
     blocks, _ = _fit(_grow(blocks, w, top_h), w, top_h, 11)
     _write(_box(sl, x, BODY_Y, w, top_h, "Argument"), blocks, ctx, n)
@@ -1413,7 +1464,7 @@ def a_exhibit_argument(ctx, s, sl, n):
     """Exhibit on white (left); the argument on a grey half-panel (right) ending in a navy 'so what' with an arrow."""
     lxx, lw = span24(0, 12)
     split = colx24(13) + 0.05
-    _fill(sl, split, 0, 13.333 - split, 7.5, TC.BACKGROUND_2, "ov_ArgumentPanel")
+    panel = _fill(sl, split, 0, 13.333 - split, 7.5, TC.BACKGROUND_2, "ov_ArgumentPanel")
     _header(ctx, s, sl, n, title_w=lw)
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
@@ -1431,7 +1482,7 @@ def a_exhibit_argument(ctx, s, sl, n):
         _write(_box(sl, LEFT, y, lw, 0.26, "role_subtitle_ExhibitUnit"), [{"text": ex["unit"], "size": ARGUMENT["unit"], "numbers": False}])
         y += 0.28
     foot = 0.35 if s.get("footnotes") else 0
-    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot - (0.3 if s["chart"].get("x_title") else 0))
+    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
     blocks = []
     for blk in s.get("blocks") or []:
         blocks.append({"text": blk["text"], "size": ARGUMENT["intro"], "numbers": False, "space_before": 8, "prov": blk.get("prov")})
@@ -1459,12 +1510,12 @@ def a_exhibit_argument(ctx, s, sl, n):
         cy = BODY_B - foot - ch
     if not ok:
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
-    _write(_box(sl, rx, BODY_Y - 0.05, rw, space, "Argument"), blocks, ctx, n)
+    _shape_text(panel, blocks, ctx, n, (rx, BODY_Y - 0.05, rw, space))       # the argument lives in the panel
     if cb:
-        _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
         arr = _fill(sl, rx - 0.95, cy + ch / 2 - 0.3, 0.98, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
         arr.rotation = 180
-        _write(_box(sl, rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1, "ov_SoWhatText", MSO_ANCHOR.MIDDLE), cb, ctx, n)
+        box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
+        _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
 
 
 _NUMCELL = re.compile(r"^\s*([+\-−]?)\s*([$€£]?)\s*(\d[\d,]*(?:\.\d+)?)\s*(%|pp|x|[KMBT]|bn|m)?\s*$", re.I)
@@ -1637,9 +1688,12 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
-def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True) -> dict:
-    """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide."""
-    res = _render(slides, out_path, template)
+def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
+           carry: bool = True) -> dict:
+    """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
+    carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
+    does not fit goes to the speaker notes and is reported, so the content model can cut or merge it."""
+    res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
     try:
@@ -1647,7 +1701,7 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
             moved = _relabel(slides, out_path)
             if not moved:
                 break
-            res = _render(slides, out_path, template)
+            res = _render(slides, out_path, template, carry)
     except Exception as e:                                   # QA aid only: never fail the build on it
         res["errors"].append(f"label check skipped: {type(e).__name__}")
     return res
@@ -1694,7 +1748,7 @@ def _relabel(slides, out_path) -> int:
     return moved
 
 
-def _render(slides: list[dict], out_path: str, template: str | None = None) -> dict:
+def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
     prs = Presentation(template or default_template())
     for sid in list(prs.slides._sldIdLst):
         prs.part.drop_rel(sid.rId)
@@ -1725,9 +1779,16 @@ def _render(slides: list[dict], out_path: str, template: str | None = None) -> d
             errors.append(f"slide {n} ({arch}): missing or malformed field: {type(e).__name__}: {e}")
         if s.get("notes"):
             sl.notes_slide.notes_text_frame.text = s["notes"]
-        if ctx.carry:
+        if ctx.carry and carry:
             queue.insert(0, ctx.carry)
             errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide)")
+        elif ctx.carry:                                     # fixed slide count: never an extra slide
+            left = ctx.carry.get("rows") or (ctx.carry.get("table") or {}).get("rows") or []
+            txt = "; ".join(_txt(r.get("label")) if isinstance(r, dict) else " | ".join(map(str, r)) for r in left)
+            prev = sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""
+            sl.notes_slide.notes_text_frame.text = (prev + f"\n[QA] Did not fit on the slide and left out: {txt}").strip()
+            errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide); "
+                          f"{len(left)} rows left out because the slide count is fixed")
     errors += ctx.overflow
     prs.save(out_path)
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
