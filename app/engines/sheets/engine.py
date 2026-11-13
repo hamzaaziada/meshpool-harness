@@ -63,6 +63,13 @@ def finish_check(answer, artifacts, ws):
                 r["issues"].append({"check": "checks_tab", "cell": "Checks!F3", "detail": f"shows {status}"})
         if "Cover" not in r["stats"]["sheets"]:
             r["issues"].append({"check": "structure", "cell": "", "detail": "no Cover tab; use B.banker_workbook"})
+        try:                                   # the forge workbook rules: logic errors QA cannot see (signs, plugs,
+            from engines.forge.validate_xlsx import validate as forge_validate     # literals, tie-outs, master check)
+            fr = forge_validate(p)
+            r["issues"] += [{"check": f["rule"], "cell": f.get("cell") or f.get("sheet") or "", "detail": f["message"]}
+                            for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"][:10]
+        except Exception:
+            pass
         if r["issues"]:
             return "ENGINE CHECK: workbook QA failed:\n" + "\n".join(
                 f"- {i['check']} {i['cell']}: {i['detail']}" for i in r["issues"][:15])
