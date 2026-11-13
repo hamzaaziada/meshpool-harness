@@ -154,7 +154,7 @@ def _bullet(p, level=0, color="accent1"):
     clr.append(clr.makeelement(qn("a:schemeClr"), {"val": color}))
     pPr.append(clr)
     pPr.append(pPr.makeelement(qn("a:buSzPct"), {"val": "70000"}))
-    pPr.append(pPr.makeelement(qn("a:buFont"), {"typeface": "Arial"}))
+    pPr.append(pPr.makeelement(qn("a:buFont"), {"typeface": FACE["body"]}))
     pPr.append(pPr.makeelement(qn("a:buChar"), {"char": "▪"}))
 
 
@@ -291,11 +291,20 @@ def _icon(sl, name, x, y, d, meaning=""):
         _alt(pic, f"icon:lucide:{name}:{meaning or name}")
 
 
+FACE = {"head": "Georgia", "body": "Arial"}
+METRIC = (("Georgia", "Gelasio"), ("Arial", "Liberation Sans"), ("Calibri", "Carlito"), ("Cambria", "Caladea"),
+          ("Times New Roman", "Liberation Serif"), ("Helvetica", "Liberation Sans"))
+
+
+def _font(role: str, bold: bool = False):
+    from .common import font_file
+    return font_file(FACE[role], bold, False, METRIC)[0]
+
+
 def _need(blocks, w) -> float:
     """Height the blocks need at their set sizes (Arial metrics via Liberation Sans)."""
     from .common import font_file, wrap_lines
-    reg, _ = font_file("Arial", False, False, (("Arial", "Liberation Sans"),))
-    bold, _ = font_file("Arial", True, False, (("Arial", "Liberation Sans"),))
+    reg, bold = _font("body"), _font("body", True)
     h = 0.05
     for b in blocks:
         size = b.get("size", T["body"])
@@ -314,7 +323,7 @@ def _cont_title(t: str) -> str:
 def _title_size(text: str, width: float, lines_max: int = 2):
     """25 pt, then 22, then 20: the largest size at which the title fits in two lines (Georgia Bold metrics)."""
     from .common import font_file, wrap_lines
-    f, _ = font_file("Georgia", True, False, (("Georgia", "Gelasio"),))
+    f = _font("head", True)
     for size in (T["title"], 22, 20):
         if wrap_lines(text, width - 0.2, size, f, 0.97) <= lines_max:
             return size
@@ -740,7 +749,7 @@ def _place(p, i, size, focus, cx, cy, r, circles, occupied, leaders, cost):
 
 def _need_w(text, size, bold=False) -> float:
     from .common import font_file, text_width_in
-    f, _ = font_file("Arial", bold, False, (("Arial", "Liberation Sans"),))
+    f = _font("body", bold)
     return text_width_in(re.sub(r"\*\*|\^\w+", "", text), size, f)
 
 
@@ -909,8 +918,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     nrows = hdr + len(rows)
     size_ = t.get("size", 12)
     from .common import font_file, wrap_lines
-    f_reg, _ = font_file("Arial", False, False, (("Arial", "Liberation Sans"),))
-    f_bold, _ = font_file("Arial", True, False, (("Arial", "Liberation Sans"),))
+    f_reg, f_bold = _font("body"), _font("body", True)
     row_min = lambda sz: sz * 1.15 / 72 + 0.045                   # LibreOffice/PowerPoint minimum, measured
     widths = t.get("col_widths")
     colw = ([w * cw / sum(widths) for cw in widths] if widths else
@@ -1338,7 +1346,7 @@ def a_cover(ctx, s, sl, n):
     clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
     x, w = LEFT, colx24(17) - LEFT
     from .common import font_file, wrap_lines
-    f, _ = font_file("Georgia", True, False, (("Georgia", "Gelasio"),))
+    f = _font("head", True)
     size = next((z for z in (36, 32, 28) if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
     lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
     th = lines * _pitch(size, 1.05) / 72 + 0.3
@@ -1780,10 +1788,17 @@ DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
-           carry: bool = True) -> dict:
+           carry: bool = True, theme=None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
-    does not fit goes to the speaker notes and is reported, so the content model can cut or merge it."""
+    does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
+    theme: a palette name ("navy", "ocean", "forest", "burgundy", "graphite", "mono") or a dict with "palette",
+    "fonts" ("serif", "sans", "calibri", "cambria") and slot -> hex overrides; colours stay theme slots, so the deck
+    recolours in PowerPoint (Design > Variants) too."""
+    from .template import theme_spec
+    spec = theme_spec(theme)
+    FACE["head"], FACE["body"] = spec["fonts"]["major"], spec["fonts"]["minor"]
+    template = template or default_template(theme)
     res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
