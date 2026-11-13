@@ -579,7 +579,7 @@ class Agent:
             raise Interrupted()
 
     def _maybe_compact(self):
-        limit = int(os.environ.get("MH_COMPACT_CHARS", "400000"))
+        limit = int(os.environ.get("MH_COMPACT_CHARS", "280000"))   # well under a 128K-token window
         size = sum(len(m.get("content") or "") if isinstance(m.get("content"), str) else 0 for m in self.messages)
         if size > limit:
             _compact(self.messages, keep_recent=12)
@@ -664,6 +664,13 @@ class Agent:
                         continue
                 if attempt >= 5:
                     raise
+                if re.search(r"HTTP 5\d\d", msg) and attempt >= 1:   # a big request that keeps failing upstream:
+                    size = sum(len(m.get("content") or "") for m in self.messages if isinstance(m.get("content"), str))
+                    if size > 150000:                      # shrink it instead of resending the same thing
+                        _compact(self.messages, keep_recent=8)
+                        body = self._body()
+                        self.emit({"type": "status", "text": "The request was very large; older tool outputs were "
+                                                             "shortened before trying again."})
                 self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
