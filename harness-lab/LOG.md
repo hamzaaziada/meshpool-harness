@@ -148,3 +148,20 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Ruff and Jedi are MIT. They are used as tools, not copied, and listed as the optional extra `code-intel`.
 - Tests: `test_diagnose.py` (new error reported, old ones not repeated, fallback, definition and uses). 137 pass.
 - The queued A/B now has five arms: v5, v5 + observe, v5 + all three tools, app, app + all three.
+
+## 2026-11-13: key budget reached; Verified test set stopped at 8 valid tasks
+
+- The Meshpool key hit its budget cap ($66.41) during the 9th test task. From then on every call failed with HTTP 429
+  budget_exceeded. Those 4 tasks (16 rows) moved to results/discarded_infra_rows.jsonl. All benchmark runs stopped,
+  under the owner's rule to stop at the first budget refusal. Spend in this session: $63.35 to $66.42.
+- Valid comparison, 8 frozen Verified test tasks, all agents at the same time on deepseek-v4.1-flash:
+
+  | Agent | Solved | $/solved | s/solved | calls/task |
+  |---|---|---|---|---|
+  | Pi | 7/8 | 0.0081 | 122 | 25.0 |
+  | Meshpool Code (app agent) | 6/8 | 0.0088 | 181 | 26.2 |
+  | Codex | 5/8 | 0.0098 | 109 | 22.6 |
+  | Meshpool v5 (engine loop) | 6/8 | 0.0107 | 243 | 28.8 |
+
+- Not run, for lack of budget: the remaining 8 test tasks, the observability A/B (probe, trace, symbol, edit check)
+  and Terminal-Bench beyond 4 dev tasks.
