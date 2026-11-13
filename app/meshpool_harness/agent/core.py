@@ -164,7 +164,9 @@ office_task: it returns a finished, checked file. For memos, reports, letters an
 (.docx) with the make_document tool (or python-docx through bash for edits to an existing .docx); write Markdown only \
 when the user asks for it. Use Python through bash for quick calculations.
 5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish. \
-Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
+Research budget: when the request or its files already hold sourced research, use it and only look up what they \
+mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
+stop researching once each number you need has a source. Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. If an engine call returns a job id, \
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \

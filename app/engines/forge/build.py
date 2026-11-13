@@ -428,27 +428,30 @@ design. {WRITE[density]}
         if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
             break                                            # two rounds without progress: stop paying for repairs
         repaired = set()
-        for n, msgs in sorted(fails.items()):
-            if n - 1 >= len(slides):
-                continue
+
+        def fix_one(item):                                     # one call per failing slide, all in parallel
+            n, msgs = item
             s = slides[n - 1]
             ev = set(next((x.get("evidence", []) for x in story.get("slides", []) if x.get("node") == s.get("node")), []))
             rel = [f for f in facts if f["id"] in ev] or facts
             if any(m.startswith(("[P20]", "[fill]", "[schema]")) for m in msgs):
                 rel = facts                                  # a thin slide needs the whole evidence base to fill
             try:
-                fixed = _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
+                return n, _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
 {WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
                     "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 6000)
+            except Exception:
+                return n, None
+        todo = [(n, m) for n, m in sorted(fails.items()) if n - 1 < len(slides)]
+        with ThreadPoolExecutor(min(8, max(1, len(todo)))) as ex:
+            for n, fixed in ex.map(fix_one, todo):
                 calls += 1
-                if fixed.get("archetype") in ARCHETYPES:
+                if isinstance(fixed, dict) and fixed.get("archetype") in ARCHETYPES:
                     slides[n - 1] = fixed
                     repaired.add(n - 1)
-            except Exception:
-                pass
         if repaired:                                            # repaired slides get the same clarity read
             clear.append(clarity.review(slides, client, only=repaired, main_model=MODEL,
                                         task_id=f"{task_id}-clarity-r{rnd}"))
