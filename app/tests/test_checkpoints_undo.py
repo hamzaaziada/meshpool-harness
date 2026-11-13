@@ -56,3 +56,18 @@ def test_undo_over_several_turns(tmp_path):
     r = cp.revert_to_before(1)
     assert not (root / "a.py").exists() and (root / "calc.py").read_text() == "v1\n"
     assert sorted(r["restored"]) == ["calc.py"] and r["deleted"] == ["a.py"]
+
+
+def test_thread_diff_lists_only_this_threads_changes(tmp_path):
+    root, cp = _cp(tmp_path)
+    cp.begin_turn("agent edits")
+    (root / "calc.py").write_text("v2\n")
+    cp.end_turn()
+    (root / "other.docx").write_bytes(b"made by another thread")   # someone else, later, same folder
+    (root / "keep.md").write_text("user edit\n")
+    d = cp.diff(None)
+    assert [f["path"] for f in d["files"]] == ["calc.py"], d["files"]
+    cp.begin_turn("second reply")
+    (root / "new.py").write_text("x\n")
+    cp.end_turn()
+    assert sorted(f["path"] for f in cp.diff(None)["files"]) == ["calc.py", "new.py"]
