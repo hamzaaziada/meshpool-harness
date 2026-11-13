@@ -307,7 +307,7 @@ design. Fill the archetype's fields completely and densely, the way a top strate
     rounds = []
     pptx = out / "deck.pptx"
     for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r = render(slides, str(pptx))
+        r = render(slides, str(pptx), carry=False)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True)
@@ -358,7 +358,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         for n, msgs in left.items():
             if n - 1 < len(slides):
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        r = render(slides, str(pptx))
+        r = render(slides, str(pptx), carry=False)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True)

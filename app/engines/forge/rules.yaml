@@ -131,6 +131,7 @@ pptx:
   slide_count:                  # P16
     appendix_section_regex: "(?i)appendix|backup|annex"
   editability:                  # P17
+    text_in_shape_overlap: 0.8   # a text box this much inside a filled, empty shape belongs in that shape
     max_group_depth: 1
     forbidden_locks: [noSelect, noMove, noResize, noTextEdit, noRot, noUngrp, noCrop]
   accessibility:                # P18

@@ -674,6 +674,23 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 failures.append(F("P17", "locked", f"Slide {n}, {lk['shape']}: locked ({', '.join(bad_l)}).", slide=n,
                                   shape=lk["shape"], fix_scope="renderer"))
 
+        boxes = [sh for sh in s["shapes"] if sh["depth"] == 0 and sh["x"] is not None]
+        for tb in boxes:                                 # text laid over a box instead of written into it
+            if not tb["text"].strip() or tb["filled"] or tb["role"] in ("title", "footer", "footnote", "table", "chart"):
+                continue
+            for bx in boxes:
+                if bx is tb or not bx["filled"] or bx["text"].strip() or bx["role"] in ("picture", "icon", "chart"):
+                    continue
+                if bx["w"] * bx["h"] > 0.6 * W * H:          # a full-slide background is not a text container
+                    continue
+                ix = min(tb["x"] + tb["w"], bx["x"] + bx["w"]) - max(tb["x"], bx["x"])
+                iy = min(tb["y"] + tb["h"], bx["y"] + bx["h"]) - max(tb["y"], bx["y"])
+                if ix > 0 and iy > 0 and ix * iy >= R["editability"]["text_in_shape_overlap"] * tb["w"] * tb["h"]:
+                    failures.append(F("P17", "text_over_shape", f"Slide {n}: '{tb['name']}' is a text box laid over "
+                                      f"'{bx['name']}'. Write the text into the shape itself so it moves and edits "
+                                      "with it.", slide=n, shape=tb["name"], fix_scope="renderer"))
+                    break
+
         # ---------------- P18 accessibility
         for sh in s["shapes"]:
             if sh["role"] in ("picture", "icon", "chart") and (not sh["descr"].strip() or re.search(

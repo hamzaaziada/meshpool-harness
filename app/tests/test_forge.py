@@ -443,3 +443,33 @@ def test_x14_catches_a_positive_loss_added_to_income(tmp_path):
         wb.save(p)
         r = VX.validate(str(p))
         assert r["rules"]["X14"] == expect, [f["message"] for f in r["failures"] if f["rule"] == "X14"]
+
+
+def test_p17_text_belongs_in_its_shape(tmp_path):
+    from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+    from engines.forge.render import render
+    for mode, expect in (("overlay", "fail"), ("inside", "pass")):
+        prs = Presentation()
+        s = prs.slides.add_slide(prs.slide_layouts[5])
+        s.shapes.title.text = "Costs fell 4% after the plant closed"
+        box = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(2), Inches(4), Inches(1.5))
+        box.fill.solid()
+        if mode == "overlay":
+            s.shapes.add_textbox(Inches(1.1), Inches(2.1), Inches(3.8), Inches(1.2)).text_frame.text = "Plant closed"
+        else:
+            box.text_frame.text = "Plant closed"
+        p = tmp_path / f"{mode}.pptx"
+        prs.save(p)
+        assert VP.validate(str(p), render=False)["rules"]["P17"] == expect
+    out = tmp_path / "forge.pptx"                         # forge's own so-what box and argument panel hold their text
+    render([{"archetype": "exhibit_argument", "title": "Revenue grew 20%", "title_right": "…as pricing held",
+             "chart": _SHORT_CHART["chart"], "blocks": [{"text": "Price rose", "bullets": ["North up 9%"]}],
+             "callout": {"bullets": ["Pricing carried growth"]}, "source": "Company accounts"}], str(out))
+    r = VP.validate(str(out), render=False)
+    assert r["rules"]["P17"] == "pass", [f["message"] for f in r["failures"] if f["rule"] == "P17"]
+    from pptx import Presentation as P2
+    names = {sh.name: sh for sh in P2(str(out)).slides[0].shapes}
+    assert names["ov_SoWhat"].text_frame.text.strip() and names["ov_ArgumentPanel"].text_frame.text.strip()
+    assert "ov_SoWhatText" not in names and "Argument" not in names
