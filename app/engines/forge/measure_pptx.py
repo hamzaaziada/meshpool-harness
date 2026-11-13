@@ -427,6 +427,8 @@ def measure(path: str, rules: dict | None = None) -> dict:
                     elif src_re.match(srec["text"]) or (y is not None and y >= H * R["provenance"]["source_band_top_frac"]
                                                          and max(p["size"] for p in paras) <= 11):
                         srec["role"] = "footnote"
+                    elif y is not None and y < H * 0.1 and max(p["size"] for p in paras) <= 11:
+                        srec["role"] = "footnote"          # section tracker / breadcrumb above the title
                     elif ptype == "subTitle":
                         srec["role"] = "subtitle"
                     else:

@@ -42,7 +42,11 @@ offer offset open outpace outperform overtake own pay peak plan position present
 reach realise realize reduce reflect remain represent require reshape restore return rise run save scale secure see
 sell shift should show shrink slow spend split stabilise stabilize stall start stay support sustain take target tie
 trail transform trigger triple turn underperform unlock outgrow use vary widen win work yield lift narrow command
-""".split())
+act adopt align allocate apply automate benchmark build cap centralise centralize consolidate cut defer deploy
+digitise digitize divest double-down eliminate establish exit fund hire integrate launch merge modernise modernize
+negotiate outsource partner pilot price prioritise prioritize prune redesign refocus reinvest renegotiate replace
+reprice restructure rethink shut simplify standardise standardize stop streamline test upgrade
+face shape matter drive lack outweigh hinge rest lie set keep put let""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 
@@ -160,12 +164,27 @@ def _template_geometry(path: str, m: dict):
         m["_template_body"] = body
 
 
+def _pdf_spans(pdf: str) -> list[tuple[float, list[tuple[str, tuple]]]]:
+    """(page width pt, [(text, (x0, top, x1, bottom))]) per page, via pypdfium2 (BSD/Apache; already bundled)."""
+    import pypdfium2 as pdfium
+    out = []
+    doc = pdfium.PdfDocument(pdf)
+    for page in doc:
+        w, h = page.get_size()
+        tp = page.get_textpage()
+        spans = []
+        for i in range(tp.count_rects()):
+            l, b, r, t = tp.get_rect(i)
+            txt = tp.get_text_bounded(l, b, r, t).strip()
+            if txt:
+                spans.append((txt, (l, h - t, r, h - b)))
+        out.append((w, spans))
+    doc.close()
+    return out
+
+
 def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
     """P1: render with LibreOffice; every rendered text span must sit inside some text box on its slide."""
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        fitz = None
     with tempfile.TemporaryDirectory() as td:
         try:
             pdf = soffice_convert(path, "pdf", td, R["render"]["timeout_s"])
@@ -173,32 +192,26 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
             failures.append(F("P1", "render", f"The deck could not be rendered by LibreOffice: {e}",
                               fix_scope="renderer", status="not_run" if "not installed" in str(e) else "fail"))
             return
-        if fitz is None:
-            failures.append(F("P1", "render_geometry", "PyMuPDF is not installed; rendered geometry was not checked.",
+        try:
+            pages = _pdf_spans(str(pdf))
+        except ImportError:
+            failures.append(F("P1", "render_geometry", "pypdfium2 is not installed; rendered geometry was not checked.",
                               fix_scope="renderer", status="not_run"))
             return
-        doc = fitz.open(pdf)
-        stats["rendered_pages"] = doc.page_count
-        if doc.page_count != len(m["slides"]):
-            failures.append(F("P1", "render_pages", f"LibreOffice rendered {doc.page_count} pages for "
+        stats["rendered_pages"] = len(pages)
+        if len(pages) != len(m["slides"]):
+            failures.append(F("P1", "render_pages", f"LibreOffice rendered {len(pages)} pages for "
                               f"{len(m['slides'])} slides.", fix_scope="renderer"))
         tol = R["render"]["box_tolerance_in"]
-        for page, s in zip(doc, m["slides"]):
-            sx = m["slide_size_in"][0] / page.rect.width
+        for (pw, spans), s in zip(pages, m["slides"]):
+            sx = m["slide_size_in"][0] / pw
             boxes = [(sh["x"], sh["y"], sh["w"], sh["h"]) for sh in s["shapes"]
                      if sh["x"] is not None and (sh["text"] or sh["role"] in ("chart", "table"))]
             stray = []
-            for b in page.get_text("dict")["blocks"]:
-                for line in b.get("lines", []):
-                    for span in line.get("spans", []):
-                        if not span["text"].strip():
-                            continue
-                        x0, y0, x1, y1 = (v * sx for v in span["bbox"])
-                        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-                        inside = any(bx - tol <= cx <= bx + bw + tol and by - tol <= cy <= by + bh + tol
-                                     for bx, by, bw, bh in boxes)
-                        if not inside:
-                            stray.append(span["text"].strip()[:40])
+            for text, (x0, y0, x1, y1) in spans:
+                cx, cy = (x0 + x1) / 2 * sx, (y0 + y1) / 2 * sx
+                if not any(bx - tol <= cx <= bx + bw + tol and by - tol <= cy <= by + bh + tol for bx, by, bw, bh in boxes):
+                    stray.append(text[:40])
             if stray:
                 failures.append(F("P1", "render_outside_box",
                                   f"Slide {s['n']}: after rendering, text sits outside its box ({'; '.join(stray[:3])}). "
@@ -374,13 +387,15 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
 
         # ---------------- P10 density
         D = R["density"]
-        if s["body_words"] > D["max_body_words"]:
+        cap = (D.get("by_archetype") or {}).get(s["archetype"], D["max_body_words"])
+        if s["body_words"] > cap:
             failures.append(F("P10", "body_words", f"Slide {n}: {s['body_words']} words of body text; cut to "
-                              f"{D['max_body_words']} and move detail to the notes or appendix.", slide=n,
-                              measured=s["body_words"], limit=D["max_body_words"]))
-        if s["bullets"] > D["max_bullets"]:
-            failures.append(F("P10", "bullets", f"Slide {n}: {s['bullets']} bullets; keep {D['max_bullets']} or fewer.",
-                              slide=n, measured=s["bullets"], limit=D["max_bullets"]))
+                              f"{cap} and move detail to the notes or appendix.", slide=n,
+                              measured=s["body_words"], limit=cap))
+        bcap = (D.get("bullets_by_archetype") or {}).get(s["archetype"], D["max_bullets"])
+        if s["bullets"] > bcap:
+            failures.append(F("P10", "bullets", f"Slide {n}: {s['bullets']} bullets; keep {bcap} or fewer.",
+                              slide=n, measured=s["bullets"], limit=bcap))
         if s["bullet_levels"] > D["max_bullet_levels"]:
             failures.append(F("P10", "bullet_levels", f"Slide {n}: {s['bullet_levels']} bullet levels; flatten to "
                               f"{D['max_bullet_levels']}.", slide=n, measured=s["bullet_levels"],

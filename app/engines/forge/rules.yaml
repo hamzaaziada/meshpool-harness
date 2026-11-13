@@ -64,9 +64,25 @@ pptx:
     forbid_decorative_lines: true
     forbid_emoji: true
   density:                      # P10
-    max_body_words: 80
+    max_body_words: 80          # default for narrative archetypes
     max_bullets: 5
     max_bullet_levels: 2
+    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words)
+      executive_summary: 120
+      text_matrix: 160
+      case_example: 110
+      options_evaluation: 120
+      recommendations_now_next_later: 110
+      timeline_roadmap: 100
+      kpi_tiles: 50
+      table_highlight: 40       # words outside the table; table cells are counted separately
+      quote_voice: 60
+    bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
+      recommendations_now_next_later: 12
+      timeline_roadmap: 12
+      options_evaluation: 12
+      case_example: 9
+      two_exhibits: 6
   titles:                       # P11
     max_words: 15
     max_lines: 2
