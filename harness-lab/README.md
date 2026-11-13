@@ -1,3 +1,5 @@
+> **Office and Meshpool Work: another agent is continuing this. Start at [OFFICE_HANDOFF.md](OFFICE_HANDOFF.md).**
+
 # Harness lab
 
 Work area for improving the harness in `app/meshpool_harness` (the same package the app imports). Nothing here is
