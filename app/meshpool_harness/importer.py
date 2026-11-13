@@ -174,7 +174,7 @@ def find_mcp() -> list[dict]:
                 continue
             seen.add(sig)
             what = ("Connects to " + urllib.parse.urlparse(spec["url"]).netloc) if spec.get("url") else \
-                f"Runs on this computer ({Path(str(spec['command'])).name})"
+                "Runs on this computer"
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
                         "has_secrets": bool(spec.get("env") or spec.get("headers"))})

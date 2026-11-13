@@ -98,7 +98,7 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
   await step("switch to Work mode", () => p.click('.modesw [data-mode="cowork"]'));
   await step("switch to Code mode", () => p.click('.modesw [data-mode="code"]'));
   await step("new thread", () => p.evaluate(() => newThread()));
-  await step("toggle Steps", () => p.click("#stepsBtn"));
+  await step("toggle Steps", () => p.keyboard.press("Control+e"));
   check("no page errors", !errs.length, errs.join(" | "));
   const passed = results.filter(r => r[1]).length;
   console.log(`\n${passed}/${results.length} passed`);

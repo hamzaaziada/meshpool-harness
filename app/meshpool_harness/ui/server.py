@@ -678,6 +678,16 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
                     return self._send(200, {"projects": W.projects(), "picked": str(Path(path).resolve())})
+                if act == "dirs":                     # the in-app folder browser: the folders inside one folder
+                    here = Path(b.get("path") or Path.home()).expanduser()
+                    try:
+                        here = here.resolve()
+                        dirs = sorted((d.name for d in here.iterdir() if d.is_dir() and not d.name.startswith(".")),
+                                      key=str.lower)
+                    except OSError as e:
+                        raise ValueError(f"Can't open that folder ({e.strerror or e}).")
+                    return self._send(200, {"path": str(here), "parent": str(here.parent) if here.parent != here else "",
+                                            "dirs": dirs[:500], "home": str(Path.home())})
                 if act == "home":                     # the whole home folder ("the whole computer" for one user)
                     home = str(Path.home().resolve())
                     W.add_project(home, "Home")

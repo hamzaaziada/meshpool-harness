@@ -232,3 +232,8 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   tables drawn as charts, takeaway column width from its text, so-what band on text slides), P20 also catches
   stretched rows and slab bars, and thin slides go back to the content model before and after rendering with the
   whole fact base. Repair stops after two rounds without progress. Unit tests 160 passed, 8 skipped.
+
+## 2026-11-13: merged as 0.1.0 beta
+
+- Independent UX audits: 6.3, 6.6, 7.2, 7.2. All findings of the first three fixed. Audit 4 findings are open in
+  harness-lab/notes/UX_OPEN_ISSUES.md (3 history/data issues first). Merged at the owner's request.

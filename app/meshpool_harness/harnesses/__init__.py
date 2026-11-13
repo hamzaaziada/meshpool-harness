@@ -13,15 +13,15 @@ from meshpool_harness import config as C
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
      "models": "meshpool",
-     "description": ("Best for coding in your project: edits code, runs commands and tests, uses your connected "
-                    "apps, skills and a browser. Solved 18 of 20 tasks on Meshpool's coding test.")},
+     "description": ("Best for coding in your project: edits code, runs commands and tests, and uses your "
+                    "connected apps, skills and a browser.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
      "description": ("Best for documents, spreadsheets, decks, data and research. Makes real Word, Excel and "
                     "PowerPoint files and checks each one before it reaches you.")},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
-      "description": ("Best for fast, low-cost coding. A small open-source coding agent; it solved the most on "
-                      "Meshpool's coding test (19 of 20).")}
+      "description": ("Best for quick, low-cost coding. A small open-source coding agent, fast on everyday "
+                      "fixes.")}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
         "description": ("Best when you are not sure: picks a good agent for each task and tells you which one and "
                         "why.")}

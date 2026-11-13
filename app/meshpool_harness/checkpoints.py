@@ -187,9 +187,25 @@ class Checkpoints:
         if not turns:
             return {"files": [], "patch": "", "note": self.disabled or "No changes recorded yet."}
         if turn is None:
-            a = self._load_manifest(turns[0]["before"])
-            mid = self.snapshot()
-            b = self._load_manifest(mid) if mid else {}
+            # Only the files this thread's own replies changed: each from before its first change to after its
+            # last. Changes made by other threads or by the user in the same folder are not this thread's.
+            a, b, seen = {}, {}, set()
+            for t in sorted(turns, key=lambda x: x["n"]):
+                before = self._load_manifest(t["before"])
+                if t.get("after"):
+                    after, changed = self._load_manifest(t["after"]), [c["path"] for c in t.get("changed") or []]
+                else:                                   # a reply still running: what it has changed so far
+                    mid = self.snapshot()
+                    after = self._load_manifest(mid) if mid else before
+                    changed = [c["path"] for c in self._changes(before, after)]
+                for path in changed:
+                    if path not in seen:
+                        seen.add(path)
+                        if before.get(path) is not None:
+                            a[path] = before[path]
+                    b.pop(path, None)
+                    if after.get(path) is not None:
+                        b[path] = after[path]
         else:
             t = next((x for x in turns if x["n"] == turn), None)
             if not t:
