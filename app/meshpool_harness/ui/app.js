@@ -262,7 +262,19 @@ function renderSide() {
   }
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it.
   if (el.dataset.mode === "list" && el._html === html) return;
-  el._html = html; el.dataset.mode = "list";
+  const shape = html.replace(/<span class="tm">[^<]*<\/span>/g, "").replace(/class="dot[^"]*"/g, "").replace(/class="th[^"]*"/g, "");
+  if (el.dataset.mode === "list" && el._shape === shape) {
+    el._html = html;
+    for (const li of $$(".th", el)) {
+      const t = S.threads.find(x => x.id === li.dataset.id); if (!t) continue;
+      const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : "";
+      li.classList.toggle("on", S.cur?.id === t.id);
+      const d = $(".dot", li); if (d) d.className = "dot " + st;
+      const tm = $(".tm", li); if (tm && tm.textContent !== ago(t.updated)) tm.textContent = ago(t.updated);
+    }
+    return;
+  }
+  el._html = html; el._shape = shape; el.dataset.mode = "list";
   el.innerHTML = html;
   $("#addProj")?.addEventListener("click", pickProject);
   $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
@@ -365,7 +377,7 @@ function renderTop() {
     ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
     <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New thread") : "New thread")}</span>
     ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}${esc(projName(root))}</button>` : ""}
-    <span id="branchChip"></span>
+    <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
     <span class="sp"></span>
     ${usage ? `<span class="chip use" title="Tokens in this thread">${esc(usage)}</span>` : ""}
     <button class="tbtn" id="stepsBtn" aria-pressed="${!!S.steps}" title="Show every step: what the model is thinking and each tool it uses (${MOD}E)">${ICON.eye}<span>Steps</span></button>
@@ -391,7 +403,9 @@ async function renderBranch() {
   try {
     const g = await api("/api/git?root=" + encodeURIComponent(root));
     S.git = g;
-    if (g.repo && curRoot() === root) el.innerHTML = `<button class="chip" id="brChip" title="Branch">${ICON.branch}${esc(g.branch)}${g.dirty ? ` · ${g.dirty} changed` : ""}</button>`;
+    const html = g.repo ? `<button class="chip" id="brChip" title="Branch">${ICON.branch}${esc(g.branch)}${g.dirty ? ` · ${g.dirty} changed` : ""}</button>` : "";
+    S.branchHTML = {...(S.branchHTML || {}), [root]: html};
+    if (curRoot() === root && el.innerHTML !== html) el.innerHTML = html;
     $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
     if (g.repo && g.github) ciChip(root);
   } catch (e) { el.innerHTML = ""; }
@@ -709,9 +723,11 @@ function renderHero() {
 function openThread(id, fresh) {
   $("#app").classList.remove("sideopen");
   if (S.cur) clearTimeout(S.cur.pollT);
+  const known = S.threads.find(t => t.id === id);
   S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {}, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
+  if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
   $("#col").innerHTML = "";
-  closePop(); renderSide(); poll();
+  closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } poll();
 }
 async function poll() {
   const cur = S.cur; if (!cur) return;
@@ -720,10 +736,10 @@ async function poll() {
   catch (e) { if (S.cur !== cur) return; $("#col").insertAdjacentHTML("beforeend", `<div class="note bad">${esc(e.message)}</div>`); return; }
   if (S.cur !== cur) return;
   if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { cur.total = 0; cur.epoch = v.epoch; $("#col").innerHTML = ""; cur.live = null; cur.group = null; cur.tools = {}; cur.log = []; cur.next = 0; return poll(); }
-  const first = !cur.view || cur.view.state === "starting" && !cur.total;
+  const first = !cur.view || cur.view.prefill || cur.view.state === "starting" && !cur.total;
   cur.epoch = v.epoch; cur.total = v.total;
   const prevState = cur.view?.state;
-  cur.view = Object.assign(cur.view || {}, v);
+  cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
   cur.log = cur.log || [];
   for (const ev of v.events) {
     if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // two polls in flight
