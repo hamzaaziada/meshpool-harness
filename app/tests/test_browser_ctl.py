@@ -16,8 +16,18 @@ PAGE = """<html><head><title>Signup</title></head><body>
 <p id="out"></p></body></html>"""
 
 
+def _free_port() -> str:
+    """A free local port: fixed ones collide with a running app (8791-8799 are its usual UI ports)."""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return str(p)
+
+
 def test_drive_local_page(monkeypatch):
-    monkeypatch.setenv("MH_BROWSER_PORT", "8791")
+    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
     monkeypatch.setenv("MH_BROWSER_DIFF", "1")
     import importlib
     from engines.browser import ctl
@@ -47,7 +57,7 @@ FORM = """<html><head><title>Login</title></head><body>
 
 
 def test_batch_runs_steps_in_one_call(monkeypatch):
-    monkeypatch.setenv("MH_BROWSER_PORT", "8792")
+    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
     monkeypatch.setenv("MH_BROWSER_DIFF", "1")
     import importlib
     import json
