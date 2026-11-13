@@ -458,7 +458,7 @@ class ACPAgent:
 
     def _flush_text(self, has_tools=False):
         if self._text:
-            txt = "".join(self._text)
+            txt = re.sub(r"^\s*Warning: Model metadata for [^\n]*not found[^\n]*\n*", "", "".join(self._text))
             self._text = []
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
 
