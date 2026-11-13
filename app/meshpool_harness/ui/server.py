@@ -234,7 +234,7 @@ def get_settings() -> dict:
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
-            "native": NATIVE[0], "platform": sys.platform,
+            "native": NATIVE[0], "platform": sys.platform, "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
 
 

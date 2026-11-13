@@ -3,6 +3,7 @@ The page polls for events and answers approval requests."""
 from __future__ import annotations
 
 import json
+import re
 import os
 import threading
 import time
@@ -91,6 +92,31 @@ def _image_text(images: list) -> str:
         return ("\n\n\u200b" + "\n\n".join(out)) if out else ""
     except Exception:  # noqa: BLE001  OCR is a helper; the image still goes to the model
         return ""
+
+
+_FILLER = re.compile(r"^(?:hi|hello|hey)[,!. ]+|^(?:please|pls|can you|could you|would you|i want you to|i need you to|"
+                     r"i'd like you to|help me)\s+", re.I)
+
+
+def nice_title(text: str) -> str:
+    """A short thread title from the first message: the first sentence, without greetings, skill names, links,
+    or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
+    t = str(text or "").split("\u200b")[0].strip()
+    if not t or t in ("New thread", "Session"):
+        return t or "New thread"
+    t = t.splitlines()[0]
+    t = re.sub(r"https?://\S+", "", t)
+    t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
+    t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
+    for _ in range(3):
+        t = _FILLER.sub("", t).strip()
+    t = re.sub(r"\s+", " ", t)
+    if not t:
+        return "New thread"
+    if len(t) > 48:
+        cut = t[:48].rsplit(" ", 1)[0]
+        t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
+    return t[0].upper() + t[1:]
 
 
 class Session:
@@ -421,7 +447,7 @@ class Session:
         acp = self.harness["type"] in ("acp", "pi")
         meta = read_meta(self.id)
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
-                "title": meta.get("title") or a.title, "pinned": bool(meta.get("pinned")),
+                "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models")},
                 "model": (a.current_model() if hasattr(a, "current_model") else
@@ -536,12 +562,12 @@ def listing() -> list:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            rows[d["id"]] = {"id": d["id"], "title": d.get("title") or "New thread", "workdir": d.get("workdir"),
+            rows[d["id"]] = {"id": d["id"], "title": nice_title(d.get("title") or "New thread"), "workdir": d.get("workdir"),
                              "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
                              "harness": d.get("harness") or "meshpool-code", "model": d.get("model")}
     with LOCK:
         for sid, s in LIVE.items():
-            rows[sid] = {"id": sid, "title": s.agent.title or "New thread", "workdir": s.workdir,
+            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New thread"), "workdir": s.workdir,
                          "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
@@ -606,7 +632,7 @@ def search(q: str) -> list:
             continue
         if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
-        title = read_meta(d["id"]).get("title") or d.get("title") or "New thread"
+        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New thread")
         # Search what the user reads (titles, messages, replies), not the saved JSON around it.
         texts = [title]
         for m in d.get("messages") or []:
