@@ -32,6 +32,17 @@ def _pages(spec: str | None, n: int) -> list[int]:
     return [p for p in out if 0 <= p < n]
 
 
+def _mode_share(vals, tol=None):
+    """Share of pages that match the most common value (within tol inches for positions): 1.0 = fully consistent."""
+    vals = [v for v in vals if v is not None]
+    if not vals:
+        return None
+    if tol is None:
+        return round(Counter(vals).most_common(1)[0][1] / len(vals), 2)
+    best = max(sum(1 for v in vals if abs(v - c) <= tol) for c in vals)
+    return round(best / len(vals), 2)
+
+
 def measure(path: str, pages: str | None = None) -> dict:
     import pymupdf as fitz
     doc = fitz.open(path)
@@ -74,7 +85,14 @@ def measure(path: str, pages: str | None = None) -> dict:
         area = sum(abs((r["bbox"][2] - r["bbox"][0]) * (r["bbox"][3] - r["bbox"][1])) for r in pg.get_image_info())
         raster = area > 0.3 * W * H
         all_words = sum(len(s["text"].split()) for s in spans)
-        per.append({"page": i + 1, "raster_exhibit": raster, "all_words": all_words, "aspect": round(W / H, 3), "title": title[:200], "title_words": len(title.split()),
+        tsz = max((s["size"] for s in title_sp), default=None)
+        ty = min((s["bbox"][1] for s in title_sp), default=None)
+        tx = min((s["bbox"][0] for s in title_sp), default=None)
+        tfont = re.sub(r"^[A-Z]{6}\+", "", title_sp[0]["font"]).split("-")[0] if title_sp else None
+        per.append({"page": i + 1, "title_size": round(tsz, 1) if tsz else None,
+                    "title_top_in": round(ty / 72, 2) if ty is not None else None,
+                    "title_left_in": round(tx / 72, 2) if tx is not None else None, "title_font": tfont,
+                    "raster_exhibit": raster, "all_words": all_words, "aspect": round(W / H, 3), "title": title[:200], "title_words": len(title.split()),
                     "title_has_verb": _has_verb(title) if title else None, "words": words,
                     "distinct_left_edges": len(lefts), "source_line": src, "images": len(pg.get_images()),
                     "drawings": len(pg.get_drawings())})
@@ -100,6 +118,10 @@ def measure(path: str, pages: str | None = None) -> dict:
         "distinct_left_edges": stat("distinct_left_edges", content),
         "images_per_page": stat("images", content), "drawings_per_page": stat("drawings", content),
         "fonts_top": [f for f, _ in fonts.most_common(4)],
+        "title_font_mode_share": _mode_share([p["title_font"] for p in content]),
+        "title_size_mode_share": _mode_share([p["title_size"] for p in content]),
+        "title_top_mode_share": _mode_share([p["title_top_in"] for p in content], 0.05),
+        "title_left_mode_share": _mode_share([p["title_left_in"] for p in content], 0.05),
         "title_sizes": [s for s, _ in sizes["title"].most_common(3)],
         "body_sizes": [s for s, _ in sizes["body"].most_common(4)],
         "footnote_sizes": [s for s, _ in sizes["footnote"].most_common(3)],
