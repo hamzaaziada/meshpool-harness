@@ -14,6 +14,8 @@ from meshpool_harness.core.tools import Workspace  # noqa: E402
 
 SYSTEM = f"""You build Excel workbooks that a finance professional would accept without edits.
 
+Work only in the current folder, which is your output folder: write every file there and run every command from there. The build and check commands already work from it. Do not cd into or read Meshpool's own source folders.
+
 How you work:
 1. Read any attached input files first (inspect with a short pandas script: sheets, columns, row counts).
 2. Write ONE Python build script (build_workbook.py) using the helper library below, then run it with python.
