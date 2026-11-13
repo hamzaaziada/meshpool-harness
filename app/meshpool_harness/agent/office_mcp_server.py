@@ -10,6 +10,9 @@ Tools
   convert_document(path, to)          -> docx/pptx/xlsx to PDF and back, through LibreOffice when installed
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
+  check_deck(path, slide_count?)      -> the 18 forge deck rules, each failure as a fix instruction (engines/forge)
+  check_workbook(path)                -> the 13 forge workbook rules after a headless recalculation
+  measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
 
 Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 240 s, under the usual 300 s MCP
 timeout); a longer job returns a job id to check with office_job_status. Files go to "<project>/Meshpool outputs".
@@ -76,6 +79,13 @@ def _report(jid: str) -> tuple[str, bool]:
     lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {m}" for m in made]
     if notes:
         lines.append("Engine notes: " + notes[:2500])
+    try:                                    # forge QA on every produced deck/workbook (never fails the job)
+        from engines.forge.tools import qa_summary
+        qa = qa_summary([m for m in made if m.endswith((".pptx", ".xlsx"))])
+        if qa:
+            lines += ["Forge QA:", qa]
+    except Exception:
+        pass
     return "\n".join(lines), not made
 
 
@@ -356,6 +366,23 @@ TOOLS = {
     "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }
+
+
+def _forge_tool(name):
+    def call(path: str, **kw):
+        from engines.forge import tools as FT
+        return getattr(FT, name)(str(_resolve(path)), **kw)
+    return call
+
+
+try:                                        # forge checks and measurement (engines/forge), when the engines ship
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
+    from engines.forge.tools import TOOLS as _FORGE
+    for _k, (_fn, _d, _p, _r) in _FORGE.items():
+        TOOLS[_k] = (_forge_tool(_k), _d, _p, _r)
+except Exception:
+    pass
 
 
 def handle(msg: dict) -> dict | None:

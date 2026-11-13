@@ -452,8 +452,9 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 for c in s["charts"]:
                     for se in c["series"]:
                         tot = sum(se["values"])
-                        derived.add(tot)
-                        if tot:
+                        if len(se["values"]) >= 3:      # totals and shares only for compositions, not 2-bar pairs
+                            derived.add(tot)
+                        if tot and len(se["values"]) >= 3:
                             derived.update({v / tot * 100 for v in se["values"]} | {v / tot for v in se["values"]})
                         if len(se["values"]) >= 2 and se["values"][0] > 0 and se["values"][-1] > 0:
                             k = len(se["values"]) - 1
