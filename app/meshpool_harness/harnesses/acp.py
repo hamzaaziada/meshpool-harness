@@ -81,6 +81,20 @@ def _text_of(content) -> str:
     return "\n".join(x for x in out if x)
 
 
+ACP_KIND = {"execute": "bash", "read": "read_file", "edit": "edit", "search": "grep", "fetch": "fetch_url",
+            "delete": "delete", "move": "move"}
+
+
+def _raw_text(raw) -> str:
+    """Command output an agent reports outside the content list (Codex sends it here)."""
+    if isinstance(raw, dict):
+        for k in ("formatted_output", "aggregated_output", "output", "stdout", "result", "text"):
+            if raw.get(k):
+                return str(raw[k])
+        return ""
+    return str(raw or "")
+
+
 def _label(u: dict) -> tuple[str, str]:
     """Tool label for the UI: MCP tools read as 'make_deck (meshpool office)'; others use the ACP kind."""
     title = str(u.get("title") or "")
@@ -88,6 +102,11 @@ def _label(u: dict) -> tuple[str, str]:
     if title.startswith("mcp__"):
         parts = title.split("__")
         return parts[-1], parts[1].replace("_", " ") if len(parts) > 2 else ""
+    if title.startswith("mcp.") and title.count(".") >= 2:     # Codex: mcp.<server>.<tool>
+        _, server, tool = title.split(".", 2)
+        return tool, server.replace("_", " ").replace("-", " ")
+    if kind in ACP_KIND:                                         # the same step names as the built-in agents
+        return ACP_KIND[kind], re.sub(r"^(terminal|execute|bash)\s*:\s*", "", title)
     if kind in ("other", "tool") and title:
         head, _, rest = title.partition(":")
         return (head.strip(), rest.strip()) if rest else (title[:60], "")
@@ -240,7 +259,8 @@ class ACPAgent:
         threading.Thread(target=self._reader, daemon=True).start()
         init = self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
-            "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False},
+            "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False,
+                                   "_meta": {"terminal_output": True}},   # Codex then sends command output
             "clientInfo": {"name": "meshpool", "title": "Meshpool", "version": _VERSION}}, timeout=300)
         self.agent_info = init.get("agentInfo") or {}
         self.capabilities = init.get("agentCapabilities") or {}
@@ -408,8 +428,14 @@ class ACPAgent:
                 self._tool_end(tid, u)
         elif kind == "tool_call_update":
             tid = u.get("toolCallId")
+            meta = u.get("_meta") or {}
             if tid in self._tools:
-                self._tools[tid].update({k: v for k, v in u.items() if v is not None})
+                t = self._tools[tid]
+                if (meta.get("terminal_output") or {}).get("data"):
+                    t["_term_out"] = t.get("_term_out", "") + str(meta["terminal_output"]["data"])
+                if meta.get("terminal_exit"):
+                    t["_term_exit"] = meta["terminal_exit"].get("exit_code")
+                t.update({k: v for k, v in u.items() if v is not None and k != "_meta"})
             if u.get("status") in ("completed", "failed"):
                 self._tool_end(tid, self._tools.get(tid, u))
         elif kind == "plan":
@@ -423,6 +449,10 @@ class ACPAgent:
 
     def _tool_end(self, tid, u):
         out = _text_of(u.get("content"))
+        if not out.strip() or re.fullmatch(r"\s*\[terminal [^\]]*\]\s*", out):
+            out = u.get("_term_out") or _raw_text(u.get("rawOutput")) or ""
+        if u.get("_term_exit") not in (None, 0):
+            u = dict(u, status="failed")
         self._emit({"type": "tool_end", "id": tid, "name": _label(u)[0], "ok": u.get("status") != "failed",
                     "denied": False, "output": out[:6000]})
 
@@ -601,6 +631,7 @@ class ACPAgent:
                 pass
             before = getattr(self, "_before", None)
             if before is not None:
+                self._kill_new_children(before)          # now, and again in a moment for anything just starting
                 threading.Timer(1.0, self._kill_new_children, args=(before,)).start()
 
     def reset(self):

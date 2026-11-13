@@ -26,10 +26,11 @@ _ASK = re.compile(r"^\s*(what|which|who|whom|whose|when|where|why|how|is|are|was
                   r"search|research|quick(ly)?|briefly|any idea|i wonder)\b|\?\s*$|\b(quick|short|brief|briefly|"
                   r"in (one|a few|two|three) (words?|sentences?|lines?))\b", re.I)
 
-NOTE = ("\n\n​[Meshpool] This is a quick request. Answer within about 30 seconds: use only the tools you need "
-        "(for research, one web_research call with 2 or 3 queries; answer from its results and open a page only if they "
-        "do not answer the question). Do not create or change "
-        "files. Then reply briefly, with links for facts you looked up, and offer to dig deeper if it would help.")
+NOTE = ("\n\n\u200b[Meshpool] This is a quick request. Answer within about 30 seconds: use only the tools you need. "
+        "For research, run one web_research call with 2 or 3 queries; if its results do not answer the question, "
+        "open the single most relevant page (for example the official site) and answer from that. Do not create or "
+        "change files. Always end with a direct answer, briefly, with links for facts you looked up; offer to dig "
+        "deeper if it would help.")
 WRAP = ("[Meshpool] Time is up for this quick request. Answer now with what you have, briefly, with links for the "
         "facts you looked up. Do not call more tools.")
 
