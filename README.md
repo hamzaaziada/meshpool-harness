@@ -36,15 +36,18 @@ There are three ways to run Meshpool.
    irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
    ```
 
-   Setup asks what Meshpool runs on (your Meshpool API key, another provider's key, or your Claude or ChatGPT subscription), where it works and what it may do without asking. Then the session starts. Later, type `meshpool` in any project folder; `meshpool setup` changes your choices. If your computer has no Python 3.10 or later, the installer downloads a private copy.
+   Setup asks what Meshpool runs on (your Meshpool API key, another provider's key, your ChatGPT subscription, or your Claude subscription for Claude Code), where it works and what it may do without asking. Then the session starts. Later, type `meshpool` in any project folder; `meshpool setup` changes your choices. If your computer has no Python 3.10 or later, the installer downloads a private copy.
 
 3. **In your browser on localhost:** after installing the command line, run `meshpool ui`. It opens the full app at `http://127.0.0.1:8765`. It runs only on your computer and is not reachable from other machines.
 
-### Use your Claude or ChatGPT subscription
+### Use your ChatGPT or Claude subscription
 
-Meshpool can run on your own Claude Pro or Max plan, or on your ChatGPT Plus, Pro or Business plan, instead of an API key. Pick it in the first setup step, in the app or in the terminal, or later in **Settings**, **Account and key**, **Runs on**. Meshpool signs you in through the official Claude Code or Codex sign-in, and usage counts against that plan.
+The provider (what the models run on) is separate from the agent (who does the work). See [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
-Your Meshpool connectors, skills and MCP servers work with it too. This needs Node.js, which the desktop app includes.
+- **ChatGPT subscription:** your ChatGPT Plus, Pro or Business plan runs Meshpool Code, Meshpool Work and Codex instead of an API key. You sign in once with the official Codex sign-in.
+- **Claude subscription, runs Claude Code:** your Claude Pro or Max plan runs Anthropic's own Claude Code agent. Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or a ChatGPT sign-in.
+
+Pick one in the first setup step, in the app or in the terminal, or later in **Settings**, **Account and key**, **Runs on**. Usage counts against that plan. Your Meshpool connectors, skills and MCP servers work with it too. Signing in needs Node.js, which the desktop app includes.
 
 ### Bring your skills and MCP servers
 
@@ -61,8 +64,9 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
   - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
 - **Harnesses (the agent behind a thread), switchable per thread:**
   - **Meshpool Auto** picks the best harness for each task, based on benchmark results. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-  - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key and model list.
-  - **Claude and ChatGPT** run on your own subscription.
+  - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key, another API key, or (Meshpool Code and Work) your ChatGPT sign-in.
+  - **Codex** runs on your Meshpool key, another API key, or your ChatGPT sign-in.
+  - **Claude Code** runs on your Claude sign-in or an Anthropic API key.
 - **Web research without a browser.**
   - The agent can search the web and read pages, PDFs and Office files.
   - It can research a question across many sources at once, with links you can check.

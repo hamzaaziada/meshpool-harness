@@ -26,7 +26,7 @@ HELP = """Commands
   /tokens          tokens used in this session
   /init            ask the agent to write MESHPOOL.md (project notes it reads every session)
   /import          bring your context from ChatGPT, Claude or Gemini (instructions and memory)
-  /setup           change what Meshpool runs on (your key, another key, or a subscription)
+  /setup           change the provider: your key, another key, or a ChatGPT or Claude subscription
   /exit            quit
 Tips
   End a line with \\ to keep typing on the next line.
@@ -250,14 +250,22 @@ def logo_lines(color: bool) -> list[str]:
 
 def _banner(term: Terminal, agent, mcp, logo: bool = True):
     st = term.st
-    model = (agent.manifest.get("name") if hasattr(agent, "manifest") else
-             os.environ.get("MH_MODEL") or "deepseek-v4.1-flash")
+    from meshpool_harness import harnesses as HR
+    acp = hasattr(agent, "manifest")
+    name = agent.manifest.get("name") if acp else "Meshpool Code"
+    runs_on = (agent.manifest.get("runs_on") if acp else HR.credentials("meshpool-code").get("runs_on")) or ""
     term.p("")
     if logo:
         for row in B.banner(st.depth):
             term.p(row)
         term.p("")
-    term.p(f"  {st.dim('Runs on' if hasattr(agent, 'manifest') else 'Model')}   {model}")
+    term.p(f"  {st.dim('Agent')}   {name}" + (st.dim(f" on {runs_on}") if runs_on else ""))
+    if not acp:
+        model = agent.current_model() if hasattr(agent, "current_model") else ""
+        if HR.provider() == "chatgpt":
+            from meshpool_harness.core import chatgpt as CG
+            model = CG.resolve_model(model)
+        term.p(f"  {st.dim('Model')}   {model}")
     term.p(f"  {st.dim('Folder')}  {agent.root}")
     if mcp:
         parts = []
@@ -353,12 +361,20 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         elif not ask_key():
             term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
-    sub = HR.PROVIDERS.get(HR.provider())   # a Claude or ChatGPT subscription chosen as the provider
-    if sub and not HR.signed_in(HR.LOGINS[HR.provider()]):
-        term.p(st.red("You are not signed in to your subscription on this computer. Run: meshpool setup"))
+    # The terminal runs Meshpool Code when it can run on the chosen provider; a Claude subscription runs Claude Code
+    # (the only agent Anthropic lets it run), and the official Codex or Claude Code also when set as the default.
+    hid = HR.default_for("code")
+    try:
+        h = HR.get(hid)
+    except (KeyError, ValueError) as e:
+        term.p(st.red(str(e)))
         return 1
+    if not h.get("ready", True):
+        term.p(st.red(f"{h['name']} cannot run yet. {h.get('setup') or ''} Run: meshpool setup"))
+        return 1
+    sub = h["id"] if h.get("type") == "acp" else None
     mcp = None
-    if not no_mcp and not sub:                   # a subscription agent gets the MCP servers through ACP itself
+    if not no_mcp and not sub:                   # an ACP agent gets the MCP servers through ACP itself
         if prompt is None:
             term.spin.start("Starting MCP servers")
         mcp = Manager(roots=[wd]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
@@ -368,9 +384,9 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     if sub:
         from meshpool_harness.harnesses.acp import ACPAgent
         if resume or session:
-            term.p(st.amber("Resuming is not available with a subscription in the terminal yet. Starting a new session."))
+            term.p(st.amber(f"Resuming is not available with {h['name']} in the terminal yet. Starting a new session."))
         try:
-            agent = ACPAgent(HR.get(sub), wd, emit=term.emit, approve=term.approve, mode=mode)
+            agent = ACPAgent(h, wd, emit=term.emit, approve=term.approve, mode=mode)
         except (ValueError, KeyError) as e:
             term.p(st.red(str(e)))
             return 1

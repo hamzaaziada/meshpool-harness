@@ -32,9 +32,9 @@
         "lint"
       ],
       "scores": {
-        "claude-subscription": 92,
+        "claude-code": 92,
         "meshpool-code": 90,
-        "chatgpt-subscription": 87,
+        "codex": 87,
         "pi": 74,
         "hermes": 60,
         "meshpool-work": 40
@@ -70,9 +70,9 @@
         "deploy"
       ],
       "scores": {
-        "chatgpt-subscription": 90,
+        "codex": 90,
         "meshpool-code": 84,
-        "claude-subscription": 72,
+        "claude-code": 72,
         "pi": 70,
         "hermes": 62,
         "meshpool-work": 40
@@ -99,9 +99,9 @@
       "scores": {
         "meshpool-work": 88,
         "meshpool-code": 87,
-        "claude-subscription": 82,
+        "claude-code": 82,
         "hermes": 70,
-        "chatgpt-subscription": 70,
+        "codex": 70,
         "pi": 55
       }
     },
@@ -129,8 +129,8 @@
         "hermes": 80,
         "meshpool-code": 62,
         "pi": 55,
-        "claude-subscription": 76,
-        "chatgpt-subscription": 76
+        "claude-code": 76,
+        "codex": 76
       }
     },
     "documents": {
@@ -156,8 +156,8 @@
         "hermes": 78,
         "meshpool-code": 55,
         "pi": 50,
-        "claude-subscription": 70,
-        "chatgpt-subscription": 68
+        "claude-code": 70,
+        "codex": 68
       }
     },
     "data": {
@@ -185,8 +185,8 @@
         "hermes": 74,
         "meshpool-code": 70,
         "pi": 60,
-        "claude-subscription": 72,
-        "chatgpt-subscription": 72
+        "claude-code": 72,
+        "codex": 72
       }
     },
     "gtm": {
@@ -212,8 +212,8 @@
         "meshpool-work": 80,
         "meshpool-code": 55,
         "pi": 50,
-        "claude-subscription": 72,
-        "chatgpt-subscription": 70
+        "claude-code": 72,
+        "codex": 70
       }
     },
     "general": {
@@ -223,8 +223,8 @@
         "hermes": 74,
         "meshpool-code": 70,
         "pi": 60,
-        "claude-subscription": 72,
-        "chatgpt-subscription": 72
+        "claude-code": 72,
+        "codex": 72
       }
     }
   },

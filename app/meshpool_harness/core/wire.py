@@ -1,5 +1,6 @@
 """Stand-alone model transport: any OpenAI-compatible endpoint (chat-completions or Responses API). No eval/ needed.
-Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses."""
+Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses.
+MH_PROVIDER=chatgpt sends every call to the user's ChatGPT sign-in instead (core/chatgpt.py)."""
 from __future__ import annotations
 
 import json
@@ -149,6 +150,11 @@ class SimpleLedger:
             body["prompt_cache_key"] = root
             body["user"] = root
         wire = os.environ.get("MH_WIRE", "chat")
+        if os.environ.get("MH_PROVIDER") == "chatgpt":   # the user's ChatGPT sign-in (core/chatgpt.py)
+            from meshpool_harness.core import chatgpt as CG
+            out = from_responses(CG.chat(body, task_id=task_id, idle=int(os.environ.get("MH_STREAM_IDLE_S", "120"))))
+            log_usage_line(task_id, body["model"], out["usage"])
+            return out
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
         stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"

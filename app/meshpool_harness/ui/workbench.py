@@ -133,6 +133,16 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
+    if os.environ.get("MH_PROVIDER") == "chatgpt":       # the models the user's ChatGPT plan offers
+        from meshpool_harness.core import chatgpt as CG
+        if refresh:
+            CG._MODELS.update(t=0.0)
+        ids = CG.models()
+        default = CG.default_model()
+        rows = [{"id": m, "name": m, "provider": "OpenAI", "caps": ["vision", "reasoning"], "context": None}
+                for m in dict.fromkeys(([default] if default not in ids else []) + ids)]
+        return {"models": rows, "favorites": [], "default": default, "base_url": CG.base_url(),
+                "error": "" if ids else "Could not list the models your ChatGPT plan offers; using the default."}
     base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
     key = os.environ.get("MESHPOOL_API_KEY") or ""
     cache_key = base + "|" + key[-6:]

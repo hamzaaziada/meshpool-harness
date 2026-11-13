@@ -110,7 +110,7 @@ check("CI panel without a remote answers cleanly", "_http" not in c, c)
 # ---------------------------------------------------------------- harnesses
 h = call("/api/harnesses")
 ids = [x["id"] for x in h.get("harnesses", [])]
-for want in ("meshpool-auto", "meshpool-code", "meshpool-work", "pi", "hermes", "claude-subscription", "chatgpt-subscription"):
+for want in ("meshpool-auto", "meshpool-code", "meshpool-work", "pi", "hermes", "codex", "claude-code"):
     check(f"harness listed: {want}", want in ids, ids)
 r = call("/api/harnesses", {"example": "goose"})
 check("add example harness", any(x["id"] == "goose" for x in r.get("harnesses", [])), r)
@@ -194,14 +194,16 @@ vv = call(f"/api/agent/{v.get('id')}?since=0")
 check("auto thread created with routed harness", vv.get("harness", {}).get("id") not in (None, "meshpool-auto")
       and any("Meshpool Auto picked" in (e.get("text") or "") for e in vv.get("events", [])), vv.get("harness"))
 
-# subscriptions without sign-in fail clearly, not silently
-v = call("/api/agent", {"workdir": P, "harness": "claude-subscription", "kind": "code", "mode": "auto"})
-if check("subscription thread can be created", v.get("id"), v):
+# Claude Code without a Claude sign-in or Anthropic key fails clearly, not silently
+v = call("/api/agent", {"workdir": P, "harness": "claude-code", "kind": "code", "mode": "auto"})
+if v.get("id"):
     time.sleep(1)
     call(f"/api/agent/{v['id']}/send", {"text": "hello"})
     vv = wait_idle(v["id"], limit=200)
     msg = " ".join(texts(vv, "error") + texts(vv) + texts(vv, "status"))
-    check("subscription harness answers, or asks the user to sign in", texts(vv) or re.search(r"sign in|log ?in|auth", msg, re.I), msg[:300])
+    check("Claude Code answers, or asks the user to sign in", texts(vv) or re.search(r"sign in|log ?in|auth", msg, re.I), msg[:300])
+else:
+    check("Claude Code without credentials says how to set it up", re.search(r"sign-in|API key", json.dumps(v)), v)
 
 # thread search, archive, delete
 check("thread search", call("/api/search?q=hello").get("hits"), "")

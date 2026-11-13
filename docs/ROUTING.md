@@ -6,7 +6,7 @@ When a new thread starts with **Meshpool Auto**, Meshpool:
 
 1. Sorts the task into a category: code, terminal, browser, research, documents, data, gtm or general. It does this by matching keywords, with no model call.
 2. Takes that category's score for each harness from the routing table. It adds a small bonus for the current mode (Cowork or Code).
-3. Picks the highest-scoring harness that is installed and ready. A subscription harness counts as ready only after you sign in.
+3. Picks the highest-scoring harness that is installed and can run on your provider (see [PROVIDERS.md](PROVIDERS.md)). A harness on a Claude or ChatGPT sign-in you did not choose as the provider is picked only when **Let Auto use your other subscriptions** is on.
 
 The thread shows which harness Auto picked and why.
 

@@ -648,16 +648,26 @@ class Agent:
         base = (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
                 or "https://llm.meshpool.ai/v1").rstrip("/")
         key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-        if not key:
+        wire = "chatgpt" if os.environ.get("MH_PROVIDER") == "chatgpt" else os.environ.get("MH_WIRE", "chat")
+        if not key and wire != "chatgpt":
             raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
-        wire = os.environ.get("MH_WIRE", "chat")
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned = None, False, False
         for attempt in range(8):
             self._check_stop()
             try:
-                if wire == "responses":
+                if wire == "chatgpt":                  # the user's ChatGPT sign-in (core/chatgpt.py)
+                    from meshpool_harness.core import chatgpt as CG
+                    from meshpool_harness.core.wire import from_responses
+
+                    def on_text(t):
+                        nonlocal streamed
+                        streamed = True
+                        self.emit({"type": "text_delta", "text": t})
+                    resp = from_responses(self._wait(CG.chat, body, task_id=self.id, on_text=on_text,
+                                                     idle=int(os.environ.get("MH_AGENT_IDLE_S", "120"))))
+                elif wire == "responses":
                     from meshpool_harness.core.wire import SimpleLedger
                     extra = {k: v for k, v in body.items() if k not in ("model", "messages", "max_tokens", "temperature")}
                     resp = SimpleLedger("agent").chat(model=body["model"], messages=body["messages"],
@@ -670,6 +680,8 @@ class Agent:
                 raise
             except RuntimeError as e:
                 msg = str(e)
+                if type(e).__name__ == "NotSignedIn":     # ChatGPT sign-in missing or expired: retrying cannot help
+                    raise
                 if "HTTP 401" in msg or "HTTP 403" in msg:
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if "HTTP 400" in msg and _has_images(body["messages"]) and not getattr(self, "_no_vision", False):

@@ -2,8 +2,8 @@
 
 The routing table is defaults/routing.json (a copy in the Meshpool data folder overrides it). Each category has
 keywords and a score per harness, from benchmark results. A task gets the category whose keywords match it best, then
-the highest-scoring harness that is installed and ready (subscriptions must be signed in). No model call is made,
-so routing is instant, free and repeatable.
+the highest-scoring harness that is installed and has credentials under the chosen provider. No model call is
+made, so routing is instant, free and repeatable.
 """
 from __future__ import annotations
 
@@ -44,11 +44,13 @@ def route(text: str, kind: str = "cowork") -> dict:
     scores = dict((t["categories"].get(cat) or t["categories"].get("general") or {}).get("scores") or {})
     for hid, bonus in ((t.get("mode_bonus") or {}).get(kind) or {}).items():
         scores[hid] = scores.get(hid, 0) + bonus
-    # A subscription spends the user's own Claude or ChatGPT plan: Auto picks one only after the user allowed it.
+    # A harness on a Claude or ChatGPT sign-in spends the user's own plan. Auto uses that plan freely when it is the
+    # provider the user chose, and any other plan only after the user allowed it.
     subs_ok = (C.read().get("MH_AUTO_SUBSCRIPTIONS") or os.environ.get("MH_AUTO_SUBSCRIPTIONS", "0")) == "1"
+    chosen = HR.provider()
     ready = {h["id"]: h for h in HR.load_all()
-             if h.get("available") and not h.get("error") and h.get("type") != "auto"
-             and (not h.get("subscription") or (subs_ok and h.get("signed_in")))}
+             if h.get("available") and not h.get("error") and h.get("type") != "auto" and h.get("ready", True)
+             and (not h.get("plan") or h["plan"] == chosen or subs_ok)}
     ranking = sorted(((s, hid) for hid, s in scores.items() if hid in ready), reverse=True)
     if not ranking:
         hid = HR.default_for(kind if kind in HR.MODES else "cowork")

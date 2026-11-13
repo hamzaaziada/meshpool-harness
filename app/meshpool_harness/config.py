@@ -17,8 +17,10 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
-    ("MH_PROVIDER", "Provider", "meshpool", "What Meshpool runs on: meshpool (your Meshpool key), custom (another "
-     "provider's key), claude or chatgpt (your subscription)."),
+    ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
+     "provider's key), chatgpt (your ChatGPT sign-in) or claude (your Claude sign-in, for Claude Code only)."),
+    ("ANTHROPIC_API_KEY", "Anthropic API key", "", "Optional. Runs Claude Code on an Anthropic API key instead of a "
+     "Claude sign-in. Only Claude Code uses it."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
@@ -29,9 +31,9 @@ FIELDS = [
                                            "your provider says otherwise."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
-    ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your subscriptions", "0",
-     "On: Meshpool Auto may pick Claude or ChatGPT on your own plan (it uses that plan's limits). "
-     "Off: Auto only uses your Meshpool key."),
+    ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your other subscriptions", "0",
+     "On: Meshpool Auto may pick Claude Code or Codex on a Claude or ChatGPT sign-in you did not choose as the "
+     "provider (it uses that plan's limits). Off: Auto stays on the provider you chose."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),
@@ -40,7 +42,7 @@ FIELDS = [
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
 ]
-SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
+SECRET = {"MESHPOOL_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
 
 

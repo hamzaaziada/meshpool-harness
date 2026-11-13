@@ -205,7 +205,7 @@ function shell() {
 const narrow = () => innerWidth <= 760;
 function modeHarness(m = S.appMode) {
   const want = store("harness_" + m) || S.defaults?.[m];
-  const ok = id => S.harnesses.some(h => h.id === id && h.available !== false);
+  const ok = id => S.harnesses.some(h => h.id === id && h.available !== false && h.ready !== false);
   return ok(want) ? want : (ok(S.defaults?.[m]) ? S.defaults[m] : (m === "code" ? "meshpool-code" : "meshpool-work"));
 }
 function modeBadges() {
@@ -579,7 +579,7 @@ function cfg() { // the settings that apply to the next message: the open thread
 function renderBar() {
   const c = cfg(); const h = harness(c.harness);
   $("#app").classList.toggle("planning", !!c.plan);
-  const modelLabel = h.models === "meshpool" ? (c.model ? modelName(c.model) : "Model") : (c.model ? modelName(c.model) : "Agent's own model");
+  const modelLabel = h.models === "meshpool" ? (c.model ? modelName(c.model) : "Model") : (S.cur && c.model ? modelName(c.model) : "Agent's own model");   // a new thread's draft model is a Meshpool id
   $("#cbar").innerHTML = `
     <button class="pill" id="hPill" title="Agent: who does the work in this thread">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
     <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
@@ -745,15 +745,15 @@ function popKey(k) {
 function harnessPop(anchor) {
   const cur = cfg().harness;
   const other = S.appMode === "code" ? "cowork" : "code";
-  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], ["sub", "Your subscriptions"], [other, "Other agents"]];
+  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], [other, "Other agents"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
-    const hs = S.harnesses.filter(h => !h.error && h.available !== false && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
-    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.available === false ? " · not installed" : h.subscription && !h.signed_in ? " · sign in first" : ""}<span class="od">${esc(h.description || "")}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+    const hs = S.harnesses.filter(h => !h.error && h.available !== false && h.mode === m); if (!hs.length) return "";
+    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.ready === false ? "style='opacity:.6'" : ""}><span class="ol">${esc(h.name)}${h.ready === false ? " · needs setup" : ""}<span class="od">${esc(h.ready === false ? (h.setup || "") : (h.runs_on ? "On " + h.runs_on + ". " : "") + (h.description || ""))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
   }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage agents</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
-    if (harness(id).subscription && !harness(id).signed_in) { openSettings("harnesses"); return; }
+    if (harness(id).ready === false) { openSettings(harness(id).login ? "harnesses" : "general"); return; }
     if (S.cur) { if (id === S.cur.view.harness.id) return; toast("Each thread keeps its agent. Started a new thread with " + harness(id).name + "."); store("harness_" + S.appMode, id); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
     S.draft.harness = id; store("harness_" + S.appMode, id); renderBar(); renderHero();
   });
@@ -1408,7 +1408,7 @@ async function renderSection(sec) {
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
     b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
-      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">A subscription runs every new thread on your own Claude or ChatGPT plan instead of an API key.</small></label>
+      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box. A Claude subscription runs Claude Code only.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
       <label class="field"><span>Default model for new threads</span><select id="sModel"></select><small>Each thread can use its own model from the picker in the message box.</small></label>
@@ -1416,9 +1416,9 @@ async function renderSection(sec) {
     const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sProv").onchange = async () => {
-      const v = $("#sProv").value, h = SUB_HARNESS[v] && ((S.harnesses || []).find(x => x.id === SUB_HARNESS[v]) || {name: v === "claude" ? "Claude" : "ChatGPT"});
-      if (h && !h.signed_in) { $("#sProv").value = S.settings.provider || "meshpool"; RES("sRes").className = "res bad"; RES("sRes").textContent = `Sign in to ${h.name} first under Agents, then choose it here.`; return; }
-      try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New threads use " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
+      const v = $("#sProv").value;
+      if (SIGNIN[v] && !S.settings.signed_in?.[v]) { $("#sProv").value = S.settings.provider || "meshpool"; RES("sRes").className = "res bad"; RES("sRes").textContent = `Sign in to ${SIGNIN[v].name} first under Agents (${harness(SIGNIN[v].harness).name}, Sign in), then choose it here.`; return; }
+      try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New threads use " + harness(modeHarness()).name + " on " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
     };
     $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
     const save = async () => {
@@ -1641,18 +1641,22 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. Meshpool Auto picks a good one for each task. Meshpool Code, Meshpool Work, Pi, Codex and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Other agents can be added too.</p>
-      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Codex runs on an API key or a ChatGPT sign-in; Claude Code runs on a Claude sign-in or an Anthropic API key. Other agents can be added too.</p>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
+      <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.id === "claude-code" ? `<span class="keyrow" style="margin-top:6px"><input id="hAnth" type="password" autocomplete="off" spellcheck="false" placeholder="${S.settings.fields?.find(f => f.key === "ANTHROPIC_API_KEY")?.set ? "Anthropic API key saved. Paste a new one to replace it." : "Or paste an Anthropic API key"}"><button class="btn" id="hAnthSave" type="button">Save</button></span>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
     $$("[data-rm]", b).forEach(x => x.onclick = () => act({remove: x.dataset.rm}));
+    $("#hAnthSave")?.addEventListener("click", async () => {
+      const k = $("#hAnth").value.trim(); if (!k) { $("#hAnth").focus(); return; }
+      try { await post("/api/settings", {values: {ANTHROPIC_API_KEY: k}}); await loadSettings(); await loadHarnesses(); renderSection("harnesses"); renderBar(); toast("Claude Code runs on your Anthropic API key when Claude is not your provider."); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; }
+    });
     $$("[data-login]", b).forEach(x => x.onclick = async () => {
       try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("hRes").className = "res " + (r.ok ? "" : "bad"); RES("hRes").textContent = r.message; }
       catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; return; }
       const id = x.dataset.login, t0 = Date.now();
-      const tick = async () => { if (!RES("hRes")) return; await loadHarnesses(); if (harness(id).signed_in) { renderSection("harnesses"); renderBar(); toast(harness(id).name + " is signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
+      const tick = async () => { if (!RES("hRes")) return; await loadHarnesses(); if (harness(id).signed_in) { await loadSettings(); renderSection("harnesses"); renderBar(); toast(harness(id).name + " is signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
       setTimeout(tick, 3000);
     });
     $$("[data-dm]", b).forEach(x => x.onchange = async () => { await act({default_mode: x.dataset.dm, id: x.value}); store("harness_" + x.dataset.dm, null); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } });
@@ -1704,7 +1708,7 @@ async function renderSection(sec) {
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "Standard"], ["responses", "Responses API"]], MH_HARNESS_PROFILE: [["minimal", "Recommended"], ["", "Older, stricter checks"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
-    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
+    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
@@ -1717,11 +1721,12 @@ async function renderSection(sec) {
 
 /* ================================== first run ================================== */
 const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
+// Providers: what the models run on. Agents (harnesses) are picked separately; the default agent follows the provider.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
-  ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
-  ["claude", "Claude subscription", "Your Claude Pro or Max plan. No API key needed."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan. No API key needed."]];
-const SUB_HARNESS = {claude: "claude-subscription", chatgpt: "chatgpt-subscription"};
+  ["custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider."],
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool Code, Work and Codex. No API key needed."],
+  ["claude", "Claude subscription, runs Claude Code", "Your Claude Pro or Max plan. Anthropic allows it for Claude Code only."]];
+const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}, claude: {name: "Claude", harness: "claude-code"}};
 function showOnboarding() {
   if ($("#onb")) return;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
@@ -1742,18 +1747,19 @@ function showOnboarding() {
   document.body.appendChild(o);
   let prov = "meshpool";
   const res = RES("oRes");
-  const sub = () => SUB_HARNESS[prov] && (S.harnesses || []).find(h => h.id === SUB_HARNESS[prov]);
+  const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
-    const h = sub(); const name = prov === "claude" ? "Claude" : "ChatGPT";
+    const h = sub(); const name = SIGNIN[prov]?.name || "";
+    const what = prov === "claude" ? " It runs Claude Code, Anthropic's own agent: Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or ChatGPT." : " Meshpool Code, Meshpool Work and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
     $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`
-      : h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`;
+      : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
     $("#oGo").disabled = !(h && h.signed_in);
   };
   const pick = id => {
     prov = id; res.className = "res"; res.textContent = "";
     $$("[data-prov]", o).forEach(x => x.setAttribute("aria-checked", x.dataset.prov === id));
-    const isSub = !!SUB_HARNESS[id];
+    const isSub = !!SIGNIN[id];
     $("#oKeyBox").hidden = isSub; $("#oSubBox").hidden = !isSub;
     $("#oBaseF").hidden = $("#oModelF").hidden = id !== "custom"; $("#oCredit").hidden = id !== "meshpool";
     $("#oGo").disabled = false;
@@ -1765,15 +1771,15 @@ function showOnboarding() {
   $("#oKey").onkeydown = e => { if (e.key === "Enter") $("#oGo").click(); };
   $("#oKey").oninput = () => { res.textContent = ""; };
   $("#oSign").onclick = async () => {
-    const id = SUB_HARNESS[prov];
+    const id = SIGNIN[prov].harness;
     try { const r = await post("/api/harness-login", {id}); res.className = "res " + (r.ok ? "" : "bad"); res.textContent = r.message; } catch (e) { res.className = "res bad"; res.textContent = e.message; return; }
     const t0 = Date.now();
-    const tick = async () => { if (!$("#oSubBox") || SUB_HARNESS[prov] !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
+    const tick = async () => { if (!$("#oSubBox") || SIGNIN[prov]?.harness !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
   };
   const finish = async () => { await loadSettings(); await loadHarnesses(); S.draft.harness = modeHarness(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
   $("#oGo").onclick = async () => {
-    if (SUB_HARNESS[prov]) {
+    if (SIGNIN[prov]) {
       if (!sub()?.signed_in) { res.className = "res bad"; res.textContent = "Sign in first."; return; }
       $("#oGo").disabled = true;
       try { await post("/api/provider", {provider: prov}); store("harness_code", null); store("harness_cowork", null); await finish(); } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
@@ -1982,19 +1988,11 @@ function permStep(host) {
 function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
-  const subs = S.harnesses.filter(h => h.subscription);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
-    ${subs.length ? `<h3 class="onb-h">Use your subscriptions</h3><ul class="rows2" id="oSubs">${subs.map(h => `<li><span class="tg"><b>${esc(h.name)}</b><small>${esc(h.description)}</small></span>${h.signed_in ? `<span class="badge added">Signed in</span>` : `<button class="btn" data-login="${esc(h.id)}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="oSubRes"></div>` : ""}
     <div id="oImport"></div>
     <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
-  $$("[data-login]", card).forEach(x => x.onclick = async () => {
-    try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("oSubRes").className = "res"; RES("oSubRes").textContent = r.message; } catch (e) { RES("oSubRes").className = "res bad"; RES("oSubRes").textContent = e.message; }
-    const id = x.dataset.login, t0 = Date.now();
-    const tick = async () => { if (!$("#oSubs")) return; await loadHarnesses(); if (harness(id).signed_in) { x.outerHTML = `<span class="badge added">Signed in</span>`; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
-    setTimeout(tick, 3000);
-  });
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
   store("onbStep", 3);
