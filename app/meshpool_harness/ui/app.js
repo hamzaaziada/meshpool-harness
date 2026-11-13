@@ -980,7 +980,11 @@ function applyEv(ev) {
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : ""), "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); break; }
-    case "interrupted": settleSteps("stopped"); closeGroup(); add(esc(ev.text), "note warn"); break;
+    case "interrupted": {
+      settleSteps("stopped"); closeGroup();
+      const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
+      $("[data-resend]", n)?.addEventListener("click", () => { const inp = $("#input"); inp.value = ev.resend; inp.dispatchEvent(new Event("input")); inp.focus(); });
+      break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
       if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }

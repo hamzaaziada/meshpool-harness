@@ -18,6 +18,16 @@ from meshpool_harness.harnesses.pi_rpc import PiAgent
 
 LIVE: dict[str, "Session"] = {}
 LOCK = threading.Lock()
+_SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
+_KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
+         "checkpoint", "status", "plan"}
+
+
+def _transcript(sid: str) -> dict | None:
+    try:
+        return json.loads((SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
 
@@ -179,6 +189,16 @@ class Session:
         self.id, self.workdir = self.agent.id, str(self.agent.root)
         if resume_id:
             self.kind = read_meta(self.id).get("kind") or self.kind
+            tr = _transcript(self.id)
+            if tr and tr.get("events"):
+                with self.lock:
+                    self.events = [dict(e, i=i) for i, e in enumerate(tr["events"])]
+                if tr.get("running"):
+                    last = next((e.get("text") for e in reversed(tr["events"]) if e.get("type") == "user"), "")
+                    self.emit({"type": "interrupted", "restarted": True, "resend": last,
+                               "text": "Meshpool closed while this was running, so it stopped. Your message is kept: "
+                                       "send it again to continue."})
+                    self._persist(running=False)
         else:
             write_meta(self.id, kind=self.kind)          # the mode (Cowork or Code) the thread was started in
         if model:
@@ -235,6 +255,31 @@ class Session:
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
+        if ev.get("type") == "user" and not ev.get("steer"):
+            self._turn_open = True                   # a turn is running until its turn_end arrives
+        elif ev.get("type") == "turn_end":
+            self._turn_open = False
+        if ev.get("type") in _KEEP:
+            self._persist()
+
+    def _persist(self, running: bool | None = None):
+        """Save what the thread shows (steps, stop notes, approvals), so it looks the same after a restart, and
+        whether a turn is still running, so a turn cut off by a restart can say so."""
+        sid = getattr(self, "id", None)
+        if not sid or sid in DELETED or getattr(self.agent, "deleted", False):
+            return
+        try:
+            d = SESSIONS / sid
+            d.mkdir(parents=True, exist_ok=True)
+            with self.lock:
+                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP][-3000:]
+            run = bool(getattr(self, "_turn_open", False)) if running is None else running
+            tmp = d / "transcript.json.tmp"
+            tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
+                           encoding="utf-8")
+            os.replace(tmp, d / "transcript.json")
+        except OSError:
+            pass
 
     def approve(self, kind, title, detail, options=None):
         with self.lock:
@@ -433,6 +478,7 @@ class Session:
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
                     self.agent.save()
         self.epoch += 1
+        self._persist(running=False)
         def _n(k, word):
             n = len(r.get(k) or [])
             return f"{n} file{'' if n == 1 else 's'} {word}"
