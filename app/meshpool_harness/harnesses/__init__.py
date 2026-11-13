@@ -68,7 +68,8 @@ def _bundled_hermes() -> dict | None:
         return None
     env = {"PYTHONPATH": str(v), "HERMES_HOME": str(hermes_home()), "HERMES_BUNDLED_SKILLS": str(v / "skills"),
            "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "HERMES_DISABLE_LAZY_INSTALLS": "1",
-           "HERMES_ASK_EVERY_COMMAND": "1"}   # every command asks Meshpool, which applies the user's permission mode
+           "HERMES_ASK_EVERY_COMMAND": "1",   # every command asks Meshpool, which applies the user's permission mode
+           "HERMES_ACP_APPROVAL_TIMEOUT": "86400"}   # an approval card waits for the user, as in every harness
     if os.environ.get("PYTHONPYCACHEPREFIX"):
         env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
     else:
