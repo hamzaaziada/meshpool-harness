@@ -227,7 +227,7 @@ const GIT_WORD = {"??": "new", "A": "added", "M": "changed", "D": "deleted", "R"
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
-  $$("#col .work").forEach(d => d.open = S.steps || !d.dataset.done);
+  $$("#col .work").forEach(d => d.open = S.steps || !d.dataset.done || !!$(".appr:not(.done)", d));   // never fold away a pending approval
   $$("#col .think details").forEach(d => d.open = S.steps);
   renderTop(); toast(S.steps ? "Showing every step" : "Steps are folded; click one to open it");
 }
@@ -954,7 +954,7 @@ function workGroup() {
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
-  if (done) { g.dataset.done = "1"; g.open = !!S.steps; }
+  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); }
 }
 function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
 function applyEv(ev) {
@@ -1011,7 +1011,7 @@ function applyEv(ev) {
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
-      if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); }
+      if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
       d.id = "appr-" + ev.id;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
