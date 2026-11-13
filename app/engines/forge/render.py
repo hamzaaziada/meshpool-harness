@@ -1114,6 +1114,11 @@ def chart_problems(c: dict) -> list[str]:
     out = []
     vals = [float(v) for se in series for v in se.get("values") or [] if isinstance(v, (int, float))]
     units = {m.group(0).lower() for cat in cats for m in re.finditer(r"\(([^)]*)\)|%|\$|thousand|million|share", cat, re.I)}
+    bad = [v for se in series for v in se.get("values") or []
+           if not isinstance(v, (int, float)) and not (v is None and c.get("kind") == "line")]
+    if bad:
+        out.append(f"{len(bad)} chart values are not numbers (gap markers or text); chart only the points the facts "
+                   "support, or show the numbers you have as a stat stack")
     if len(cats) < 2 and c.get("kind") != "waterfall":
         out.append("a chart with one bar shows nothing; give >= 3 comparable categories or use a stat stack")
     sunits = {bool(re.search(r"%|cagr|share|rate|growth", str(se.get("name", "")), re.I)) for se in series}
@@ -1265,7 +1270,10 @@ def a_argument_only(ctx, s, sl, n):
         band = _fill(sl, LEFT, cy, RIGHT - LEFT, ch, TC.TEXT_2, "ov_SoWhat")
         _shape_text(band, cbl, ctx, n, (LEFT + 0.25, cy + 0.06, cw, ch - 0.1), MSO_ANCHOR.MIDDLE)
         top_h = cy - 0.2 - BODY_Y
-    blocks, _ = _fit(_grow(blocks, w, top_h), w, top_h, 11)
+    blocks, dropped = _trim_to_fit(_grow(blocks, w, top_h), w, top_h, 11)
+    if dropped:
+        ctx.miss(n, "the argument", 10)
+        _cut_note(s, dropped)
     _write(_box(sl, x, BODY_Y, w, top_h, "Argument"), blocks, ctx, n)
 
 
@@ -1475,12 +1483,17 @@ def a_exhibit_argument(ctx, s, sl, n):
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
-        _write(_box(sl, LEFT, y, lw, 0.32, "role_subtitle_ExhibitTitle"),
-               [{"text": ex["title"], "size": ARGUMENT["exhibit"], "bold": True, "numbers": False}])
-        y += 0.32
+        tb_ = [{"text": ex["title"], "size": ARGUMENT["exhibit"], "bold": True, "numbers": False}]
+        if _need(tb_, lw) > 0.4:                          # a long exhibit title steps down before it wraps
+            tb_[0]["size"] = ARGUMENT["exhibit"] - 2
+        th_ = max(0.32, _need(tb_, lw) + 0.04)
+        _write(_box(sl, LEFT, y, lw, th_, "role_subtitle_ExhibitTitle"), tb_)
+        y += th_
     if ex.get("unit"):
-        _write(_box(sl, LEFT, y, lw, 0.26, "role_subtitle_ExhibitUnit"), [{"text": ex["unit"], "size": ARGUMENT["unit"], "numbers": False}])
-        y += 0.28
+        ub_ = [{"text": ex["unit"], "size": ARGUMENT["unit"], "numbers": False}]
+        uh_ = max(0.26, _need(ub_, lw) + 0.02)
+        _write(_box(sl, LEFT, y, lw, uh_, "role_subtitle_ExhibitUnit"), ub_)
+        y += uh_ + 0.02
     foot = 0.35 if s.get("footnotes") else 0
     _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
     blocks = []
@@ -1502,6 +1515,11 @@ def a_exhibit_argument(ctx, s, sl, n):
     cy = BODY_B - foot - ch
     space = cy - BODY_Y - 0.12
     blocks, ok = _fit(blocks, rw - 0.1, space, 10)
+    if not ok:
+        ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
+        blocks, dropped = _trim_to_fit(blocks, rw - 0.1, space, 10)
+        _cut_note(s, dropped)
+        ok = True
     fitted = min((b["size"] for b in blocks if b.get("bullet")), default=ARGUMENT["bullet"])
     for b in cb:
         b["size"] = min(b["size"], fitted)
@@ -1552,6 +1570,23 @@ def _table_as_chart(t: dict):
     hl = [cats[i] for i in t.get("highlight_rows") or [] if i < len(cats)] if len(series) == 1 else []
     return {"kind": kind, "categories": cats, "series": series, "unit": units, "decimals": decimals,
             "highlight_categories": hl, "alt": f"{kind} chart: " + "; ".join(se["name"] for se in series)}
+
+
+def _trim_to_fit(blocks, w, h, floor):
+    """Fit at or above `floor`; if the text still does not fit, drop trailing lines (bullets first) until it does.
+    Returns (blocks, dropped texts). A finished slide never overflows; what was cut goes to the notes."""
+    bl, ok = _fit(blocks, w, h, floor)
+    dropped = []
+    while not ok and len(bl) > 1:
+        k = max((i for i, b in enumerate(bl) if b.get("bullet")), default=len(bl) - 1)
+        dropped.insert(0, bl.pop(k)["text"])
+        bl, ok = _fit(bl, w, h, floor)
+    return bl, dropped
+
+
+def _cut_note(s, dropped):
+    if dropped:
+        s["notes"] = (s.get("notes", "") + "\n[QA] Did not fit and was left out: " + " | ".join(dropped)).strip()
 
 
 def _grow(blocks, w, h, max_bump=2):
@@ -1660,7 +1695,9 @@ def a_chart_takeaway(ctx, s, sl, n):
         bx, bw = span(split, 11)
         _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
         _rule(sl, bx, BODY_Y, bw, TC.TEXT_1, 0.75, "TakeawayRule")
-        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), _fit(blocks_, bw, body_h - 0.1, 11)[0], ctx, n)
+        blocks_, dropped = _trim_to_fit(blocks_, bw, body_h - 0.1, 11)
+        _cut_note(s, dropped)
+        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), blocks_, ctx, n)
         return
     lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
     cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
@@ -1775,8 +1812,22 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
                 _footer(ctx, s, sl, n)
-        except (KeyError, TypeError, IndexError, ValueError) as e:
+        except (KeyError, TypeError, IndexError, ValueError, AttributeError) as e:
             errors.append(f"slide {n} ({arch}): missing or malformed field: {type(e).__name__}: {e}")
+            for shp in list(sl.shapes):                     # never leave a half-drawn slide: redraw it simply
+                if not shp.is_placeholder:
+                    shp._element.getparent().remove(shp._element)
+            fb = fallback(dict(s, chart=None) if s.get("chart") else s)
+            if fb.get("archetype") == arch:
+                bl = [b for blk in s.get("blocks") or [] for b in [{"text": blk.get("text", "")}] + list(blk.get("bullets") or [])]
+                fb = dict(s, archetype="argument_only", chart=None,
+                          blocks=[{"text": "", "bullets": bl + list(s.get("bullets") or [])}])
+            try:
+                sl._element.find(qn("p:cSld")).set("name", f"arch:{fb['archetype']} node:{s.get('node', '')}")
+                ARCHETYPES[fb["archetype"]](ctx, fb, sl, n)
+                _footer(ctx, fb, sl, n)
+            except Exception as e2:
+                errors.append(f"slide {n}: fallback layout failed too: {type(e2).__name__}: {e2}")
         if s.get("notes"):
             sl.notes_slide.notes_text_frame.text = s["notes"]
         if ctx.carry and carry:
