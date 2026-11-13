@@ -54,7 +54,7 @@ pptx:
     wrap_safety: 0.97           # PowerPoint wraps a little earlier than raw advance widths
     line_height: 1.15           # Arial single spacing as a multiple of font size (calibrated on renders)
     min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
-    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument]
+    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid]
     overflow_tolerance_in: 0.04
   colors:                       # P6
     srgb_exceptions: []         # hex values allowed as hardcoded colours (e.g. "FFFFFF" for knockout text)
@@ -96,6 +96,7 @@ pptx:
       challenge_matrix: 260      # reference page: ~230 words in 5 rows x 2 lenses
       exhibit_argument: 170      # reference page: ~150 words of argument beside the exhibit
       table_focus: 60
+      grid: 200                  # parts grid: up to four parts, each about a quarter-slide argument
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
       recommendations_now_next_later: 12
       timeline_roadmap: 12
@@ -106,6 +107,7 @@ pptx:
       executive_summary: 10
       challenge_matrix: 20
       exhibit_argument: 10
+      grid: 16
   titles:                       # P11
     max_words: 15
     max_lines: 2
