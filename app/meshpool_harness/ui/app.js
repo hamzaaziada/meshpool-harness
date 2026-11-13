@@ -723,6 +723,7 @@ async function poll() {
   } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
   if (first || prevState !== v.state) { renderTop(); renderBar(); }
   scrollConv(first);
+  if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
   cur.pollT = setTimeout(poll, busy ? 400 : 3000);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
 }
@@ -1582,6 +1583,9 @@ async function restartApp() {
 /* ================================== boot ================================== */
 (async () => {
   shell();
+  // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
+  new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
+    .observe($("#col"), {childList: true});
   try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills()]); }
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
