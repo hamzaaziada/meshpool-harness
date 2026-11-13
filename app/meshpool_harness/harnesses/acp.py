@@ -562,6 +562,10 @@ class ACPAgent:
                 pass
 
     def send(self, text: str, images: list | None = None) -> str:
+        kt = getattr(self, "_kill_timer", None)
+        if kt:
+            kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
+            self._kill_timer = None
         self._stop = False
         self._before = self._descendants()
         if not self.title:
@@ -644,7 +648,9 @@ class ACPAgent:
             before = getattr(self, "_before", None)
             if before is not None:
                 self._kill_new_children(before)          # now, and again in a moment for anything just starting
-                threading.Timer(1.0, self._kill_new_children, args=(before,)).start()
+                t = threading.Timer(1.0, self._kill_new_children, args=(before,))
+                self._kill_timer = t                     # cancelled if a new turn starts first (see send)
+                t.start()
 
     def reset(self):
         self.acp_session = None
