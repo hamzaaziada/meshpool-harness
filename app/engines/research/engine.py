@@ -79,6 +79,11 @@ sources.json between runs, so later runs add to it.
   c.facts(["S1.p365"])                                  # deck facts with source, url, page
   c.assumption_source("S1.p365")                        # Source / Evidence text for a model's assumption book
   c.save(); R.finalize("report.md", c)
+Document grid (the same questions across many documents: CIM screening, peer filings, diligence trackers):
+  from engines.research import grid as G
+  g = G.grid(c, {{"Apple FY26 10-K": ["S1"], "Microsoft FY26 10-K": ["S2"]}}, ["FY2026 revenue", "Capex guidance"])
+  G.to_excel(g, c, "grid.xlsx")    # every cell answered only from its row's passages, cited, numbers checked;
+                                   # unanswerable cells say "Not found in the documents" (never guessed)
 Tiers: 1 filings, regulators, statistics agencies, issuer releases and IR, provided documents; 2 wire services and
 financial press, rating agencies, academic and major research institutions; 3 other; 4 forums and user content.
 Rely on tiers 1-2 for numbers; never let a number rest only on tier 4."""

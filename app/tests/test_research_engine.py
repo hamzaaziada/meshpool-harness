@@ -276,3 +276,48 @@ def test_hosts_match_whole_labels_and_junk_pages_are_rejected(tmp_path):
     assert c.add_text("Access denied", "Your request has been blocked. This could be due to several reasons. " * 3,
                       "https://www.microsoft.com/x") is None
     assert "blocked" in c.failures[-1]["why"]
+
+
+def test_document_grid_answers_only_from_each_rows_passages(tmp_path):
+    from openpyxl import load_workbook
+    from engines.research import grid as G
+    c = R.Corpus(str(tmp_path), now="2026-11-13")
+    a = c.add_text("Alpha 10-K", "Alpha revenue for fiscal 2026 was $12.4 billion, up 9%. Gross margin was 41.2% as "
+                   "input costs eased. We expect capital expenditures of about $1.1 billion next year. " * 2,
+                   "https://www.sec.gov/alpha", "Alpha Corp", "2026-02-01")
+    b = c.add_text("Beta 10-K", "Beta revenue for fiscal 2026 was $3.9 billion, down 2%. Gross margin narrowed to 33.0% "
+                   "on pricing pressure in Europe. Beta did not give capital expenditure guidance. " * 2,
+                   "https://www.sec.gov/beta", "Beta Inc", "2026-03-01")
+    seen = []
+
+    class Client:
+        def chat(self, model, messages, **kw):
+            user = messages[-1]["content"]
+            seen.append(user)
+            ids = re.findall(r"\[(S\d+\.p\d+)\]", user)
+            q = user.split("\n", 1)[0]
+            if "Capital" in q and "Beta" in user:
+                out = {"answer": "About $1.1 billion", "citations": ids[:1]}          # invented: not in Beta's text
+            elif "revenue" in q:
+                out = {"answer": "$12.4 billion" if "Alpha" in user else "$3.9 billion", "citations": ids[:1]}
+            elif "Capital" in q:
+                out = {"answer": "About $1.1 billion next year", "citations": ids[:1]}
+            else:
+                out = {"answer": "", "citations": []}
+            return {"choices": [{"message": {"content": json.dumps(out)}}]}
+    import re
+    g = G.grid(c, {"Alpha": [a.id], "Beta": [b.id]}, ["Fiscal 2026 revenue", "Capital expenditure guidance",
+                                                      "Dividend policy"], client=Client(), model="m", workers=1)
+    assert g.get(0, 0).ok and g.get(0, 0).answer == "$12.4 billion" and g.get(0, 0).citations[0].startswith(a.id)
+    assert g.get(1, 0).answer == "$3.9 billion" and all(cid.startswith(b.id) for cid in g.get(1, 0).citations)
+    assert g.get(0, 1).ok
+    assert not g.get(1, 1).ok and g.get(1, 1).answer == G.NOT_FOUND and "$1.1 billion" in g.get(1, 1).note
+    assert not g.get(0, 2).ok                                        # nothing in the passages: refused, not guessed
+    assert all(("Alpha" in u) != ("Beta" in u) for u in seen if "Passages" in u)   # rows never share passages
+    path = G.to_excel(g, c, str(tmp_path / "grid.xlsx"))
+    wb = load_workbook(path)
+    ws = wb["Grid"]
+    assert ws["B2"].value.startswith("$12.4 billion [S") and ws["B2"].hyperlink.target == "https://www.sec.gov/alpha"
+    assert ws["C3"].value == G.NOT_FOUND and ws["C3"].comment is not None
+    assert wb["Sources"]["A2"].value.startswith("S") and "Alpha Corp" in wb["Sources"]["B2"].value
+    assert G.check_cell("$12.4 billion", ["S9.p1"], {"S1.p1": "x"}).startswith("cites passages")

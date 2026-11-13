@@ -36,11 +36,11 @@ refuses its absence), **Gap** (not built).
 | M12 | Scenarios: stacked base/bull/bear rows, one live switch, never Excel Scenario Manager | CFI | Enforced (`model_gaps`), Built (`scenario_book`, `scenario_summary`) |
 | M13 | Sensitivities: one- and two-way tables on the key outputs | CFI | Built for DCF value (WACC × g, WACC × exit); Gap: general driver tables (IRR, EPS, leverage) |
 | M14 | Historicals sourced to the filing; restatements flagged; gaps left empty | M&I; AlphaSense Table Explorer | Built (`spreading.py`, EDGAR XBRL with accession per cell) |
-| M15 | Build at the shortest period and roll up; quarters sum to the year; LTM = FY + YTD − prior YTD; calendarisation | WSP; BIWS | Gap (annual only) |
-| M16 | Share count: treasury stock method for options/RSUs, if-converted for convertibles | Macabacus; WSP | Gap |
-| M17 | SBC not added back in FCF unless dilution is modelled; leases (IFRS 16 / ASC 842) treated consistently in EBITDA, EV and FCF | BIWS; M&I | Gap |
+| M15 | Build at the shortest period and roll up; quarters sum to the year; LTM = FY + YTD − prior YTD; calendarisation | WSP; BIWS | Built (`spread_quarters`, `ltm`, `calendarize`: quarters reconcile to the 10-K); Gap: a quarterly forecast model |
+| M16 | Share count: treasury stock method for options/RSUs, if-converted for convertibles | Macabacus; WSP | Built (`diluted_shares`) |
+| M17 | SBC not added back in FCF unless dilution is modelled; leases (IFRS 16 / ASC 842) treated consistently in EBITDA, EV and FCF | BIWS; M&I | Built for SBC (expense in EBITDA, not added back in UFCF) and lease liabilities in the bridge; Gap: a lease schedule |
 | M18 | Deferred taxes and NOLs; intangibles amortisation; minority interest and equity-method investments | Macabacus; M&I | Gap |
-| M19 | Sanity checks: growth declines over time; margins and growth rarely rise together; capex ≥ D&A for growers; ΔNWC within history; FCF conversion reasonable; output vs consensus | BIWS; ICAEW review | Gap (alerts tab) |
+| M19 | Sanity checks: growth declines over time; margins and growth rarely rise together; capex ≥ D&A for growers; ΔNWC within history; FCF conversion reasonable; output vs consensus | BIWS; ICAEW review | Built (`alerts`: OK / REVIEW outside the master check); Gap: ΔNWC vs history, consensus comparison |
 | M20 | Cover lists qualifications and weaknesses; version log; every schedule printable | FAST 2.06; CFI | Gap |
 | M21 | Independent recompute of key outputs | ICAEW (self-review catches 34–69% of errors) | Built in tests; Gap: the engine writes no X7 recompute sidecar |
 
@@ -52,7 +52,7 @@ refuses its absence), **Gap** (not built).
 | V2 | DCF from integrated statements; UFCF = EBIT(1−t) + D&A − capex − ΔNWC; mid-year; Gordon primary, exit multiple cross-check with implied multiple and implied g | M&I; WSP; BIWS | Enforced / Built |
 | V3 | WACC: target or current structure held constant; unlever peer betas (median), relever; risk-free matched to duration; ERP and country risk from Damodaran's latest files; size premium only with a source; cost of debt at current yield | WSP; Damodaran | Built (build-up); Gap: live pulls of Damodaran ERP/betas and Treasury yields |
 | V4 | Terminal growth ≤ long-run nominal GDP (Damodaran: ≈ risk-free); show the terminal-value share of EV | Damodaran; WSP | Built (share shown); Gap: a check g ≤ risk-free |
-| V5 | EV → equity bridge: debt, preferred, NCI, leases, pensions; cash and non-operating assets; consistency between the multiple's denominator and the bridge | M&I | Partly built (debt, cash, one `other_claims`); Gap: itemised bridge |
+| V5 | EV → equity bridge: debt, preferred, NCI, leases, pensions; cash and non-operating assets; consistency between the multiple's denominator and the bridge | M&I | Built (itemised lines, carried into the sensitivity grids) |
 | V6 | Comps: 5–10 peers screened on business, financials and risk; LTM and NTM; calendarised; scrubbed of one-offs; median and interquartile range; NM below 0x or above 100x | WSP; BIWS | Built (`comps_table`); Gap: NTM/consensus, calendarisation, live data |
 | V7 | Precedents: screen on the target; LTM at announcement; unaffected date rules; premiums over 1/7/30/90-day windows; options outstanding at the offer price | Macabacus; BIWS | Built (`precedents_table`); Gap: premium windows, unaffected-date logic |
 | V8 | LBO: sources & uses, tranches (revolver, TLA, TLB, notes), cash sweep in seniority order, IRR/MOIC, exit = entry multiple, ability-to-pay back-solve as the floor | Macabacus; BIWS; WSP | Gap (biggest valuation gap) |
@@ -64,15 +64,16 @@ refuses its absence), **Gap** (not built).
 
 | # | Rule | Source | Status |
 |---|---|---|---|
+| D0 | No dead space: a short exhibit gets a so-what panel to the bottom of the body; thin content is still flagged | consulting practice | Enforced (P20 dead space and panel substance) |
 | D1 | Action titles: one full-sentence message per slide; the titles read as the storyline | Minto; consulting practice | Enforced (P11, P12) |
 | D2 | Ghost deck first: storyline of titles before slides | Conn & McLean; consulting practice | Built (storyline pass) |
 | D3 | Every number on a slide traces to a fact; chart data matches text | Macabacus Deck Check; WSO | Enforced (P13, P14) |
 | D4 | Source line with as-of date on every quantitative slide | IB and consulting practice | Enforced (P13); Gap: sources are free text, not linked to research passages or workbook cells |
 | D5 | Chart form follows the comparison (component, item, time series, frequency, correlation) | Zelazny | Partly (chart checks) |
-| D6 | Units consistent ($mm vs $bn), multiples as 12.5x, NM, dashes for missing data, rounded valuation outputs ($24–25, not $24.37) | IB practice | Gap |
-| D7 | IB page types: situation overview, company profile (strip), comps table, precedents table, football field, DCF output, sources & uses, accretion/dilution, ownership, share price performance | M&I; CFI; WSP | Gap (no IB archetypes; no floating-bar chart) |
+| D6 | Units consistent ($mm vs $bn), multiples as 12.5x, NM, dashes for missing data, rounded valuation outputs ($24–25, not $24.37) | IB practice | Built for model pages (`fmt_value`); Gap: rounding of headline price ranges |
+| D7 | IB page types: situation overview, company profile (strip), comps table, precedents table, football field, DCF output, sources & uses, accretion/dilution, ownership, share price performance | M&I; CFI; WSP | Built: football field (native floating bars with a price marker), comps, precedents, DCF bridge, stacked sensitivities, scenarios, weighting, statement summary; Gap: company profile, sources & uses, accretion/dilution, share price chart |
 | D8 | Same metric identical on every page; executive summary matches the body | WSO; Macabacus | Gap: deck-wide consistency check |
-| D9 | Deck numbers come from the workbook's named outputs, not re-typed | IB practice | Gap |
+| D9 | Deck numbers come from the workbook's named outputs, not re-typed | IB practice | Built (`finance_pages`: computed pages inserted untouched; W-facts cite sheet and cell) |
 
 ## 4. Research (research engine)
 
@@ -86,7 +87,7 @@ refuses its absence), **Gap** (not built).
 | R6 | Driver tree: what drives the market, revenue and costs; which 2–3 drivers matter most | consulting practice; Damodaran *Narrative and Numbers* | Built (engine method); Gap: a check that the report has the section |
 | R7 | Conflicts between sources shown as a range with the choice explained | consulting practice | Built (method); Gap: automatic conflict detection per metric |
 | R8 | Hand-off: research facts flow into decks and assumption books with their passage ids | Hebbia Matrix 2.0 | Built (report to the next engine, `assumption_source`, `facts`); Gap: forge source lines linked to passages |
-| R9 | Grid extraction: the same questions across many documents (CIM screening, diligence trackers) | Hebbia Matrix; AlphaSense Generative Grid | Gap |
+| R9 | Grid extraction: the same questions across many documents (CIM screening, diligence trackers) | Hebbia Matrix; AlphaSense Generative Grid | Built (`grid`: per-row retrieval, cited cells, numbers checked, "Not found" instead of guesses; Excel with links and quotes) |
 | R10 | Table stitching across filings with restatement flags | AlphaSense Table Explorer | Partly (XBRL spreading) |
 
 ## 5. Data we can use without a licence
