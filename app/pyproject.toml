@@ -26,4 +26,4 @@ meshpool = "meshpool_harness.cli:main"
 include = ["meshpool_harness*", "engines*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite"]
+"*" = ["*.yaml", "*.json", "*.md", "*.svg", "*.txt", "*.html", "*.sqlite", "*.js", "*.css", "*.png", "*.woff2", "*.xlsx", "*.pptx", "*.pdf"]

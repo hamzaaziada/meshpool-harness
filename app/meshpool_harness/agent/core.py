@@ -477,6 +477,7 @@ class Agent:
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
+        self.save()                                  # the thread and its message survive a restart mid-turn
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0], "images": [im.get("name", "image") for im in images or []],
                    "plan": self.plan})
         turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -814,7 +815,7 @@ class Agent:
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
                     "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + name.split('__')[1].replace("_", " ") + ")")
-            kind, title = "mcp", f"{nice}{' ' + target if target else ''}?"
+            kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
