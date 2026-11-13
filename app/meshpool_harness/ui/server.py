@@ -492,6 +492,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/skills":
                 from meshpool_harness import skills as SK
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+            if u.path == "/api/plugins":
+                from meshpool_harness import plugins as PL
+                return self._send(200, PL.api_view())
             if u.path == "/api/skill":
                 from meshpool_harness import skills as SK
                 sk = SK.get(q.get("id", ""))
@@ -701,6 +704,9 @@ class Handler(BaseHTTPRequestHandler):
                     SK.folder().mkdir(parents=True, exist_ok=True)
                     reveal(SK.folder())
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+            if u.path == "/api/plugins":
+                from meshpool_harness import plugins as PL
+                return self._send(200, PL.api_action(self._json()))
             if u.path == "/api/file":
                 b = self._json()
                 return self._send(200, W.write_file(b.get("root", ""), b.get("path", ""), b.get("text", "")))
