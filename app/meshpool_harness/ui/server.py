@@ -813,6 +813,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
+            if m:
+                s, b = A.get(m.group(1)), self._json()
+                s.reply(b.get("question_id", ""), b.get("answers"))
+                return self._send(200, s.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
