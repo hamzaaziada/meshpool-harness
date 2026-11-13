@@ -60,6 +60,7 @@ code,pre,kbd{font-family:var(--mono)}
 .brandrow{display:flex;align-items:center;gap:8px;padding:2px 4px}
 .brandrow img{height:22px;width:auto;display:block}
 .brandrow .sp{flex:1}
+.beta{font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--ink-3);border:1px solid var(--line);border-radius:999px;padding:1px 7px;line-height:16px}
 .newbtn{display:flex;align-items:center;gap:8px;width:100%;border:1px solid var(--line);background:var(--raise);border-radius:var(--r-m);padding:8px 10px;font-weight:500;color:var(--ink)}
 .newbtn:hover{border-color:var(--ink-3)}
 .newbtn kbd,.kbd{margin-left:auto;font-size:11px;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--surface)}

@@ -111,6 +111,7 @@ function shell() {
       <div class="side-top">
         <div class="brandrow">
           <img class="mlogo" src="${logoSrc()}" alt="Meshpool">
+          <span class="beta" title="Meshpool is in beta. Some things may not work yet; tell us when they don't.">Beta</span>
           <span class="sp"></span>
           <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
         </div>
@@ -1223,7 +1224,7 @@ async function renderSection(sec) {
     draw(await api("/api/assistant")); return;
   } else if (sec === "about") {
     const a = await api("/api/about");
-    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}</h3>
+    b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
       <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <h3 style="font-size:15px;margin:16px 0 6px">License</h3><pre class="lic">${esc(a.notice)}</pre>

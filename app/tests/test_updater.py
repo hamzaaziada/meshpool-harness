@@ -11,11 +11,11 @@ def test_version_compare():
 
 
 def test_check_reports_newer(monkeypatch):
-    body = json.dumps({"tag_name": "v99.0.0", "html_url": "u", "assets": [{"name": "Meshpool.dmg", "browser_download_url": "d"}]})
+    body = json.dumps({"tag_name": "v0.99.0", "html_url": "u", "assets": [{"name": "Meshpool.dmg", "browser_download_url": "d"}]})
     monkeypatch.setattr(U, "_get", lambda *a, **k: io.BytesIO(body.encode()))
     U._CACHE.clear()
     v = U.check(force=True)
-    assert v["ok"] and v["newer"] and v["latest"] == "99.0.0"
+    assert v["ok"] and v["newer"] and v["latest"] == "0.99.0"
 
 
 def test_check_offline_is_a_message_not_a_crash(monkeypatch):
@@ -58,3 +58,12 @@ def test_install_replaces_code_and_keeps_vendor(monkeypatch, tmp_path):
     assert '2.0.0' in (app / "meshpool_harness" / "__init__.py").read_text()
     assert (app / "meshpool_harness" / "new.py").exists()
     assert (app / "vendor" / "keep").read_text() == "k"
+
+
+def test_old_2x_releases_are_not_updates_for_the_beta(monkeypatch):
+    rels = [{"tag_name": "v2.6.0"}, {"tag_name": "v0.1.0"}, {"tag_name": "v0.2.0", "draft": True}]
+    monkeypatch.setattr(U, "_get", lambda *a, **k: io.BytesIO(json.dumps(rels).encode()))
+    monkeypatch.setattr(U.MH, "__version__", "0.1.0")
+    U._CACHE.clear()
+    v = U.check(force=True)
+    assert v["ok"] and not v["newer"], v
