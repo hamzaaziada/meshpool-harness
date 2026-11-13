@@ -25,6 +25,11 @@ function termShellPicker() {
   const cur = store("term_shell") || sh.default;
   return `<select id="tshell" aria-label="Shell" onchange="store('term_shell', this.value)">${Object.entries(sh.shells).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
 }
+// "deepseek-v4.1-flash" reads as "DeepSeek V4.1 Flash"; unknown ids are tidied the same way.
+function modelName(id) {
+  const known = {deepseek: "DeepSeek", gpt: "GPT", claude: "Claude", gemini: "Gemini", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
+  return String(id || "").split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
+}
 function connMsg(d) {
   d = String(d || "");
   if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
@@ -500,9 +505,9 @@ function cfg() { // the settings that apply to the next message: the open thread
 function renderBar() {
   const c = cfg(); const h = harness(c.harness);
   $("#app").classList.toggle("planning", !!c.plan);
-  const modelLabel = h.models === "meshpool" ? (c.model || "Model") : (c.model || "Harness default");
+  const modelLabel = h.models === "meshpool" ? (c.model ? modelName(c.model) : "Model") : (c.model ? modelName(c.model) : "Agent's own model");
   $("#cbar").innerHTML = `
-    <button class="pill" id="hPill" title="Harness: the agent that does the work">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
+    <button class="pill" id="hPill" title="Agent: who does the work in this thread">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
     <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
     <button class="pill" id="aPill" title="${esc(MODES[c.mode]?.[1] || "")}">${ICON.shield}<span class="lbl">${esc(MODES[c.mode]?.[0] || "Supervised")}</span>${ICON.chev}</button>
     <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
@@ -665,16 +670,16 @@ function popKey(k) {
 function harnessPop(anchor) {
   const cur = cfg().harness;
   const other = S.appMode === "code" ? "cowork" : "code";
-  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For cowork"], ["sub", "Your subscriptions"], [other, "Other harnesses"]];
+  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], ["sub", "Your subscriptions"], [other, "Other agents"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
     return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.available === false ? " · not installed" : h.subscription && !h.signed_in ? " · sign in first" : ""}<span class="od">${esc(h.description || "")}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
-  }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage harnesses</span></button></div>`;
+  }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage agents</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
     if (harness(id).subscription && !harness(id).signed_in) { openSettings("harnesses"); return; }
-    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("A thread keeps its harness. Starting a new thread with " + harness(id).name + "."); store("harness_" + S.appMode, id); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
+    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("Each thread keeps its agent. Started a new thread with " + harness(id).name + "."); store("harness_" + S.appMode, id); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
     S.draft.harness = id; store("harness_" + S.appMode, id); renderBar(); renderHero();
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
@@ -693,10 +698,10 @@ function modelPop(anchor) {
     <div class="pf" style="display:flex;gap:4px"><button class="opt" id="mRefresh" style="flex:1">${ICON.refresh}<span class="ol">Refresh list</span></button><button class="opt" id="mManage" style="flex:1">${ICON.gear}<span class="ol">Endpoint and key</span></button></div>`, {width: 400});
   const draw = () => {
     const q = $("#mq").value.trim().toLowerCase();
-    const rows = M.models.filter(m => !q || m.id.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q));
+    const rows = M.models.filter(m => !q || m.id.toLowerCase().includes(q) || modelName(m.id).toLowerCase().includes(q) || m.provider.toLowerCase().includes(q));
     const favs = rows.filter(m => M.favorites.includes(m.id));
     const byP = {}; rows.forEach(m => (byP[m.provider] = byP[m.provider] || []).push(m));
-    const row = m => `<button class="opt" data-id="${esc(m.id)}"><span class="ol">${esc(m.id)}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span></button>`;
+    const row = m => `<button class="opt" data-id="${esc(m.id)}"><span class="ol" title="${esc(m.id)}">${esc(modelName(m.id))}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span></button>`;
     let html = "";
     if (M.error) html += `<div class="pe">${esc(M.error)}</div>`;
     if (favs.length) html += `<div class="grp">Favorites</div>` + favs.map(row).join("");
@@ -754,6 +759,7 @@ function renderHero() {
     ["Make a short PowerPoint deck", "Make a 6-slide PowerPoint deck on why engineering teams should track AI spend per team."],
     ["Read a scanned PDF", "Read the scanned PDF in this folder and turn it into a clean Word document with the same headings and tables."],
     ["Research a question", "Research this and give me a short answer with sources: "],
+    ["Analyse a spreadsheet", "Analyse the spreadsheet in this folder: the main trends, anything unusual, and a short summary."],
   ] : [
     ["Explain this codebase", "Give me a tour of this codebase: what it does, how it is structured, and where to start."],
     ["Find and fix a bug", "Run the tests, find what fails, and fix it."],
@@ -1000,7 +1006,7 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = !!S.panel && innerWidth < 1440 && innerWidth > 980 && !S.keepSide;
+  const want = !!S.panel && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
@@ -1233,7 +1239,7 @@ function panelPreview(body) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Harnesses"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 function openSettings(sec = "general") {
   closePop();
   $(".scrim")?.remove();
@@ -1309,7 +1315,7 @@ async function renderSection(sec) {
     $("#apSteps").onchange = () => { if (($("#apSteps").value === "1") !== !!S.steps) toggleSteps(); };
   } else if (sec === "personal") {
     const a = await api("/api/assistant");
-    b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every harness reads these at the start of each new thread, so you do not repeat yourself.</p>
+    b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new thread, so you do not repeat yourself.</p>
       <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
@@ -1363,14 +1369,14 @@ async function renderSection(sec) {
     $("#updCheck").onclick = async () => { RES("updRes").className = "res"; RES("updRes").textContent = "Checking..."; updatePanel(await checkUpdate(true)); };
   } else if (sec === "web") {
     const keys = ["BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL"];
-    b.innerHTML = `${close}<h3>Web search</h3><p class="lead">Every harness can search the web, read pages and PDFs, and research a question across many sources at once, without opening a browser. It works with no setup through free search engines. For heavy research, add a key below: searches get faster and are never limited.</p>
+    b.innerHTML = `${close}<h3>Web search</h3><p class="lead">Every agent can search the web, read pages and PDFs, and research a question across many sources at once, without opening a browser. It works with no setup through free search engines. For heavy research, add a key below: searches get faster and are never limited.</p>
       ${keys.map(k => { const f = get(k); return `<label class="field"><span>${esc(f.label)}</span>${f.key === "SEARXNG_URL" ? `<input data-wk="${k}" spellcheck="false" value="${esc(f.value || "")}" placeholder="http://localhost:8888">` : `<input data-wk="${k}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) : "Not set"}">`}<small>${esc(f.help)}</small></label>`; }).join("")}
       <div style="display:flex;gap:8px"><button class="btn primary" id="wSave">Save</button><button class="btn" id="wTest">Test search</button></div><div class="res" id="wRes"></div>`;
     $("#wSave").onclick = async () => { const values = {}; $$("[data-wk]", b).forEach(x => { if (x.value.trim() || x.dataset.wk === "SEARXNG_URL") values[x.dataset.wk] = x.value.trim(); }); try { await post("/api/settings", {values}); RES("wRes").className = "res ok"; RES("wRes").textContent = "Saved."; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
     $("#wTest").onclick = async () => { RES("wRes").className = "res"; RES("wRes").textContent = "Searching..."; try { const r = await post("/api/web-test"); RES("wRes").className = "res " + (r.ok ? "ok" : "bad"); RES("wRes").textContent = r.ok ? `Search works: ${r.count} results in ${r.seconds} s, first: ${r.first}` : r.error; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
   } else if (sec === "connectors") {
     const draw = rows => {
-      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every harness (Meshpool, Pi and Hermes) can then use them as tools: CRM records, leads, tasks, issues, pages, pull requests and more. Sign-in happens in your browser; Meshpool keeps the access on this computer only.</p>
+      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools: CRM records, leads, tasks, issues, pages, pull requests and more. Sign-in happens in your browser; Meshpool keeps the access on this computer only.</p>
         <ul class="rows2" id="cnl">${[...rows].sort((a, z) => (z.connected - a.connected) || (z.custom - a.custom)).map(c => `<li data-id="${esc(c.id)}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">Connected</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : ""}<small>${esc(c.description)}</small>
           ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
           ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}</span>
@@ -1430,7 +1436,7 @@ async function renderSection(sec) {
     return;
   } else if (sec === "skills") {
     await loadSkills();
-    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Claude and Codex, and Meshpool shares them with every harness.</p>
+    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Claude and Codex, and Meshpool shares them with every agent.</p>
       <div class="dropzone" id="skDrop" tabindex="0" role="button">Drop a skill folder, a .zip or a SKILL.md here, or click to choose files<input type="file" id="skFile" multiple hidden></div>
       <ul class="rows2" id="skl"></ul>
       <details><summary class="btn" style="display:inline-block">Write a new skill</summary>
@@ -1479,11 +1485,11 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Harnesses</h3><p class="lead">A harness is the agent behind a thread. Meshpool Auto picks the best one for each task from benchmark results. Meshpool Code, Meshpool Work, Pi and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Any agent that speaks the Agent Client Protocol (ACP) can plug in too.</p>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. Meshpool Auto picks a good one for each task. Meshpool Code, Meshpool Work, Pi, Codex and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m ? " (made for " + (h.mode === "code" ? "Code" : "Work") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
-      <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop a harness .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
+      <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
     $$("[data-rm]", b).forEach(x => x.onclick = () => act({remove: x.dataset.rm}));
     $$("[data-login]", b).forEach(x => x.onclick = async () => {
@@ -1501,7 +1507,7 @@ async function renderSection(sec) {
     hd.ondrop = async e => { e.preventDefault(); hd.classList.remove("over"); for (const f of e.dataTransfer.files) await act({text: await f.text()}); };
   } else if (sec === "mcp") {
     const m = await api("/api/mcp");
-    b.innerHTML = `${close}<h3>MCP servers</h3><p class="lead">Tools every harness can use. Browser use and computer use are built in. New threads pick up changes.</p>
+    b.innerHTML = `${close}<h3>MCP servers</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New threads pick up changes.</p>
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><code>${esc(s.target)}</code></span></li>`).join("")}</ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
@@ -1607,7 +1613,7 @@ async function importPanel(box, onDone) {
       const r = await post("/api/import", {keys});
       await loadSkills(); S.connCache = null;
       $("#impRes", box).className = "res " + (r.errors.length ? "bad" : "ok");
-      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"} and ${r.mcp.length} MCP server${r.mcp.length === 1 ? "" : "s"}. Every harness can use them in new threads.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
+      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"} and ${r.mcp.length} MCP server${r.mcp.length === 1 ? "" : "s"}. Every agent can use them in new threads.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
       box.dataset.done = "1"; onDone?.(r);
     } catch (e) { $("#impRes", box).className = "res bad"; $("#impRes", box).textContent = e.message; }
     $("#impGo", box).disabled = false;
