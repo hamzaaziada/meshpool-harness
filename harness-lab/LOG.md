@@ -188,6 +188,20 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Office jobs no longer write into the app's install folder.
 - Regression on the mock: e2e 124/124, journeys 20/20, ui_crawl 45/45, crawl_all 31/31, midrun 99/99, unit 149.
 
+## 2026-11-13: 0.1.0 beta UX pass
+
+- Version restarts at 0.1.0 (beta label in the app); the updater never offers the old 2.x releases to a 0.x copy.
+- Stop: built-in agents can cut short model calls, MCP tools and web calls; Pi and Hermes are ended if they ignore
+  Stop for 3 s; Hermes is told a stopped request is over. testkit/stop_check.py 28/28.
+- Independent review found 5 broken and ~20 confusing things; all P0 and most P1 fixed (key checked before saving,
+  Esc stops from anywhere, no step stuck on "running", "Stopped before running", queued messages kept on interrupt,
+  mode switch returns to your thread, feedback and Undo for archive, plain approval and settings wording).
+- Onboarding: three numbered steps, nothing pre-ticked, import on finish. Motion: calm, layout-safe animations.
+  Mac and Windows: thin steady scrollbars (Windows' scrollbars shifted the layout), window fits the screen.
+- Regression on the mock: e2e 124/124, journeys 20/20, ui_crawl 45/45, midrun 99/99, crawl_all 31/31 (579 clicks),
+  stop_check 28/28, jitter 20/20 (twice), update_flow 7/7, modes/about/intr/v24 no page errors, unit 150.
+- Not tested here: the real Mac and Windows windows (this container is Linux; Safari's engine cannot be installed).
+
 ## 2026-11-13: office track picked up; forge deck/workbook quality layer
 
 - Forge (`app/engines/forge`, docs in `docs/deck-engine/`): validators for 19 deck rules (P1-P19) and 13 workbook

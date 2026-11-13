@@ -45,9 +45,11 @@ async function watch(p) {
     check("setup step lists both subscriptions", (await p.$$eval("#oSubs li", x => x.length)) === 2);
     await p.screenshot({path: out + "/u2-setup.png"});
     await p.click("#impNone"); await p.click("#impAll");
-    await p.click("#impGo"); await p.waitForFunction(() => /Imported/.test(document.querySelector("#impRes")?.textContent || ""), null, {timeout: 30000});
-    check("import from onboarding works", /Imported \d+ skills? and \d+ MCP/.test(await p.textContent("#impRes")), await p.textContent("#impRes"));
-    await p.click("#oFinish"); await p.waitForTimeout(800);
+    // Start imports what is ticked (there is no separate Import button in onboarding)
+    await p.click("#oFinish"); await p.waitForFunction(() => !document.querySelector("#onb"), null, {timeout: 30000}).catch(() => {});
+    const imp = await p.evaluate(() => api("/api/skills").then(r => r.skills.map(s => s.name)));
+    check("import from onboarding works (Start imports the ticked items)", imp.includes("claude-skill") && imp.includes("codex-skill"), imp.join(","));
+    await p.waitForTimeout(800);
     check("onboarding closes into the app", !(await p.$("#onb")) && !!(await p.$(".hero")));
     check("onboarding: no page errors", !errs.length, errs.join(" | "));
     await p.close();

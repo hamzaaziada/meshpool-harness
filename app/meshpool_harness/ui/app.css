@@ -8,7 +8,7 @@
 
 :root{
   --bg:#F6F8FB; --surface:#FFFFFF; --side:#EEF2F7; --raise:#FFFFFF; --hover:#E4EAF2; --sel:#DCE6F5;
-  --ink:#0E1726; --ink-2:#465468; --ink-3:#7B8798; --line:#DCE3EC; --line-2:#E9EEF4;
+  --ink:#0E1726; --ink-2:#465468; --ink-3:#5E6A7B; --line:#DCE3EC; --line-2:#E9EEF4;
   --pool:#1670E8; --pool-ink:#FFFFFF; --pool-soft:#E3EDFC; --focus:#1670E8;
   --add:#1B7F4B; --add-bg:#E3F4EA; --del:#B4332A; --del-bg:#FBE6E3; --warn:#A86A0C; --warn-bg:#FBF0DC;
   --shadow:0 1px 2px rgba(14,23,38,.06),0 8px 24px rgba(14,23,38,.08);
@@ -20,7 +20,7 @@
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#0B1018; --surface:#111822; --side:#0D131C; --raise:#16202C; --hover:#18222F; --sel:#1A2A40;
-  --ink:#E6EDF6; --ink-2:#A3B1C4; --ink-3:#6F7E92; --line:#1F2A38; --line-2:#18212D;
+  --ink:#E6EDF6; --ink-2:#A3B1C4; --ink-3:#8D9BB0; --line:#1F2A38; --line-2:#18212D;
   --pool:#5EA8FF; --pool-ink:#06111F; --pool-soft:#13263D; --focus:#7DB8FF;
   --add:#5FD19A; --add-bg:#0F2A1D; --del:#FF8B80; --del-bg:#33171A; --warn:#F0B95A; --warn-bg:#2E2412;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.45);
@@ -28,7 +28,7 @@
 }}
 :root[data-theme="dark"]{
   --bg:#0B1018; --surface:#111822; --side:#0D131C; --raise:#16202C; --hover:#18222F; --sel:#1A2A40;
-  --ink:#E6EDF6; --ink-2:#A3B1C4; --ink-3:#6F7E92; --line:#1F2A38; --line-2:#18212D;
+  --ink:#E6EDF6; --ink-2:#A3B1C4; --ink-3:#8D9BB0; --line:#1F2A38; --line-2:#18212D;
   --pool:#5EA8FF; --pool-ink:#06111F; --pool-soft:#13263D; --focus:#7DB8FF;
   --add:#5FD19A; --add-bg:#0F2A1D; --del:#FF8B80; --del-bg:#33171A; --warn:#F0B95A; --warn-bg:#2E2412;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.45);
@@ -60,6 +60,7 @@ code,pre,kbd{font-family:var(--mono)}
 .brandrow{display:flex;align-items:center;gap:8px;padding:2px 4px}
 .brandrow img{height:22px;width:auto;display:block}
 .brandrow .sp{flex:1}
+.beta{font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--ink-3);border:1px solid var(--line);border-radius:999px;padding:1px 7px;line-height:16px}
 .newbtn{display:flex;align-items:center;gap:8px;width:100%;border:1px solid var(--line);background:var(--raise);border-radius:var(--r-m);padding:8px 10px;font-weight:500;color:var(--ink)}
 .newbtn:hover{border-color:var(--ink-3)}
 .newbtn kbd,.kbd{margin-left:auto;font-size:11px;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:0 5px;background:var(--surface)}
@@ -91,14 +92,17 @@ code,pre,kbd{font-family:var(--mono)}
 .th:hover .more,.th.on .more{display:inline-grid}
 .th:hover .tm{display:none}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
-.dot.run{background:var(--pool);animation:pulse 1.2s infinite}
+.dot.run{background:var(--ink-3);animation:mp-breathe 1.6s ease-in-out infinite}
+.dot.done{background:var(--pool);box-shadow:0 0 0 3px var(--pool-soft);animation:mp-lightup .5s ease-out both}
+@keyframes mp-breathe{0%,100%{opacity:.25}50%{opacity:1}}
+@keyframes mp-lightup{0%{opacity:0;transform:scale(.4)}60%{opacity:1;transform:scale(1.25)}100%{transform:scale(1)}}
 .dot.wait{background:var(--warn)}
 @keyframes pulse{50%{opacity:.35}}
 .empty-side{color:var(--ink-3);font-size:12.5px;padding:8px}
 .updbar{display:flex;align-items:center;gap:8px;margin:6px 8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--hover);color:var(--ink);font-weight:500;font-size:12.5px;text-align:left;cursor:pointer}
 .updbar[hidden]{display:none}
-.updbar .dot{width:7px;height:7px;border-radius:50%;background:var(--accent,#2563eb);flex:none}
-.updbar .go{margin-left:auto;color:var(--accent,#2563eb);font-weight:600}
+.updbar .dot{width:7px;height:7px;border-radius:50%;background:var(--pool);flex:none}
+.updbar .go{margin-left:auto;color:var(--pool);font-weight:600}
 .updbox{margin:14px 0 4px;padding:12px;border:1px solid var(--line);border-radius:var(--r-s)}
 .side-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px;align-items:center}
 .side-foot button{flex:1;display:flex;align-items:center;gap:8px;border:0;background:none;border-radius:var(--r-s);padding:7px 8px;color:var(--ink-2);font-weight:500}
@@ -273,7 +277,7 @@ button.chip:hover{border-color:var(--ink-3);color:var(--ink)}
 .term-out{flex:1;margin:0;padding:10px 12px;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-all;background:var(--bg);overflow:auto}
 .term-out .cmd{color:var(--pool)}
 .term-out .rc{color:var(--ink-3)}
-.term-in{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line-2);align-items:center}
+.term-in{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--line-2);align-items:center}
 .term-in input{flex:1;border:1px solid var(--line);border-radius:var(--r-s);padding:6px 9px;font:12.5px var(--mono);background:var(--surface)}
 .preview{flex:1;border:0;width:100%;background:#fff}
 .gitbox{padding:12px;display:flex;flex-direction:column;gap:12px}
@@ -343,14 +347,15 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .bigbtn{background:var(--ink);color:var(--bg);border:0;border-radius:999px;padding:10px 22px;font-weight:500}
 .bigbtn:hover{background:var(--pool);color:var(--pool-ink)}
 .bigbtn:disabled{opacity:.45}
-.toasts{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:70;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
+.toasts{position:fixed;bottom:96px;right:20px;left:auto;transform:none!important;align-items:flex-end;transform:translateX(-50%);z-index:70;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
 .toast{background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:13px;z-index:70;box-shadow:var(--shadow)}
 .ctx{position:fixed;z-index:55;background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);box-shadow:var(--shadow);padding:4px;min-width:170px}
 .ctx button{display:block;width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 10px;font-size:13px;color:var(--ink)}
 .ctx button:hover{background:var(--hover)}
 .ctx button.danger{color:var(--del)}
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide (QA: 250px at 1024) */
-@media (max-width:1280px) and (min-width:981px){.panel{width:min(var(--pw,460px),33vw)}.app:not(.noside):has(>.panel:not([hidden])){--sw:220px}}
+.app.autoside{--sw:0px}.app.autoside .side{display:none}
+@media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),max(340px,32vw))}}
 @media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow)}}
 @media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:268px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 10px 10px}}
 
@@ -360,7 +365,8 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 @container main (max-width:1180px){.tbtn span{display:none}.tbtn{padding:6px}.topbar .chip.use{display:none}}
 @container main (max-width:860px){.topbar .title{max-width:none}}
 #pPill .lbl{flex:none}
-@container main (max-width:760px){#hPill .lbl,#aPill .lbl,#pPill .lbl{display:none}}
+@container main (max-width:760px){#aPill .lbl,#pPill .lbl{display:none}#hPill .lbl,#mPill .lbl{max-width:120px}}
+@container main (max-width:520px){#hPill .lbl{display:none}}
 @container main (max-width:640px){#topbar .chip:not(#projChip):not(#brChip){display:none}}
 
 .dlg-scrim{z-index:80}
@@ -432,7 +438,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .scope{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .scopeopt{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;cursor:pointer}
 .scopeopt b{font-size:13.5px}.scopeopt small{font-size:12px;color:var(--ink-3);line-height:1.35}
-.scopeopt:hover{border-color:var(--ink-3)}.scopeopt[aria-checked="true"]{border-color:var(--accent,#2563eb);box-shadow:0 0 0 1px var(--accent,#2563eb) inset}
+.scopeopt:hover{border-color:var(--ink-3)}.scopeopt[aria-checked="true"]{border-color:var(--pool);box-shadow:0 0 0 1px var(--pool) inset}
 #onbPerm{max-width:640px}
 @media (max-width:640px){.scope{grid-template-columns:1fr}}
 
@@ -456,3 +462,77 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 #onbSetup{max-width:640px}
 
 .imgview{padding:12px;overflow:auto;flex:1}.imgview img{max-width:100%;height:auto;border-radius:6px;border:1px solid var(--line);background:#fff}
+
+/* ---------- motion: short, calm, never moves the layout (opacity and transform only) ---------- */
+:root{--ease:cubic-bezier(.2,.7,.2,1)}
+@keyframes mp-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes mp-pop{from{opacity:0;transform:scale(.97) translateY(-2px)}to{opacity:1;transform:none}}
+@keyframes mp-fade{from{opacity:0}to{opacity:1}}
+@keyframes mp-rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes mp-toast{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.col>.enter{animation:mp-in .18s var(--ease) both}
+.pop{animation:mp-pop .12s var(--ease) both;transform-origin:top left}
+.scrim{animation:mp-fade .14s ease-out both}
+.scrim>.modal,.scrim>.dlg{animation:mp-rise .18s var(--ease) both}
+.toast{animation:mp-toast .18s var(--ease) both}
+.panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
+.onb-card{animation:mp-in .22s var(--ease) both}
+.th,.tbtn,.pill,.btn,.iconbtn,.side-foot button,.newbtn,.scopeopt,.updbar{transition:background-color .12s ease,color .12s ease,border-color .12s ease,box-shadow .12s ease}
+.btn:active,.bigbtn:active,.pill:active,.newbtn:active{transform:scale(.98)}
+.modesw [data-mode]{transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
+
+/* ---------- scrollbars: the same thin, steady scrollbars on Windows and Mac ----------
+   Windows draws full-width scrollbars that appear and vanish as content grows, which shifts the whole column
+   sideways. Reserve their space (scrollbar-gutter) and draw thin ones everywhere. */
+.side-list,.conv,.pbody,.mbody,.pop .pl,.cw,.impl{scrollbar-gutter:stable}
+*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:var(--ink-3)}
+::-webkit-scrollbar-corner{background:transparent}
+
+.onb-steps{display:flex;align-items:center;gap:6px;margin:-14px 0 18px}
+.onb-steps span{width:22px;height:4px;border-radius:4px;background:var(--line);transition:background-color .2s ease}
+.onb-steps span.on{background:var(--pool)}
+.onb-steps small{margin-left:6px;color:var(--ink-3);font-size:12px}
+.field>.keyrow{display:flex;gap:6px;align-items:center}
+.field>.keyrow input{flex:1;width:auto}
+
+.turnfoot .stat{display:none}.app.steps .turnfoot .stat{display:inline}
+.appr.done{padding:8px 12px;display:flex;gap:10px;align-items:baseline;opacity:.8}
+.appr.done b{font-weight:500}.appr.done .note{margin:0}
+
+.toasts{pointer-events:auto}.toast{display:flex;align-items:center;gap:12px}
+.toast .tact{background:none;border:0;color:var(--pool);font-weight:600;padding:0;cursor:pointer}
+.mbody.loading{opacity:.55;transition:opacity .12s ease}
+#oKey::placeholder,#sKey::placeholder{font-family:var(--body,inherit)}
+
+.search .qx{border:0;background:none;color:var(--ink-3);padding:0 2px;display:flex;cursor:pointer}.search .qx svg{width:14px;height:14px}
+.search:has(#q:not(:placeholder-shown)) .kbd{display:none}
+.tool .st:empty{display:none}
+.msg-ai pre{margin-bottom:8px}.msg-ai pre:last-child{margin-bottom:0}
+.msg-ai pre code{display:block}
+
+.th .tt small.tf{display:block;font-size:11px;color:var(--ink-3);line-height:1.2}
+.pill.on#pPill{background:var(--pool-soft);color:var(--pool);border-color:var(--pool)}
+.app.planning .composer{box-shadow:0 0 0 1px var(--pool) inset}
+.onb .res:empty{display:none}
+
+.flink{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--surface);color:var(--pool);border-radius:6px;padding:0 6px;font:inherit;font-size:.95em;cursor:pointer;vertical-align:baseline}
+.flink svg{width:13px;height:13px}
+.kdot.bad{background:var(--warn,#C2410C)}
+#tshell{border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);font-size:12px;padding:3px 4px}
+
+.modesw [data-mode].busy::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--pool);margin-left:6px;display:inline-block;animation:pulse 1.2s ease-in-out infinite}
+.jumpdown{position:absolute;right:24px;bottom:12px;z-index:5;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;padding:5px 12px;font-size:12.5px;box-shadow:var(--shadow);cursor:pointer}
+.jumpdown[hidden]{display:none}
+.conv{position:relative}
+.onb .bigbtn{background:var(--pool);color:var(--pool-ink)}
+.pop .opt .od{white-space:normal}
+.statgrid+table th,.utable th{text-align:left}
+
+.work .rows .appr.done{border:0;background:none;box-shadow:none;margin:0;padding:3px 12px 5px 35px;font-size:12.5px;color:var(--ink-3);display:flex;gap:6px}
+.work .rows .appr.done b{font-weight:400}
+@container main (max-width:860px){.topbar #projChip{display:none}}
+@container main (max-width:720px){.topbar #branchChip{display:none}}

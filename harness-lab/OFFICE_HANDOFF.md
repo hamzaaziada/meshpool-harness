@@ -59,8 +59,8 @@ leadership-ready (action titles, real charts, correct numbers). Meshpool Work's 
 
 ## Open issues found, not yet fixed
 
-1. **Work mode opens on Hermes, not Meshpool Work.** `harnesses/__init__.py` makes Hermes the default for cowork.
-   Decide on evidence which should be the default.
+1. ~~Work mode opens on Hermes~~ Done 13 Nov: Meshpool Work is now the default for Work (it passed every practical
+   office task and was faster than Hermes). Hermes stays in the harness picker.
 2. **Meshpool Work's instructions say "for notes, memos and reports write Markdown"** (`agent/core.py`,
    `WORK_SYSTEM`). Users expect Word. In the proposal test it did make a .docx because the prompt named one, but an
    unspecific "write me a report" will likely produce .md. Point it at `make_document` / python-docx instead.

@@ -32,7 +32,7 @@ import meshpool_harness as MH
 from meshpool_harness import config as C
 
 REPO = os.environ.get("MESHPOOL_REPO", "hamzaaziada/meshpool-harness")
-API = os.environ.get("MESHPOOL_UPDATE_API") or f"https://api.github.com/repos/{REPO}/releases/latest"
+API = os.environ.get("MESHPOOL_UPDATE_API") or f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 SRC = os.environ.get("MESHPOOL_UPDATE_SRC") or f"https://codeload.github.com/{REPO}/tar.gz/refs/tags/{{tag}}"
 APP = C.APP                                  # the folder that holds meshpool_harness/
 CODE_DIRS = ("meshpool_harness", "engines", "profiles", "defaults")   # what a code update replaces; vendor/ is kept
@@ -66,6 +66,12 @@ def check(force: bool = False) -> dict:
             rel = json.loads(r.read())
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "current": cur, "error": f"Could not reach GitHub to check for updates ({type(e).__name__})."}
+    rel = _pick(rel if isinstance(rel, list) else [rel], cur)
+    if not rel:
+        v = {"ok": True, "current": cur, "latest": cur, "tag": "", "newer": False, "notes": "", "kind": kind(),
+             "url": f"https://github.com/{REPO}/releases", "assets": []}
+        _CACHE.update(t=time.time(), v=v)
+        return v
     tag = rel.get("tag_name") or ""
     v = {"ok": True, "current": cur, "latest": tag.lstrip("v"), "tag": tag, "newer": _ver(tag) > _ver(cur),
          "notes": (rel.get("body") or "")[:4000], "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
@@ -74,6 +80,15 @@ def check(force: bool = False) -> dict:
                     for a in rel.get("assets") or []]}
     _CACHE.update(t=time.time(), v=v)
     return v
+
+
+def _pick(releases: list, cur: str) -> dict | None:
+    """The newest published release this copy may move to. Releases from before the 0.1.0 renumbering (2.x) are
+    older than every 0.x beta, so a 0.x copy never treats them as updates."""
+    ok = [r for r in releases if isinstance(r, dict) and not r.get("draft") and r.get("tag_name")]
+    if _ver(cur)[0] < 1:
+        ok = [r for r in ok if _ver(r["tag_name"])[0] < 2]
+    return max(ok, key=lambda r: _ver(r["tag_name"]), default=None)
 
 
 def _asset(v: dict) -> dict | None:
@@ -151,7 +166,13 @@ def install() -> dict:
         t = Path(tmp)
         tgz = _download(SRC.replace("{tag}", v["tag"]), t / "src.tgz")
         with tarfile.open(tgz) as tf:
-            tf.extractall(t, filter="data")
+            try:
+                tf.extractall(t, filter="data")
+            except TypeError:                         # Python without the tarfile filter: check paths ourselves
+                for m in tf.getmembers():
+                    if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or m.issym() or m.islnk():
+                        return {"ok": False, "error": "The release download looks unsafe. Nothing was changed."}
+                tf.extractall(t)
         src = next((d for d in t.iterdir() if d.is_dir() and (d / "app" / "meshpool_harness").is_dir()), None)
         if not src:
             return {"ok": False, "error": "The release download did not contain the app. Nothing was changed."}

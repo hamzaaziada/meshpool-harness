@@ -23,6 +23,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from meshpool_harness import pace as PACE
 from meshpool_harness import config as C
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -98,7 +99,7 @@ Rules
 - If the user denies a tool call, do not retry it. Take another approach or ask.
 - Long outputs are cut. The full text is saved to a file you can read.
 - Tools whose names start with mcp__ come from MCP servers the user connected. Use them when they fit.
-- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. For research, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler. Use Markdown code blocks for code."""
 
@@ -163,9 +164,23 @@ Rules
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
 - Never print or store secrets such as API keys or tokens.
 - If the user denies a tool call, do not retry it. Take another approach or ask.
-- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. For research, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler."""
+
+
+def _retry_text(msg: str, attempt: int) -> str:
+    """One calm line per retry instead of the raw network error."""
+    m = msg.lower()
+    if "http 0" in m or "connection" in m or "timed out" in m:
+        why = "Can't reach the model right now"
+    elif "429" in m or "rate" in m:
+        why = "The model is busy"
+    elif "5" in m[:8] or "http 5" in m:
+        why = "The model service had a problem"
+    else:
+        why = "The model call didn't go through"
+    return f"{why}. Trying again ({attempt + 1} of 5)…"
 
 
 class Interrupted(Exception):
@@ -289,6 +304,7 @@ class Agent:
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
         self.max_steps = max_steps
+        self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
         self.created = time.time()
@@ -302,8 +318,12 @@ class Agent:
     def system_prompt(self) -> str:
         from meshpool_harness.config import find_bash
         bash = find_bash()
-        shell = "bash" + (f" ({bash})" if os.name == "nt" and bash else "") if bash else \
-            ("cmd.exe (no bash found: write Windows commands)" if os.name == "nt" else "sh")
+        if os.name == "nt":
+            shell = (("bash (Git Bash). For Windows tools, run them through powershell -NoProfile -Command \"...\" "
+                      "or cmd /c \"...\"") if bash else
+                     "PowerShell (no bash on this computer: write PowerShell commands; cmd /c \"...\" also works)")
+        else:
+            shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
         if V3:
@@ -340,7 +360,34 @@ class Agent:
 
     # ---------- public -----------------------------------------------------------------------------------------
     def stop(self):
+        self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
+
+    def _exists(self, path: str) -> bool:
+        try:
+            return self.ws._path(path, write=True).exists()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _wait(self, fn, *a, **kw):
+        """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
+        second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
+        box: dict = {}
+
+        def run():
+            try:
+                box["v"] = fn(*a, **kw)
+            except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
+                box["e"] = e
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        while t.is_alive():
+            t.join(0.15)
+            if self._stop:
+                raise Interrupted()
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
     def steer(self, text: str, images: list | None = None):
         """Add to the request while the agent works. It reads this before its next step."""
@@ -401,11 +448,20 @@ class Agent:
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
+            wrapped = False
             for step in range(self.max_steps):
                 self._check_stop()
                 self._take_inbox()
                 self._maybe_compact()
-                msg, streamed = self._chat(turn)
+                if self.pace_deadline and not wrapped and step and (
+                        time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
+                    wrapped = True                      # a quick request ran long: answer now, no more tools
+                    self.messages.append({"role": "user", "content": PACE.WRAP})
+                    self._no_tools = True
+                try:
+                    msg, streamed = self._chat(turn)
+                finally:
+                    self._no_tools = False
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 content = msg.get("content") or ""
                 keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
@@ -453,11 +509,24 @@ class Agent:
                                                     "Send a message to continue."})
         except (Interrupted, KeyboardInterrupt):
             self._repair()
+            added = [t for t, _ in getattr(self, "_inbox", [])]
             self._take_inbox()                       # keep what the user added; the next turn sees it
-            self.emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
+            self.emit({"type": "interrupted", "text": "Stopped. " + (
+                "What you added wasn't answered yet; it goes along with your next message." if added
+                else "Send a message to continue.")})
         except Exception as e:
             self._repair()
-            self.emit({"type": "error", "text": f"{e}"})
+            msg = raw = str(e)
+            if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
+                msg = ("Couldn't reach the model. Check your internet connection, or the endpoint in Settings, then "
+                       "send your message again.")
+            elif re.search(r"HTTP 429", msg):
+                msg = "The model is busy right now. Wait a minute, then send your message again."
+            elif re.search(r"HTTP 5\d\d", msg):
+                msg = "The model service had a problem. Send your message again in a moment."
+            if msg != raw:
+                msg += f" ({raw[:120]})"               # the detail, for support and the command line
+            self.emit({"type": "error", "text": msg})
         finally:
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
             self.save()
@@ -521,7 +590,8 @@ class Agent:
         model = self.current_model()
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
-        body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(), "tool_choice": "auto"}
+        body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
+                "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
@@ -552,7 +622,7 @@ class Agent:
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
-                    resp, streamed = self._post(base, key, body, stream)
+                    resp, streamed = self._wait(self._post, base, key, body, stream)
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -594,7 +664,7 @@ class Agent:
                         continue
                 if attempt >= 5:
                     raise
-                self.emit({"type": "status", "text": f"Model call failed ({msg[:120]}). Retrying."})
+                self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
@@ -631,6 +701,7 @@ class Agent:
                                               "X-Harness-Task-Id": self.id, "session_id": self.id})
         timeout = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         got_text = False
+        gen = getattr(self, "_gen", 0)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 if not stream:
@@ -639,7 +710,8 @@ class Agent:
                 def tee(lines):
                     nonlocal got_text
                     for raw in lines:
-                        self._check_stop()
+                        if self._stop or getattr(self, "_gen", 0) != gen:
+                            raise Interrupted()
                         line = raw.decode("utf-8", "replace").strip()
                         if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]"):
                             try:
@@ -671,6 +743,9 @@ class Agent:
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
+        if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
+                self._diff(name, args) == "(no change)":
+            return True, ""                    # nothing would change: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
         if group in self.always:
             return True, ""
@@ -685,8 +760,16 @@ class Agent:
             kind, title, detail = "edit", f"{'Edit' if name == 'edit' else 'Write'} {args.get('path', '')}?", \
                 self._diff(name, args)
         else:
-            kind, title = "mcp", f"Use the MCP tool {name.split('__', 2)[-1]} from '{name.split('__')[1]}'?"
-            detail = json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+            tool = name.split('__', 2)[-1]
+            target = str(args.get("filename") or args.get("path") or args.get("url") or "")[:80]
+            nice = {"make_document": "Make a Word document", "make_pdf": "Make a PDF", "make_spreadsheet":
+                    "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
+                    "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
+                                                              + name.split('__')[1].replace("_", " ") + ")")
+            kind, title = "mcp", f"{nice}{' ' + target if target else ''}?"
+            body = args.get("markdown") or args.get("request") or args.get("content")
+            detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
+                      else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
         decision, note = self.approve(kind, title, detail)
         if decision == "always":
             self.always.add(group)
@@ -737,21 +820,23 @@ class Agent:
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
             elif is_mcp:
-                out, err = self.mcp.call(name, args)
+                out, err = self._wait(self.mcp.call, name, args)
                 ok = not err
             elif name == "fetch_url":
-                out = self._fetch(args["url"], args.get("start", 0), args.get("max_chars", 15000), bool(args.get("links")))
+                out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
+                                 bool(args.get("links")))
             elif name == "web_research":
                 from meshpool_harness import web as WEB
                 try:
-                    out = WEB.research(args.get("question", ""), args.get("queries"), args.get("max_sources", 6),
+                    out = self._wait(WEB.research, args.get("question", ""), args.get("queries"), args.get("max_sources", 6),
                                        args.get("recency", ""), args.get("site", ""))
                 except WEB.WebError as e:
                     raise ToolError(str(e))
             elif name == "office_task":
                 out, ok = self._office(args)
             elif name == "web_search":
-                out = self._search(args["query"], args.get("max_results", 8), args.get("recency", ""), args.get("site", ""))
+                out = self._wait(self._search, args["query"], args.get("max_results", 8), args.get("recency", ""),
+                                 args.get("site", ""))
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))

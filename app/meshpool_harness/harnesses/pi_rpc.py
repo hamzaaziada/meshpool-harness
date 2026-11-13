@@ -500,9 +500,17 @@ class PiAgent:
                 cmd["images"] = [{"type": "image", "data": im["data"], "mimeType": im.get("mime") or "image/png"}
                                  for im in images[:6]]
             self._request(cmd, timeout=120)
-            while not self._done.wait(0.5):
+            while not self._done.wait(0.3):
                 if not self._alive:
+                    if self._stop:
+                        break
                     raise PiError("Pi exited during the turn. See runs/harness-logs/pi.log.")
+                if self._stop and time.time() - getattr(self, "_stop_t", 1e18) > 3:
+                    # Pi ignored the abort (a tool that does not stop): end it and what it started. The next message
+                    # restarts Pi and continues the same session.
+                    self.close()
+                    self._p, self.resume = None, True
+                    break
             final = "".join(self._text)
             self._flush_text()
             if self._stop:
@@ -538,6 +546,7 @@ class PiAgent:
 
     def stop(self):
         self._stop = True
+        self._stop_t = time.time()
         if self._p and self._p.poll() is None:
             try:
                 self._write({"type": "abort"})

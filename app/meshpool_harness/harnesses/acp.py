@@ -15,6 +15,7 @@ Meshpool UI events:
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -80,6 +81,20 @@ def _text_of(content) -> str:
     return "\n".join(x for x in out if x)
 
 
+ACP_KIND = {"execute": "bash", "read": "read_file", "edit": "edit", "search": "grep", "fetch": "fetch_url",
+            "delete": "delete", "move": "move"}
+
+
+def _raw_text(raw) -> str:
+    """Command output an agent reports outside the content list (Codex sends it here)."""
+    if isinstance(raw, dict):
+        for k in ("formatted_output", "aggregated_output", "output", "stdout", "result", "text"):
+            if raw.get(k):
+                return str(raw[k])
+        return ""
+    return str(raw or "")
+
+
 def _label(u: dict) -> tuple[str, str]:
     """Tool label for the UI: MCP tools read as 'make_deck (meshpool office)'; others use the ACP kind."""
     title = str(u.get("title") or "")
@@ -87,6 +102,11 @@ def _label(u: dict) -> tuple[str, str]:
     if title.startswith("mcp__"):
         parts = title.split("__")
         return parts[-1], parts[1].replace("_", " ") if len(parts) > 2 else ""
+    if title.startswith("mcp.") and title.count(".") >= 2:     # Codex: mcp.<server>.<tool>
+        _, server, tool = title.split(".", 2)
+        return tool, server.replace("_", " ").replace("-", " ")
+    if kind in ACP_KIND:                                         # the same step names as the built-in agents
+        return ACP_KIND[kind], re.sub(r"^(terminal|execute|bash)\s*:\s*", "", title)
     if kind in ("other", "tool") and title:
         head, _, rest = title.partition(":")
         return (head.strip(), rest.strip()) if rest else (title[:60], "")
@@ -211,6 +231,9 @@ class ACPAgent:
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
             prepare_hermes()
+        elif m.get("prepare") == "codex":
+            from meshpool_harness.harnesses import prepare_codex
+            prepare_codex()
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -236,7 +259,8 @@ class ACPAgent:
         threading.Thread(target=self._reader, daemon=True).start()
         init = self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
-            "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False},
+            "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False,
+                                   "_meta": {"terminal_output": True}},   # Codex then sends command output
             "clientInfo": {"name": "meshpool", "title": "Meshpool", "version": _VERSION}}, timeout=300)
         self.agent_info = init.get("agentInfo") or {}
         self.capabilities = init.get("agentCapabilities") or {}
@@ -385,6 +409,8 @@ class ACPAgent:
         if kind == "agent_message_chunk":
             c = u.get("content") or {}
             if c.get("type") == "text" and c.get("text"):
+                if re.match(r"\s*Warning: Model metadata for .* not found", c["text"]):
+                    return                         # Codex's own start-up notice about a custom model, not a reply
                 self._text.append(c["text"])
                 self._emit({"type": "text_delta", "text": c["text"]})
         elif kind == "agent_thought_chunk":
@@ -392,6 +418,7 @@ class ACPAgent:
             if c.get("type") == "text" and c.get("text"):
                 self._emit({"type": "thought", "text": c["text"]})
         elif kind == "tool_call":
+            self._turn_tools = getattr(self, "_turn_tools", 0) + 1
             self._flush_text(has_tools=True)
             tid = u.get("toolCallId") or uuid.uuid4().hex
             self._tools[tid] = u
@@ -402,8 +429,14 @@ class ACPAgent:
                 self._tool_end(tid, u)
         elif kind == "tool_call_update":
             tid = u.get("toolCallId")
+            meta = u.get("_meta") or {}
             if tid in self._tools:
-                self._tools[tid].update({k: v for k, v in u.items() if v is not None})
+                t = self._tools[tid]
+                if (meta.get("terminal_output") or {}).get("data"):
+                    t["_term_out"] = t.get("_term_out", "") + str(meta["terminal_output"]["data"])
+                if meta.get("terminal_exit"):
+                    t["_term_exit"] = meta["terminal_exit"].get("exit_code")
+                t.update({k: v for k, v in u.items() if v is not None and k != "_meta"})
             if u.get("status") in ("completed", "failed"):
                 self._tool_end(tid, self._tools.get(tid, u))
         elif kind == "plan":
@@ -417,12 +450,16 @@ class ACPAgent:
 
     def _tool_end(self, tid, u):
         out = _text_of(u.get("content"))
+        if not out.strip() or re.fullmatch(r"\s*\[terminal [^\]]*\]\s*", out):
+            out = u.get("_term_out") or _raw_text(u.get("rawOutput")) or ""
+        if u.get("_term_exit") not in (None, 0):
+            u = dict(u, status="failed")
         self._emit({"type": "tool_end", "id": tid, "name": _label(u)[0], "ok": u.get("status") != "failed",
                     "denied": False, "output": out[:6000]})
 
     def _flush_text(self, has_tools=False):
         if self._text:
-            txt = "".join(self._text)
+            txt = re.sub(r"^\s*Warning: Model metadata for [^\n]*not found[^\n]*\n*", "", "".join(self._text))
             self._text = []
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
 
@@ -437,9 +474,10 @@ class ACPAgent:
         if self.loaded_from and self.capabilities.get("loadSession"):
             try:
                 self._replaying = True
-                self._request("session/load", {"sessionId": self.loaded_from, "cwd": str(self.root),
-                                               "mcpServers": mcp}, timeout=180)
+                rl = self._request("session/load", {"sessionId": self.loaded_from, "cwd": str(self.root),
+                                                    "mcpServers": mcp}, timeout=180)
                 self.acp_session = self.loaded_from
+                self._ask_mode((rl or {}).get("modes") or {})
                 self._reloaded = True
                 return
             except ACPError:
@@ -454,11 +492,33 @@ class ACPAgent:
                                + (self.manifest.get("setup") or "Run its setup command in a terminal."))
             raise
         self.acp_session = r["sessionId"]
+        self._ask_mode(r.get("modes") or {})
         ms = r.get("models") or {}
         if ms.get("availableModels"):
             self.available_models = [{"id": m.get("modelId"), "name": m.get("name") or m.get("modelId")}
                                      for m in ms["availableModels"] if m.get("modelId")]
         self._apply_model()
+
+    def _ask_mode(self, modes: dict):
+        """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
+        applies the user's permission setting (Supervised, Auto-accept edits, Full access) the same way for every
+        harness. Without this Codex, for one, edits files on its own."""
+        ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
+        self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
+        want = (self.manifest.get("modes") or {}).get(self.mode)        # e.g. Codex: a mode per Meshpool setting
+        pick = want if want in ids else next((i for w in ("default", "ask", "untrusted") for i in ids
+                                              if i.lower() == w), None)
+        if pick and pick != modes.get("currentModeId"):
+            try:
+                self._request("session/set_mode", {"sessionId": self.acp_session, "modeId": pick}, timeout=30)
+                self.mode_now = pick
+            except ACPError:
+                pass
+
+    def apply_mode(self):
+        """The user changed Supervised / Auto-accept edits / Full access: tell a harness that has its own modes."""
+        if self.acp_session and self._p and self._p.poll() is None and getattr(self, "modes_seen", None):
+            self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 
     def _apply_model(self):
         if not (self.model and self.acp_session):
@@ -519,6 +579,7 @@ class ACPAgent:
         self.usage["calls"] += 1
         try:
             self._emit({"type": "model_start"})
+            self._turn_tools = 0
             self._ensure_session()
             prompt = [{"type": "text", "text": body}]
             if images:
@@ -535,6 +596,16 @@ class ACPAgent:
                 r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
             self._reloaded = False
             final = "".join(self._text)
+            if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
+                    and getattr(self, "_turn_tools", 0) == 0):
+                # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
+                self._text = []
+                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": [
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}]})
+                final = "".join(self._text)
+                if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
+                    self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
+                                                          "answer. Try sending your message again."})
             self._flush_text()
             stop = r.get("stopReason", "end_turn")
             if _auth_failure(final):
@@ -572,6 +643,7 @@ class ACPAgent:
                 pass
             before = getattr(self, "_before", None)
             if before is not None:
+                self._kill_new_children(before)          # now, and again in a moment for anything just starting
                 threading.Timer(1.0, self._kill_new_children, args=(before,)).start()
 
     def reset(self):

@@ -23,7 +23,7 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
   const waitState = async (id, want, ms = 60000) => { const t = Date.now(); while (Date.now() - t < ms) { if (want.includes(await st(id))) return true; await p.waitForTimeout(250); } return false; };
   const log = () => p.evaluate(() => (S.cur?.log || []).map(e => ({type: e.type, text: e.text || "", steer: !!e.steer})));
   // the reply to an interrupt: an assistant message after the last "Interrupted" note that answers the new text
-  const answeredAfterInterrupt = q => p.evaluate(q => { const l = S.cur?.log || []; const i = l.map(e => /Interrupted/.test(e.text || "")).lastIndexOf(true); return i >= 0 && l.slice(i).some(e => e.type === "assistant" && (e.text || "").includes(q.slice(0, 8)) || e.type === "assistant" && /stopped your previous request/.test(e.text || "")); }, q);
+  const answeredAfterInterrupt = q => p.evaluate(q => { const l = S.cur?.log || []; const i = l.map(e => /Interrupted|Stopped the previous request/.test(e.text || "")).lastIndexOf(true); return i >= 0 && l.slice(i).some(e => e.type === "assistant" && (e.text || "").includes(q.slice(0, 8)) || e.type === "assistant" && /stopped your previous request/.test(e.text || "")); }, q);
   const newIn = async (hid, kind, mode) => {
     await p.evaluate(([k]) => { if (S.appMode !== k) setAppMode(k); newThread(); }, [kind]);
     await p.evaluate(([h, m]) => { S.draft.harness = h; S.draft.mode = m; renderBar(); }, [hid, mode]);
@@ -59,8 +59,8 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
     check(T("the add-on reaches the agent"), (await log()).some(e => e.type === "assistant" && /color blue/.test(e.text)), JSON.stringify((await log()).filter(e => e.type !== "text_delta").slice(-3)));
     // 4. Interrupt button with empty box, then with text
     await send("long task please"); await waitState(id, ["working"]); await p.waitForTimeout(4000);
-    await p.fill("#input", ""); await p.click("#intrBtn"); await p.waitForTimeout(800);
-    check(T("Interrupt with an empty box keeps the task running"), (await st(id)) === "working");
+    await p.fill("#input", ""); await p.waitForTimeout(300);
+    check(T("Send now is off with an empty box, and the task keeps running"), (await p.$eval("#intrBtn", b => b.disabled)) && (await st(id)) === "working");
     await p.fill("#input", "what is the time"); t0 = Date.now(); await p.click("#intrBtn");
     for (let i = 0; i < 60 && !(await answeredAfterInterrupt("what is the time")); i++) await p.waitForTimeout(500);
     check(T("Interrupt button answers the new message"), await answeredAfterInterrupt("what is the time"), Date.now() - t0);
