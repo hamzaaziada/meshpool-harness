@@ -105,7 +105,7 @@ def start_job(body: dict) -> dict:
         kw["start_new_session"] = True
     stdout = open(jdir / "result.json", "w", encoding="utf-8")
     stderr = open(jdir / "stderr.log", "w", encoding="utf-8")
-    proc = subprocess.Popen(cmd, cwd=str(APP), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, **kw)
+    proc = subprocess.Popen(cmd, cwd=str(jdir), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, **kw)
     meta = {"id": jid, "request": request, "engine": engine or "auto", "workdir": workdir,
             "files": [Path(f).name for f in files], "model": env.get("MH_MODEL", "deepseek-v4.1-flash"),
             "started": time.time(), "ended": None, "status": "running", "exit": None, "pid": proc.pid}
