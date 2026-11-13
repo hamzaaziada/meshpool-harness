@@ -475,6 +475,7 @@ class Session:
         acp = self.harness["type"] in ("acp", "pi")
         meta = read_meta(self.id)
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
+                "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models")},

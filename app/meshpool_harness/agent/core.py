@@ -757,7 +757,7 @@ class Agent:
                     "Build a spreadsheet", "make_deck": "Make a PowerPoint deck", "convert_document": "Convert a file",
                     "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + name.split('__')[1].replace("_", " ") + ")")
-            kind, title = "mcp", f"{nice}{' ' + target if target else ''}?"
+            kind, title = ("doc" if args.get("markdown") else "mcp"), f"{nice}{' ' + target if target else ''}?"
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
