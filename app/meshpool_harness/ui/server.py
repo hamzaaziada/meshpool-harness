@@ -298,12 +298,25 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection() -> dict:
+def test_connection(values: dict | None = None) -> dict:
+    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
     C.load_into_env(override=True)
     from meshpool_harness.cli import ping
-    if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-        return {"ok": False, "detail": "No API key saved yet."}
-    return ping()
+    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")}
+    try:
+        for k, v in (values or {}).items():
+            if k in keep and str(v).strip():
+                os.environ[k] = str(v).strip()
+        if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+            return {"ok": False, "detail": "No API key saved yet."}
+        return ping()
+    finally:
+        if values:
+            for k, v in keep.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 def route_preview(body: dict) -> dict:
@@ -535,7 +548,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
             if u.path == "/api/test":
-                return self._send(200, test_connection())
+                return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
                 from meshpool_harness import updater as UP
                 return self._send(200, UP.check(force=bool(self._json().get("force"))))

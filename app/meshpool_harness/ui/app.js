@@ -189,7 +189,12 @@ function toggleSide() {
 }
 function globalKeys(e) {
   const m = isMac ? e.metaKey : e.ctrlKey;
-  if (e.key === "Escape") { closePop(); closeCtx(); const sc = $(".scrim:not(.dlg-scrim)"); if (sc && !$("#onb") && !$(".dlg-scrim")) sc.remove(); }
+  if (e.key === "Escape") {
+    // Esc closes the top-most thing that is open; with nothing open it stops the running task, wherever focus is.
+    const open = $("#pop") || $("#ctx") || $(".scrim") || $("#onb");
+    closePop(); closeCtx(); const sc = $(".scrim:not(.dlg-scrim)"); if (sc && !$("#onb") && !$(".dlg-scrim")) sc.remove();
+    if (!open && e.target?.id !== "input" && cfg().busy) { e.preventDefault(); stopNow(); }
+  }
   if (!m) return;
   const k = e.key.toLowerCase();
   if (k === "n" && !e.shiftKey) { e.preventDefault(); newThread(); }
@@ -827,7 +832,7 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); if (a) a.outerHTML = `<div class="note">${ev.decision === "no" || /deny|reject/.test(ev.decision) ? "Denied." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
+    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? "Denied." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
@@ -838,12 +843,13 @@ function applyEv(ev) {
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
     case "error": closeGroup(); add(esc(ev.text), "note bad"); break;
-    case "interrupted": closeGroup(); add(esc(ev.text), "note warn"); break;
+    case "interrupted": settleSteps("stopped"); closeGroup(); add(esc(ev.text), "note warn"); break;
     case "checkpoint": {
       const t = (ev.turns || [])[0];
       if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
+      settleSteps("");
       closeGroup();
       const u = ev.turn || {};
       const foot = add(u.calls ? `${u.calls} call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} in · ${fmt(u.out)} out` : "", "turnfoot");
@@ -857,6 +863,10 @@ function applyEv(ev) {
       }
       break; }
   }
+}
+// A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
+function settleSteps(label) {
+  for (const d of Object.values(S.cur?.tools || {})) { const st = $(".st.run", d); if (st) { st.className = "st"; st.textContent = label; } }
 }
 function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel("diff", true); });
@@ -907,6 +917,7 @@ function progressSteps() {
   for (const e of turn) {
     if (e.type === "tool_start") tools[e.id] = {text: `${e.label || e.name}${e.summary ? " " + e.summary : ""}`, status: "in_progress"};
     if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = e.ok ? "completed" : "failed";
+    if (e.type === "interrupted" || e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = e.type === "interrupted" ? "stopped" : "completed";
   }
   return {kind: "steps", items: Object.values(tools)};
 }
@@ -927,7 +938,7 @@ function panelProgress(body) {
   const users = threadLog().filter(e => e.type === "user");
   const skills = [...new Set(users.flatMap(u => (String(u.text).match(/\$[\w-]+/g) || [])))].filter(x => S.skills.some(k => "$" + k.name === x));
   body.innerHTML = `<div class="cw">
-    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? ` <span class="cwdone">Done</span>` : ""}</h4>
+    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? ` <span class="cwdone">Stopped</span>` : ` <span class="cwdone">Done</span>`) : ""}</h4>
       ${pr.items.length ? `<ol class="stepl">${pr.items.map(it => `<li class="${esc(it.status)}">${icon(it.status)}<span>${esc(it.text)}</span></li>`).join("")}</ol>` : `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`}
     </section>
     <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
@@ -1446,8 +1457,8 @@ function showOnboarding() {
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
       const values = {MESHPOOL_API_KEY: key}; if ($("#oBase").value.trim()) values.MESHPOOL_BASE_URL = $("#oBase").value.trim();
-      await post("/api/settings", {values});
-      const r = await post("/api/test");
+      const r = await post("/api/test", {values});      // check first; save only a key that works
+      if (r.ok) await post("/api/settings", {values});
       if (!r.ok) { res.className = "res bad"; res.textContent = "That key didn't work. Check that you copied all of it. (" + r.detail + ")"; $("#oGo").disabled = false; return; }
       await loadSettings(); await loadModels(true); renderBar();
       $("#onbKey").remove(); permStep(o);
@@ -1545,7 +1556,8 @@ function setupStep(o, prev) {
     setTimeout(tick, 3000);
   });
   importPanel($("#oImport", card));
-  $("#oFinish", card).onclick = async () => {        // ticked items are imported on the way out; no extra click
+  $("#oFinish", card).onclick = async () => {
+    store("onbDone", 1);        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
@@ -1600,7 +1612,8 @@ async function restartApp() {
   if (S.draft.project && !S.projects.some(p => p.path === S.draft.project) && S.draft.project !== S.defaultProject) S.draft.project = "";
   newThread();
   if (S.panel) renderPanel();
-  if (!S.settings.has_key) showOnboarding(); else { loadModels().then(renderBar); if (MP.desktop && !store("permsAsked")) permStep(); }
+  if (!S.settings.has_key) showOnboarding();
+  else { loadModels().then(renderBar); if (!store("onbDone") && !store("permsAsked")) permStep(); }
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000);
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
