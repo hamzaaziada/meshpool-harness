@@ -90,8 +90,9 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
 |---|---|
 | `app/` | Meshpool's source: the agent, the desktop app UI, the office engines, defaults and tests. |
 | `packaging/` | Build scripts, the Mac and Windows launchers, the Windows installer script, icons and the Hermes patch. |
-| `testkit/` | A mock model server and UI tests. |
-| `docs/` | [Building](docs/BUILDING.md) and [releasing](docs/RELEASING.md). |
+| `testkit/` | A mock model server, end-to-end and UI tests, and the real-model checks. See [JOURNEYS.md](testkit/JOURNEYS.md). |
+| `docs/` | [Benchmarks](docs/BENCHMARKS.md), [building](docs/BUILDING.md), [releasing](docs/RELEASING.md), [routing](docs/ROUTING.md); developer notes in `docs/dev/`. |
+| `harness-lab/` | Harness experiments: the [log](harness-lab/LOG.md), findings, benchmark drivers and summary results, and working notes. |
 
 To run from source during development:
 

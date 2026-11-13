@@ -205,4 +205,4 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 ## 2026-11-13: merged as 0.1.0 beta
 
 - Independent UX audits: 6.3, 6.6, 7.2, 7.2. All findings of the first three fixed. Audit 4 findings are open in
-  harness-lab/UX_OPEN_ISSUES.md (3 history/data issues first). Merged at the owner's request.
+  harness-lab/notes/UX_OPEN_ISSUES.md (3 history/data issues first). Merged at the owner's request.

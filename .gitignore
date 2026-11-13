@@ -14,3 +14,10 @@ mcp-health.json
 app/routing.csv
 harness-lab/bench/results/raw/
 app/vendor/
+# downloaded packages and runtime logs never belong in the repo
+*.whl
+app/timing.jsonl
+app/failures.csv
+app/mh_out/
+harness-lab/bench/results/patches/
+harness-lab/bench/results/transcripts/
