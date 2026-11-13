@@ -19,6 +19,8 @@ EXAMPLE = (ROOT / "engines/slides/examples/sample_deck.json").read_text()
 SYSTEM = f"""You write consulting-grade presentation decks as a JSON spec. A renderer owns all layout; you own the
 storyline and the words.
 
+Work only in the current folder, which is your output folder: write every file there and run every command from there. The build and check commands already work from it. Do not cd into or read Meshpool's own source folders.
+
 Process:
 1. Read inputs. Decide the storyline first: the one-sentence answer, then 3-5 supporting arguments, each a section.
 2. Write deck.json (schema below). Every content slide title is an action title: a full sentence stating the
