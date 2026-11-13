@@ -272,6 +272,14 @@ class Session:
                 # on with the old task. Say plainly that it was stopped; the note is hidden in the chat (after \u200b).
                 text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
                                "answer this message instead.")
+        if (getattr(self, "_was_stopped", False) and not interrupt and self.harness.get("type") == "acp"
+                and self.state not in ("working", "waiting")):
+            # After Stop, ACP agents (Hermes, the subscriptions) can pick the stopped request back up. Say plainly
+            # that it was stopped; the note is hidden in the chat (after \u200b).
+            text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                           "answer this message instead.")
+        if self.state not in ("working", "waiting"):
+            self._was_stopped = False
         if self.state in ("working", "waiting"):
             if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
                 self.agent.steer(self._body(text, images), images=images)
@@ -391,6 +399,7 @@ class Session:
         return r
 
     def stop(self):
+        self._was_stopped = True
         with self.lock:
             had = bool(self.queue)
             self.queue = []
