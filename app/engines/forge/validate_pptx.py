@@ -321,6 +321,21 @@ def _proportions(path: str, R: dict, failures: list):
                                       f"more than {Wd['max_row_air_in']}in past their text. A short table needs a "
                                       "different composition (beside its argument), not taller rows.", slide=n,
                                       shape=sh.name, fix_scope="renderer"))
+            if sh.name.startswith("ov_Panel") and sh.has_text_frame and sh.text_frame.text.strip():
+                tf = sh.text_frame                         # the so-what panel fills the body; its text must too
+                iw = Emu(sh.width).inches - Emu(tf.margin_left or 0).inches - Emu(tf.margin_right or 0).inches
+                ih = Emu(sh.height).inches - Emu(tf.margin_top or 0).inches - Emu(tf.margin_bottom or 0).inches
+                need = 0.0
+                for p in tf.paragraphs:
+                    if not p.text.strip():
+                        continue
+                    sz = 12.0                              # substance measured at body size: grown type is not
+                    need += wrap_lines(p.text, max(0.3, iw - 0.25), sz, f, 0.97) * sz * 1.2 / 72 + 0.06  # content
+                if ih > 1.2 and need < Wd.get("min_panel_fill", 0.2) * ih:
+                    failures.append(F("P20", "dead_space", f"Slide {n}, {sh.name}: the takeaway panel is "
+                                      f"{need / ih:.0%} text; the slide is thin. Add the evidence it is missing (a "
+                                      "breakdown, a comparison, the implication) or merge it with its neighbour.",
+                                      slide=n, shape=sh.name, measured=round(need / ih, 2)))
             if sh.has_chart:
                 ch = sh.chart
                 try:

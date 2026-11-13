@@ -1838,6 +1838,77 @@ def _grow(blocks, w, h, max_bump=2):
     return best
 
 
+PANEL_PAD = 0.18
+
+
+def _fill_text(blocks, w, h, max_bump=5):
+    """Grow text to use its box: up to max_bump points, then more space between paragraphs, while it fits 92%."""
+    import copy
+    best = copy.deepcopy(blocks)
+    steps = sorted({0} | {T[k] - T["body"] for k in ("head", "lead", "sub") if 0 < T[k] - T["body"] <= max_bump})
+    for bump in steps:                                     # sizes already on the deck's type scale (P4)
+        trial = copy.deepcopy(blocks)
+        for b in trial:
+            b["size"] = (T["head"] if b.get("bold") and not b.get("bullet") else T["body"]) + bump \
+                if b.get("size", T["body"]) in (T["body"], T["head"]) else b.get("size", T["body"])
+        if _need(trial, w) > 0.92 * h:
+            break
+        best = trial
+    for gap in (8, 10, 12, 14, 16):
+        trial = copy.deepcopy(best)
+        for b in trial[1:]:
+            b["space_before"] = max(b.get("space_before", 0), gap)
+        if _need(trial, w) > 0.92 * h:
+            break
+        best = trial
+    return best
+
+
+def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel"):
+    """The so-what panel: a shaded box that runs to the bottom of the body, holding the takeaway (bold, full width)
+    and the bullets (one or two columns), grown to fill it and centred. The text is written into the shaded shapes
+    themselves (they edit and move as one). Text that cannot fit goes to the notes."""
+    if h < 0.35 or not (lead or bullets):
+        return
+    iw, ih = w - 2 * PANEL_PAD, h - 0.24
+    two = len(bullets) >= 3 and iw > 6
+    if not two:
+        blocks, dropped = _trim_to_fit(lead + bullets, iw, ih, 10)
+        _cut_note(s, dropped)
+        box = _fill(sl, x, y, w, h, TC.BACKGROUND_2, name)
+        _shape_text(box, _fill_text(blocks, iw, ih), ctx, n, (x + PANEL_PAD, y + 0.12, iw, ih), MSO_ANCHOR.MIDDLE)
+        return
+    lh = 0.0
+    if lead:
+        lead = _fill_text(lead, iw, 0.3 * ih, 2)
+        lh = min(_need(lead, iw) + 0.18, 0.35 * h)
+    cw = w / 2
+    bh = h - lh
+    icw, ibh = cw - 1.5 * PANEL_PAD, bh - 0.24
+    cols = [bullets[: (len(bullets) + 1) // 2], bullets[(len(bullets) + 1) // 2:]]
+    fitted, dropped = [], []
+    for c in cols:
+        c2, d = _trim_to_fit(c, icw, ibh, 10)
+        fitted.append(c2)
+        dropped += d
+    _cut_note(s, dropped)
+    bump_ok = 0                                        # both columns grow by the same step, on the type scale
+    for bump in sorted({0} | {T[k] - T["body"] for k in ("head", "lead", "sub") if 0 < T[k] - T["body"] <= 5}):
+        if all(_need([dict(b, size=b.get("size", T["body"]) + bump) for b in c], icw) <= 0.92 * ibh for c in fitted):
+            bump_ok = bump
+        else:
+            break
+    fitted = [[dict(b, size=b.get("size", T["body"]) + bump_ok) for b in c] for c in fitted]
+    if lead:
+        top = _fill(sl, x, y, w, lh, TC.BACKGROUND_2, name + "Lead")
+        _shape_text(top, lead, ctx, n, (x + PANEL_PAD, y + 0.12, iw, lh - 0.12), MSO_ANCHOR.BOTTOM)
+    for i, c in enumerate(fitted):
+        cx = x + i * cw
+        box = _fill(sl, cx, y + lh, cw, bh, TC.BACKGROUND_2, f"{name}Col{i + 1}")
+        _shape_text(box, c, ctx, n, (cx + (PANEL_PAD if i == 0 else PANEL_PAD / 2), y + lh + 0.12, icw, ibh),
+                    MSO_ANCHOR.MIDDLE)
+
+
 def a_table_focus(ctx, s, sl, n):
     _header(ctx, s, sl, n)
     t = s["table"]
@@ -1868,48 +1939,47 @@ def a_table_focus(ctx, s, sl, n):
         ctx.carry_rows = None
         if side == float("inf"):
             side = None
+    side_t = None
+    if side and not as_chart:                              # grow the table for its column first; a table that still
+        base = t.get("size") or T["cell"]                  # fills little of the height goes full width with a panel
+        top = min(20, base + (5 if DENSITY["mode"] == "present" else 4))
+        for z in range(top, base - 1, -1):
+            need = _table(ctx, sl, n, dict(t, size=z, _pad=0.16), tx, y, tw, hgt, dry=True)
+            ctx.carry_rows = None
+            if need <= 0.9 * hgt:
+                side_t = dict(t, size=z) if z != base else dict(t)
+                break
+        if side_t is None or need < 0.55 * hgt:
+            side = None
     if as_chart or side:
         if as_chart:                                       # a small all-number table reads better as a chart
             _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
             ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
         else:                                              # short table: table left, its argument right
-            base = t.get("size") or T["cell"]
-            top = min(20, base + (5 if DENSITY["mode"] == "present" else 4))
-            for z in range(top, base, -1):                    # larger type before a block of air under the table
-                need = _table(ctx, sl, n, dict(t, size=z, _pad=0.16), tx, y, tw, hgt, dry=True)
-                ctx.carry_rows = None
-                if need <= 0.9 * hgt:
-                    t = dict(t, size=z)
-                    break
-            _table(ctx, sl, n, dict(t, _pad=0.16), tx, y, tw, hgt)
-        blocks = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
-                  if tk.get("text") else [])
-        blocks += [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
-                   for b in bullets]
-        _rule(sl, ax, y, aw, TC.TEXT_1, 0.75, "TakeawayRule")
-        _write(_box(sl, ax, y + 0.1, aw, hgt - 0.1, "Takeaways"), _fit(_grow(blocks, aw, hgt - 0.1), aw, hgt - 0.1, 11)[0],
-               ctx, n)
+            _table(ctx, sl, n, dict(side_t, _pad=0.16), tx, y, tw, hgt)
+        lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+                if tk.get("text") else [])
+        bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
+              for b in bullets]
+        _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
         return
-    # Full width (wide or long table): the bullets go in a measured band under the table, in one or two columns;
-    # what does not fit the band goes to the notes, never silently away.
-    cols, band = [], 0.0
-    if bullets:
-        bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 4, "prov": b.get("prov")}
-              for b in bullets]
-        cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
-        cw = (RIGHT - LEFT - GUT * (len(cols) - 1)) / len(cols)
-        cap = 0.32 * (bottom - y)
-        dropped = []
-        for i, c in enumerate(cols):
-            cols[i], d = _trim_to_fit(c, cw, cap, 11)
-            dropped += d
-        _cut_note(s, dropped)
-        band = max(_need(c, cw) for c in cols) + 0.04
-        bottom -= band + 0.18
+    # Full width (wide or long table): the table at its natural size, then the so-what panel down to the bottom of
+    # the body with the takeaway and bullets, grown to fill it. No dead block under a short table.
+    bottom_all = FOOT_RULE_Y - 0.04 - notes_h
+    lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+            if tk.get("text") else [])
+    bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 4, "prov": b.get("prov")}
+          for b in bullets]
+    reserve = 0.0
+    if lead or bl:
+        cw = (RIGHT - LEFT - 2 * PANEL_PAD - (GUT if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
+        half = bl[: (len(bl) + 1) // 2] if len(bl) >= 3 else bl
+        reserve = min(_need(lead, RIGHT - LEFT - 2 * PANEL_PAD) + _need(half, cw) + 0.5, 0.45 * (bottom_all - y))
+    bottom = bottom_all - reserve
     if not t.get("size") and len(t.get("rows") or []) <= 14:     # room to spare: a step up the type scale first
         base = T["cell"]
-        for z, pad in [(z, 0.16) for z in range(base + 4, base, -1)] + [(base, 0.16)]:
+        for z, pad in [(z, 0.16) for z in sorted({T["head"], T["body"], base}, reverse=True) if z >= base]:
             need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
             ctx.carry_rows = None
             if need <= 0.85 * (bottom - y):                 # margin for header wrapping the dry run cannot see
@@ -1919,17 +1989,8 @@ def a_table_focus(ctx, s, sl, n):
     if ctx.carry_rows:
         ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]), bullets=[],
                          title=_cont_title(s["title"]), _cont=True)
-    below = min(bottom + 0.04, y + gf.rendered_h + 0.14)
-    if tk.get("text"):
-        _write(_box(sl, LEFT, below, RIGHT - LEFT, 0.3, "role_subtitle_Takeaway"),
-               [{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "align": PP_ALIGN.CENTER,
-                 "prov": tk.get("prov")}], ctx, n)
-        below += tk_h
-    if cols:
-        _rule(sl, LEFT, below + 0.02, RIGHT - LEFT, TC.TEXT_1, 0.75, "TakeawayRule")
-        cw = (RIGHT - LEFT - GUT * (len(cols) - 1)) / len(cols)
-        for i, c in enumerate(cols):
-            _write(_box(sl, LEFT + i * (cw + GUT), below + 0.1, cw, band, f"Takeaways{i + 1}"), c, ctx, n)
+    ptop = min(bottom + 0.1, y + gf.rendered_h + 0.2)
+    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 
@@ -1969,23 +2030,18 @@ def a_chart_takeaway(ctx, s, sl, n):
         x, w = span(0, split - 1)
         bx, bw = span(split, 11)
         _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
-        _rule(sl, bx, BODY_Y, bw, TC.TEXT_1, 0.75, "TakeawayRule")
-        blocks_, dropped = _trim_to_fit(blocks_, bw, body_h - 0.1, 11)
-        _cut_note(s, dropped)
-        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), blocks_, ctx, n)
+        for b in blocks_:                                   # the panel grows the text itself, from the base sizes
+            b["size"] = T["head"] if b.get("bold") and not b.get("bullet") else T["body"]
+        _panel(ctx, s, sl, n, bx, BODY_Y, bw, body_h, [], blocks_)
         return
     lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
     cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
     cw = (RIGHT - colx(4) - GUT * (len(cols) - 1)) / len(cols)
     band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.04
     band = min(band, 0.45 * body_h)
-    cy = BODY_B - band
-    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.18)
-    _rule(sl, LEFT, cy - 0.08, RIGHT - LEFT, TC.TEXT_1, 0.75, "TakeawayRule")
-    if lead:
-        _write(_box(sl, lx, cy, lw, band, "Takeaway"), _fit(lead, lw, band, 12)[0], ctx, n)
-    for i, c in enumerate(cols):
-        _write(_box(sl, colx(4) + i * (cw + GUT), cy, cw, band, f"Takeaways{i + 1}"), _fit(c, cw, band, 10)[0], ctx, n)
+    cy = BODY_B - band - 0.1
+    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.12)
+    _panel(ctx, s, sl, n, LEFT, cy, RIGHT - LEFT, BODY_B - cy, lead, bl)
 
 
 def a_waterfall_bridge(ctx, s, sl, n):

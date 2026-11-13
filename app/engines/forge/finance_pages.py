@@ -203,6 +203,10 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables") -
             hi_, lo_ = max(pts, key=lambda t: t[1]), min(pts, key=lambda t: t[1])
             bullets.append({"text": f"Highest: {hi_[0]} at {_x(hi_[1])}; lowest: {lo_[0]} at {_x(lo_[1])}"})
         bullets.append({"text": f"The 25th-75th percentile range ({_x(p25)}-{_x(p75)}) sets the valuation range"})
+        mr, mm = bk.name(f"{prefix}ev_rev_median"), bk.name(f"{prefix}{'premium' if is_prec else 'margin'}_median")
+        if _num(mr) is not None and _num(mm) is not None:
+            bullets.append({"text": f"Median EV / Revenue of {_x(mr)}; median "
+                                    f"{'premium to the unaffected price' if is_prec else 'EBITDA margin'} of {_pct(mm)}"})
     nm = sum(1 for r in table_rows for v in r if v == "NM")
     if nm:
         bullets.append({"text": "Loss-making rows show NM and drop out of the statistics"})
