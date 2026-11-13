@@ -74,7 +74,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                      f"{prev['answer']}\nFiles: {', '.join(prev.get('artifacts', []))}")
         if len(r.engines) > 1:
             task += f"\n\nYou are step {i + 1} of {len(r.engines)} ({' -> '.join(r.engines)}); do only the {name} part."
-        kw = {"files": inputs} if name == "data" else {}
+        kw = {"files": inputs} if name in ("data", "sheets") else {}
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
             kw["model"] = os.environ["MH_MODEL"]
         saved = dict(os.environ)
