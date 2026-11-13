@@ -133,7 +133,16 @@ T.SCHEMAS.setdefault("office_task", T._fn(
     "slide decks (.pptx), spreadsheets and financial models (.xlsx), and data analysis with charts. Describe the "
     "whole deliverable in `request`; list input files from the project folder in `files`.",
     {"engine": {"type": "string", "enum": ["slides", "sheets", "data"]}, "request": T.S,
-     "files": {"type": "array", "items": T.S}}, ["engine", "request"]))
+     "files": {"type": "array", "items": T.S},
+     # the deck brief (engine slides; engines/forge/brief.py): what is not given is asked, or recommended
+     "audience": {"type": "string", "description": "slides: who the deck is for"}, "purpose": T.S,
+     "density": {"type": "string", "enum": ["present", "balanced", "read"],
+                 "description": "slides: present (visual, few words, to present live), balanced, read (dense pre-read)"},
+     "slides": {"type": "integer", "description": "slides: number of slides"},
+     "theme": {"type": "string", "description": "slides: navy, ocean, forest, burgundy, graphite or mono"},
+     "opening": T.S, "closing": T.S, "sources": T.S,
+     "brief_ok": {"type": "boolean", "description": "slides: build now with the recommended answers to anything "
+                                                    "not given, without asking"}}, ["engine", "request"]))
 
 WORK_SYSTEM = """You are Meshpool Cowork, an assistant that does real work for the user on their own computer: \
 research, writing, analysis, spreadsheets, presentations and file housekeeping. You work through tools, and the user \
@@ -182,6 +191,8 @@ between.
 - Pass the answers on to the engines in plain words: put them in the make_deck, make_spreadsheet, make_document or \
 office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides", "audience: the board").
 - If the result says no one answered, go ahead with your recommendations and list them as assumptions in your reply.
+- If make_deck answers "BRIEF NEEDED", ask its questions (keep its options and recommendations) in one ask_user call, \
+then call it again with the answers as fields. If you already asked them, pass brief_ok=true.
 
 Rules
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
@@ -918,10 +929,13 @@ class Agent:
         p["ev"].set()
 
     def _ask_user(self, args: dict) -> str:
-        """Ask the user and wait. Who answers: a front end's own `ask(qid, questions)` callback (the terminal), a
-        page that calls reply() while this waits (`interactive` true: the web app), or no one (headless runs, ACP,
-        tests, auto mode with MH_ASK_AUTO=1): then the recommended options, and the result says so."""
-        qs = ASK.normalize(args)
+        return self._ask(ASK.normalize(args))[2]
+
+    def _ask(self, qs: list) -> tuple[list, str, str]:
+        """Ask the user and wait; returns (answers, source, tool result). Who answers: a front end's own
+        `ask(qid, questions)` callback (the terminal), a page that calls reply() while this waits (`interactive`
+        true: the web app), or no one (headless runs, ACP, tests, auto mode with MH_ASK_AUTO=1): then the
+        recommended options, and the result says so."""
         qid = "q-" + uuid.uuid4().hex[:10]
         wait = ASK.timeout_s()
         own = getattr(self, "ask", None)
@@ -959,13 +973,31 @@ class Agent:
                 source = "timeout"
         answers, shown, result = ASK.finish(qs, raw, source, wait)
         self.emit({"type": "question_done", "id": qid, "source": source, "answers": answers, "text": shown})
-        return result
+        return answers, source, result
+
+    def _deck_brief(self, args: dict) -> str:
+        """office_task with engine slides: settle the deck brief (engines/forge/brief.py) before building. The
+        open questions go to the user in one question card; with no one to ask, the recommended answers."""
+        req = args["request"]
+        try:
+            from engines.forge import brief as BR
+        except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
+            return req
+        fields = {k: args[k] for k in BR.FIELDS if args.get(k) not in (None, "")}
+        qs = BR.questions(req, args.get("files"), fields)
+        if not qs or args.get("brief_ok") or BR.wants_defaults(req):
+            return BR.complete(req, args.get("files"), fields)
+        answers, source, _ = self._ask(ASK.normalize({"questions": qs}))
+        fields.update(BR.answers_from(qs, answers))
+        return BR.complete(req, args.get("files"), fields)
 
     def _office(self, args: dict) -> tuple[str, bool]:
         """Run a one-shot engine (slides, sheets, data) in its own process; files land in the working folder."""
         import subprocess
         import sys as _sys
         engine = args["engine"]
+        if engine == "slides":
+            args = dict(args, request=self._deck_brief(args))
         stamp = time.strftime("%Y%m%d-%H%M%S")
         out = self.root / "Meshpool outputs" / f"{stamp}-{engine}"
         out.mkdir(parents=True, exist_ok=True)

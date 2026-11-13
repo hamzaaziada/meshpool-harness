@@ -2,7 +2,7 @@
 PowerPoint, Excel and Word output, using Meshpool's benchmarked office engines.
 
 Tools
-  make_deck(request, files?)          -> .pptx built and checked by the slides engine
+  make_deck(request, files?, brief)   -> .pptx built and checked by the slides engine (or BRIEF NEEDED questions)
   make_spreadsheet(request, files?)   -> .xlsx with live formulas, checked by the sheets engine
   analyze_data(request, files)        -> charts, tables and a written analysis from data files
   make_document(markdown, filename)   -> .docx from Markdown (headings, lists, tables, bold, code)
@@ -113,8 +113,25 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     return _report(jid)
 
 
-def make_deck(request: str, files: list | None = None):
-    return _engine("slides", request, files)
+def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
+              density: str | None = None, slides: int | None = None, theme: str | None = None,
+              opening: str | None = None, closing: str | None = None, sources: str | None = None,
+              brief_ok: bool = False):
+    """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
+    or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
+    or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
+    fields = {k: v for k, v in dict(audience=audience, purpose=purpose, density=density, slides=slides, theme=theme,
+                                    opening=opening, closing=closing, sources=sources).items() if v not in (None, "")}
+    try:
+        if str(APP) not in sys.path:
+            sys.path.insert(0, str(APP))
+        from engines.forge import brief as BR
+    except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
+        return _engine("slides", request, files)
+    qs = BR.questions(request, files, fields)
+    if qs and not (brief_ok or BR.wants_defaults(request) or os.environ.get("MH_ASK_AUTO") == "1"):
+        return BR.needed_text(qs, "make_deck"), False
+    return _engine("slides", BR.complete(request, files, fields), files)
 
 
 def make_spreadsheet(request: str, files: list | None = None):
@@ -374,8 +391,24 @@ S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
 TOOLS = {
     "make_deck": (make_deck, "Build a finished PowerPoint deck (.pptx) with Meshpool's slides engine, which plans "
-                  "the storyline, lays out charts and checks the result. Describe the audience, slide count and "
-                  "content in `request`. Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),
+                  "the storyline, lays out charts and checks the result. Describe the content in `request` and give "
+                  "the brief as fields (audience, purpose, density, slides, theme, opening, closing, sources). If "
+                  "audience, density, length or look is left open, it does not build: it answers BRIEF NEEDED with "
+                  "questions, options and a recommendation for each. Ask the user, then call again with the answers, "
+                  "or pass brief_ok=true to build with the recommendations. Takes 2 to 6 minutes.",
+                  {"request": S, "files": FILES,
+                   "audience": {"type": "string", "description": "Who the deck is for, e.g. the board, investors"},
+                   "purpose": {"type": "string", "description": "What it should achieve, e.g. approve the budget"},
+                   "density": {"type": "string", "enum": ["present", "balanced", "read"],
+                               "description": "present: visual, few words, to present live; balanced; read: a dense "
+                                              "pre-read"},
+                   "slides": {"type": "integer", "description": "Number of slides"},
+                   "theme": {"type": "string", "description": "navy, ocean, forest, burgundy, graphite or mono"},
+                   "opening": {"type": "string", "description": "Opening slides, e.g. title and agenda"},
+                   "closing": {"type": "string", "description": "Closing slides, e.g. next steps, questions"},
+                   "sources": {"type": "string", "description": "Sources to use or leave out"},
+                   "brief_ok": {"type": "boolean", "description": "Build now: recommended answers for anything not "
+                                                                  "given"}}, ["request"]),
     "make_spreadsheet": (make_spreadsheet, "Build a finished Excel workbook (.xlsx) with live formulas, such as a "
                          "model, budget or tracker, with Meshpool's sheets engine (it recalculates and checks the "
                          "formulas). Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),

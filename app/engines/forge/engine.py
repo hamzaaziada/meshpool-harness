@@ -51,6 +51,9 @@ def theme_from(task: str):
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, **_) -> dict:
     from engines.forge.build import build
+    from engines.forge.brief import complete
+    # an open brief (audience, density, length, look) gets the recommended answers (engines/forge/brief.py)
+    task = complete(task, files)
     if model:
         os.environ.setdefault("FORGE_MODEL", model)
     m = re.search(r"\b(\d{1,2})[- ]slide", task)
