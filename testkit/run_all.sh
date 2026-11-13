@@ -39,8 +39,9 @@ for f in intr modes v24; do mkdir -p "$OUT/ui/$f"; node $f.js "$OUT/ui/$f" > "$O
 node midrun.js 8799 /tmp/proj1 > "$OUT/midrun.txt" 2>&1
 mkdir -p "$OUT/ui/crawl"; node crawl_all.js "$OUT/ui/crawl" 8799 /tmp/proj2 > "$OUT/crawl_all.txt" 2>&1
 for i in 1 2 3 4 5 6; do mkdir -p "$OUT/jp$i"; done
+"$PY" stop_check.py /tmp/proj1 > "$OUT/stop_check.txt" 2>&1
 node jitter.js 8799 /tmp/proj2 "$OUT"/jp{1..6} > "$OUT/jitter.txt" 2>&1
 bash update_flow.sh "$OUT/update" "$PY" > "$OUT/update_flow.txt" 2>&1
 echo "== summary ($OUT)"
-for f in e2e_full journeys ui_crawl about intr modes v24 midrun crawl_all jitter update_flow; do
+for f in e2e_full journeys ui_crawl about intr modes v24 midrun crawl_all stop_check jitter update_flow; do
   printf '%-10s ' "$f"; (grep -E "^[0-9]+/[0-9]+ passed|no page errors|^FAIL" "$OUT/$f.txt" | tail -1) || echo "?"; done
