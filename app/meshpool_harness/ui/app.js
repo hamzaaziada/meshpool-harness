@@ -208,10 +208,13 @@ function modeHarness(m = S.appMode) {
   const ok = id => S.harnesses.some(h => h.id === id && h.available !== false);
   return ok(want) ? want : (ok(S.defaults?.[m]) ? S.defaults[m] : (m === "code" ? "meshpool-code" : "meshpool-work"));
 }
+function modeBadges() {
+  for (const b of $$(".modesw [data-mode]")) b.classList.toggle("busy", b.dataset.mode !== S.appMode && (S.threads || []).some(t => (t.kind || "code") === b.dataset.mode && ["working", "waiting"].includes(t.state)));
+}
 function setAppMode(m) {
   if (m === S.appMode && !S.cur) return;
   if (S.cur?.id) store("last_" + S.appMode, S.cur.id);
-  S.appMode = m; store("appmode", m);
+  S.appMode = m; store("appmode", m); setTimeout(modeBadges, 0);
   $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === m));
   $("#app").dataset.mode = m;
   S.draft.harness = modeHarness(m);
@@ -268,7 +271,7 @@ async function loadThreads() {
   for (const t of S.threads) if (["working", "waiting"].includes(was.get(t.id)) && !["working", "waiting"].includes(t.state) && S.cur?.id !== t.id) S.unseen.add(t.id);
   store("unseen", [...S.unseen]);
   renderSide();
-  for (const b of $$(".modesw [data-mode]")) b.classList.toggle("busy", b.dataset.mode !== S.appMode && S.threads.some(t => (t.kind || "code") === b.dataset.mode && ["working", "waiting"].includes(t.state)));
+  modeBadges();
   const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
   if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
 }
@@ -330,7 +333,7 @@ function renderSide() {
     const p = h.parentElement.dataset.p;
     if (e.target.closest(".chev")) { S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p); store("closed", [...S.closedProjects]); renderSide(); return; }
     S.closedProjects.delete(p); store("closed", [...S.closedProjects]);
-    S.draft.project = p; store("project", p); newThread(); toast(`New thread in ${projName(p)}`);
+    S.draft.project = p; store("project", p); newThread();
   }));
   $$("[data-newin]", el).forEach(b => b.onclick = () => { S.draft.project = b.dataset.newin; store("project", S.draft.project); newThread(); });
   $$("[data-pmenu]", el).forEach(b => b.onclick = e => projMenu(e, b.dataset.pmenu));
@@ -372,6 +375,7 @@ function threadMenu(e, id) {
   const t = S.threads.find(x => x.id === id) || {};
   ctxMenu(e, [
     {label: "Rename", fn: () => renameThread(id)},
+    {label: S.steps ? "Hide step details" : "Show step details", fn: () => toggleSteps()},
     {label: t.pinned ? "Unpin" : "Pin", fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
     {label: t.archived ? "Unarchive" : "Archive", fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
     {label: "Delete", danger: true, fn: async () => { if (await ask({title: "Delete this thread?", text: "The conversation is removed. Files in your project stay as they are.", ok: "Delete thread", danger: true})) threadAct(id, "delete"); }},
@@ -399,17 +403,41 @@ async function renameThread(id) {
   if (!n) return;
   await post(`/api/threads/${id}`, {action: "rename", title: n}); await loadThreads(); if (S.cur?.id === id && S.cur.view) { S.cur.view.title = n; renderTop(); }
 }
+// Choose a folder by clicking through folders (used where the computer has no folder dialog).
+function browseFolder(start) {
+  return new Promise(resolve => {
+    const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
+    sc.innerHTML = `<div class="dlg fb" role="dialog" aria-modal="true" aria-label="Choose a folder"><h3>Choose a folder</h3>
+      <div class="fbpath" id="fbPath"></div><ul class="fblist" id="fbList"></ul>
+      <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
+    document.body.appendChild(sc);
+    let cur = "";
+    const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(""); } };
+    document.addEventListener("keydown", key, true);
+    const go = async path => {
+      try {
+        const r = await post("/api/projects", {action: "dirs", path});
+        cur = r.path;
+        const crumbs = r.path.replace(r.home, "~");
+        $("#fbPath", sc).textContent = crumbs;
+        $("#fbList", sc).innerHTML = (r.parent ? `<li><button data-p="${esc(r.parent)}">${ICON.chev} Up one level</button></li>` : "") +
+          (r.dirs.length ? r.dirs.map(d => `<li><button data-p="${esc(r.path.replace(/[\\/]$/, "") + (r.path.includes("\\") ? "\\" : "/") + d)}">${ICON.dir}<span>${esc(d)}</span></button></li>`).join("") : `<li class="pnote">No folders inside.</li>`);
+        $$("#fbList [data-p]", sc).forEach(b => b.onclick = () => go(b.dataset.p));
+      } catch (e) { toast(e.message); }
+    };
+    $$("[data-a]", sc).forEach(b => b.onclick = () => done(b.dataset.a === "1" ? cur : ""));
+    sc.addEventListener("mousedown", e => { if (e.target === sc) done(""); });
+    go(start || "");
+  });
+}
 async function pickProject() {
   try {
     let r = await post("/api/projects", {action: "pick"});
-    if (r.no_picker) {                 // no folder dialog on this computer: type or paste the path instead
-      let p = "", err = "";
-      for (;;) {
-        p = await ask({title: "Add a folder", text: err || "Type or paste the full path of the folder.", value: p, ok: "Add folder"});
-        if (!p) return;
-        try { r = await post("/api/projects", {action: "add", path: p.trim()}); break; }
-        catch (e) { err = e.message + " Check the path and try again."; }
-      }
+    if (r.no_picker) {                 // no folder dialog on this computer: Meshpool's own folder browser
+      const path = await browseFolder();
+      if (!path) return;
+      r = await post("/api/projects", {action: "add", path});
     }
     S.projects = r.projects;
     if (r.picked) { S.draft.project = r.picked; store("project", r.picked); S.closedProjects.delete(r.picked); newThread(); }
@@ -433,11 +461,11 @@ function renderTop() {
     <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
     <span class="sp"></span>
     ${usage ? `<span class="chip use" title="Tokens in this thread">${esc(usage)}</span>` : ""}
-    <button class="tbtn" id="stepsBtn" aria-pressed="${!!S.steps}" title="Show every step: what the model is thinking and each tool it uses (${MOD}E)">${ICON.eye}<span>Steps</span></button>
+
     ${tabs.map(([k, ic, lb, kb]) => `<button class="tbtn" data-panel="${k}" aria-pressed="${S.panel === k && !$("#panel")?.hidden}" title="${lb}${kb ? " (" + kb + ")" : ""}">${ic}<span>${lb}</span></button>`).join("")}
     ${v ? `<button class="tbtn" id="tmore" aria-label="Thread options">${ICON.more}</button>` : ""}`;
   $("#showSide")?.addEventListener("click", toggleSide);
-  $("#stepsBtn").onclick = toggleSteps;
+  $("#stepsBtn")?.addEventListener("click", toggleSteps);
   $$("[data-panel]").forEach(b => b.onclick = () => togglePanel(b.dataset.panel));
   $("#tmore")?.addEventListener("click", e => threadMenu(e, v.id));
   $("#projChip")?.addEventListener("click", e => { if (!v) projectPop(e.currentTarget); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
@@ -525,7 +553,7 @@ function renderBar() {
   $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
   const root = curRoot();
   $("#hintline").innerHTML = c.busy ? `Enter adds to the task · Esc stops`
-    : root ? `Working in <b>${esc(projName(root))}</b>` : "";
+    : "";
   $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
   const inp = $("#input");
   inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
@@ -602,7 +630,7 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new thread", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/harness", "Choose the harness", () => harnessPop($("#hPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#hPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
@@ -745,6 +773,7 @@ async function useHome() {
 /* ================================== threads ================================== */
 function newThread() {
   if (S.cur) clearTimeout(S.cur.pollT);
+  if (S.cur?.view?.workdir) { S.draft.project = S.cur.view.workdir; store("project", S.draft.project); }
   S.cur = null; S.attachments = []; renderAttach();
   S.draft.harness = modeHarness();
   if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
@@ -781,7 +810,7 @@ function openThread(id, fresh) {
   $("#app").classList.remove("sideopen");
   if (S.cur) clearTimeout(S.cur.pollT);
   const known = S.threads.find(t => t.id === id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {}, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
   $("#col").innerHTML = "";
   closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } poll();
@@ -808,12 +837,13 @@ async function poll() {
   const busy = ["starting", "working", "waiting"].includes(v.state);
   let wk = $("#working");
   if (v.state === "working" && !cur.live && !$(".appr:not(.done)")) {
-    if (!wk) { wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; cur.since = Date.now(); }
+    if (!wk) { wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); }
     $(".wt", wk).textContent = cur.activity || "Working";
     $(".el", wk).textContent = Math.round((Date.now() - (cur.since || Date.now())) / 1000) + "s";
     $("#col").appendChild(wk);
   } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
   if (first || prevState !== v.state) { renderTop(); renderBar(); }
+  if (first && S.panel) renderPanel();
   scrollConv(first);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
   cur.pollT = setTimeout(poll, busy ? 400 : 3000);
@@ -902,11 +932,11 @@ function applyEv(ev) {
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
-      const label = TOOL_RUN[name] || TOOL_LABEL[name] || name.replace(/_/g, " ");
-      const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name;
+      const label = TOOL_RUN[name] || TOOL_LABEL[name] || (ev.mcp ? "Using " : "") + name.replace(/_/g, " ");
+      const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name; if (ev.mcp) d.dataset.mcp = "1";
       d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn">${esc(label)}</span><span class="ts">${esc(stepSummary(name, ev))}</span><span class="st run"></span></summary>${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
-      cur.activity = `${label}${ev.summary ? " " + ev.summary : ""}`; break; }
+      { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_end": {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
@@ -915,18 +945,20 @@ function applyEv(ev) {
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
       const nm = d.dataset.name || "";
-      $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " ")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " "));
+      $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || (d.dataset.mcp ? "Used " : "") + nm.replace(/_/g, " ")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " "));
       if (ev.output && !$("pre", d)) d.insertAdjacentHTML("beforeend", `<pre>${esc(ev.output)}</pre>`);
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
-      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) st.textContent = "waiting for your OK"; }
+      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "waiting for your OK"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this thread", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this thread</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Optional: tell it what to do instead" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this thread</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
-      const d = add(`<b>${esc(title)}</b>${ev.detail ? `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>` : ""}<div class="acts">${opts}</div>`, "appr");
+      const g0 = cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild ? cur.group : null;
+      const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
+      if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); }
       d.id = "appr-" + ev.id;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
@@ -935,7 +967,7 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) st.textContent = ""; }
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === $("#col").lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
@@ -979,7 +1011,7 @@ function settleSteps(label) {
   }
 }
 function bindFoot(foot) {
-  $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel("diff", true); });
+  $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
 }
 async function undoTurn(n) {
@@ -1010,7 +1042,9 @@ function fitPanel() {
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
-  const p = $("#panel"); fitPanel(); if (!S.panel) { p.hidden = true; return; }
+  const p = $("#panel");
+  if (S.panel && !PANELS[curMode()].includes(S.panel)) { S.panel = PANELS[curMode()][0]; store("panel", S.panel); }
+  fitPanel(); if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
   $("#ptabs").innerHTML = PANELS[curMode()].map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
@@ -1060,7 +1094,7 @@ function panelProgress(body) {
     <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
     <section><h4>Context</h4><ul class="ctxl">
       <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
-      <li>${ICON.cpu}<span><b>${esc(v.harness?.name || "")}</b><small>${esc(v.model || "")}</small></span></li>
+      <li>${ICON.cpu}<span><b>${esc(v.harness?.name || "")}</b><small>${esc(modelName(v.model || ""))}</small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
@@ -1239,7 +1273,7 @@ function panelPreview(body) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Endpoint and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "MCP servers"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 function openSettings(sec = "general") {
   closePop();
   $(".scrim")?.remove();
@@ -1260,12 +1294,12 @@ async function renderSection(sec) {
   const F = S.settings.fields; const get = k => F.find(x => x.key === k) || {};
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
-    b.innerHTML = `${close}<h3>Endpoint and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
+    b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
       <label class="field"><span>Default model for new threads</span><select id="sModel"></select><small>Each thread can use its own model from the picker in the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>`;
-    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option ${m.id === S.models.default ? "selected" : ""}>${esc(m.id)}</option>`).join(""); };
+    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
     const save = async () => {
@@ -1293,7 +1327,7 @@ async function renderSection(sec) {
       ${M.error ? `<div class="res bad">${esc(M.error)}</div>` : ""}<ul class="rows2" id="sml"></ul>`;
     const draw = () => {
       const q = $("#smq").value.trim().toLowerCase();
-      $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b>${esc(m.id)}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
+      $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b title="${esc(m.id)}">${esc(modelName(m.id))}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
         ${m.id === M.default ? `<span class="badge modified">Default</span>` : `<button class="btn" data-def="${esc(m.id)}">Make default</button>`}
         <button class="iconbtn" data-fav="${esc(m.id)}" title="Favorite" style="color:${M.favorites.includes(m.id) ? "var(--warn)" : "var(--ink-3)"}">${ICON.star}</button></li>`).join("") || `<li class="pnote">No models.</li>`;
       $$("[data-def]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/default", {id: x.dataset.def}); Object.assign(M, S.models); draw(); renderBar(); });
@@ -1316,7 +1350,7 @@ async function renderSection(sec) {
   } else if (sec === "personal") {
     const a = await api("/api/assistant");
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new thread, so you do not repeat yourself.</p>
-      <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
+      <label class="field" style="max-width:none"><span>Instructions for every thread</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
@@ -1486,7 +1520,7 @@ async function renderSection(sec) {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. Meshpool Auto picks a good one for each task. Meshpool Code, Meshpool Work, Pi, Codex and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Other agents can be added too.</p>
-      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m ? " (made for " + (h.mode === "code" ? "Code" : "Work") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " (made for " + (h.mode === "code" ? "Code" : "Work") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
@@ -1507,9 +1541,9 @@ async function renderSection(sec) {
     hd.ondrop = async e => { e.preventDefault(); hd.classList.remove("over"); for (const f of e.dataTransfer.files) await act({text: await f.text()}); };
   } else if (sec === "mcp") {
     const m = await api("/api/mcp");
-    b.innerHTML = `${close}<h3>MCP servers</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New threads pick up changes.</p>
+    b.innerHTML = `${close}<h3>Tools (MCP servers)</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New threads pick up changes.</p>
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
-      <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><code>${esc(s.target)}</code></span></li>`).join("")}</ul>
+      <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
       <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:12.5px;margin-top:8px">Same format as Claude Desktop. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
@@ -1585,7 +1619,7 @@ function showOnboarding() {
       const values = {MESHPOOL_API_KEY: key}; if ($("#oBase").value.trim()) values.MESHPOOL_BASE_URL = $("#oBase").value.trim();
       const r = await post("/api/test", {values});      // check first; save only a key that works
       if (r.ok) await post("/api/settings", {values});
-      if (!r.ok) { res.className = "res bad"; res.textContent = "That key didn't work. Check that you copied all of it. (" + r.detail + ")"; $("#oGo").disabled = false; return; }
+      if (!r.ok) { res.className = "res bad"; res.textContent = connMsg(r.detail); $("#oGo").disabled = false; return; }
       await loadSettings(); await loadModels(true); renderBar();
       $("#onbKey").remove(); permStep(o);
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
@@ -1599,9 +1633,9 @@ async function importPanel(box, onDone) {
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
   if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
-  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${r.kind === "skill" ? "$" : ""}${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
+  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
   box.innerHTML = `${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
-    ${f.mcp.length ? `<h3 class="onb-h">Tools from other apps (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">Servers keep the keys and settings they had in the other app. They are saved only on this computer.</p>` : ""}
+    ${f.mcp.length ? `<h3 class="onb-h">Tools from other apps (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">They keep their settings from the other app and stay on this computer.</p>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div><div class="res" id="impRes"></div>`;
   $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
   $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
@@ -1624,7 +1658,7 @@ async function importPanel(box, onDone) {
 function permStep(host) {
   const o = host || Object.assign(document.createElement("div"), {className: "onb", id: "onb"});
   if (!host) { if ($("#onb")) return; document.body.appendChild(o); }
-  store("permsAsked", 1);
+  store("permsAsked", 1); store("onbStep", 2);
   const mac = S.settings.platform === "darwin";
   let card = $("#onbPerm", o);
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
@@ -1634,7 +1668,7 @@ function permStep(host) {
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
-      <button class="scopeopt" data-scope="later" role="radio"><b>Decide per task</b><small>Pick a folder when you start each task. Easiest to start.</small></button>
+      <button class="scopeopt" data-scope="later" role="radio"><b>Start in Meshpool Projects</b><small>A folder Meshpool made for you. Add your own folders any time.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
@@ -1656,14 +1690,14 @@ function permStep(host) {
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; S.draft.project = r.picked; store("project", r.picked); renderSide(); newThread(); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
-      else { res.className = "res"; res.textContent = "Fine. You choose a folder when you start a task."; }
+      else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
   $("#oAll", card).onclick = async () => { $("#oAll", card).disabled = true; await draw({id: "all"}); $("#oAll", card).disabled = false; $("#oAll", card).textContent = "Ask again"; };
   document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#onbPerm")) draw(); });
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "You'll choose a folder for each task. You can add folders any time."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
   draw();
 }
 
@@ -1745,7 +1779,7 @@ async function restartApp() {
   if (!S.settings.has_key) showOnboarding();
   else {
     loadModels().then(renderBar);
-    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3) { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } else if (!store("permsAsked")) permStep(); }
+    if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
     // 21. a thread waiting for the user's OK opens straight away after a restart
     const waiting = S.threads.find(t => t.state === "waiting" && (t.kind || "code") === S.appMode);
     const last = store("last_" + S.appMode);
@@ -1755,7 +1789,7 @@ async function restartApp() {
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
-  document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li) return; e.preventDefault(); threadMenu(e, li.dataset.id); });
+  document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });
   const conv = $("#conv"); const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "↓ Latest"});
   conv.parentElement.appendChild(jd); jd.onclick = () => { conv.scrollTop = conv.scrollHeight; };
   conv.addEventListener("scroll", () => { jd.hidden = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 300; });
