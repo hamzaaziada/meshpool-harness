@@ -507,7 +507,7 @@ class Agent:
                 else "Send a message to continue.")})
         except Exception as e:
             self._repair()
-            msg = str(e)
+            msg = raw = str(e)
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
                 msg = ("Couldn't reach the model. Check your internet connection, or the endpoint in Settings, then "
                        "send your message again.")
@@ -515,6 +515,8 @@ class Agent:
                 msg = "The model is busy right now. Wait a minute, then send your message again."
             elif re.search(r"HTTP 5\d\d", msg):
                 msg = "The model service had a problem. Send your message again in a moment."
+            if msg != raw:
+                msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
         finally:
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
