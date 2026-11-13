@@ -189,6 +189,16 @@ def _pdf_spans(pdf: str) -> list[tuple[float, list[tuple[str, tuple]]]]:
     return out
 
 
+def _within(q: dict, p: dict, share: float) -> bool:
+    """q (a shape with area) lies at least `share` inside p."""
+    area = q["w"] * q["h"]
+    if area <= 0.0025:
+        return False
+    ix = min(q["x"] + q["w"], p["x"] + p["w"]) - max(q["x"], p["x"])
+    iy = min(q["y"] + q["h"], p["y"] + p["h"]) - max(q["y"], p["y"])
+    return ix > 0 and iy > 0 and ix * iy >= share * area
+
+
 def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
     """P1: render with LibreOffice; every rendered text span must sit inside some text box on its slide."""
     with tempfile.TemporaryDirectory() as td:
@@ -686,6 +696,9 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 ix = min(tb["x"] + tb["w"], bx["x"] + bx["w"]) - max(tb["x"], bx["x"])
                 iy = min(tb["y"] + tb["h"], bx["y"] + bx["h"]) - max(tb["y"], bx["y"])
                 if ix > 0 and iy > 0 and ix * iy >= R["editability"]["text_in_shape_overlap"] * tb["w"] * tb["h"]:
+                    if any(o is not bx and o is not tb and _within(o, bx, R["editability"]["text_in_shape_overlap"])
+                           for o in boxes if o["role"] != "line"):
+                        continue                         # a card holding several elements, not one text's shape
                     failures.append(F("P17", "text_over_shape", f"Slide {n}: '{tb['name']}' is a text box laid over "
                                       f"'{bx['name']}'. Write the text into the shape itself so it moves and edits "
                                       "with it.", slide=n, shape=tb["name"], fix_scope="renderer"))
