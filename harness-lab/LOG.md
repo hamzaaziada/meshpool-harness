@@ -177,3 +177,13 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 - Verified test set completed to 20 tasks (12 new, same time): Pi 19/20 $0.0069 95 s; app 18/20 $0.0079 133 s;
   Codex 17/20 $0.0101 121 s; v5 17/20 $0.0093 184 s. pylint-4970 failed for every agent.
 - Result: the app agent beats Codex on solves and cost; Pi still leads on solves, cost and time.
+
+## 2026-11-13: practical check, in-app update, steadier UI; office work handed off
+
+- Real tasks through the app on the real model (testkit/practical). Code, 4 tasks each: Meshpool Code 4/4 (18 s
+  average), Pi 4/4 (17 s), Hermes 4/4 (42 s), Auto 4/4 (36 s). Office results and next steps: OFFICE_HANDOFF.md.
+- In-app update from GitHub releases (updater.py), tested end to end (testkit/update_flow.sh, 7/7).
+- Jitter: the sidebar was rebuilt every few seconds during a run (lost hover, could eat a click); now skipped when
+  unchanged. Top bar no longer truncates or wraps at laptop widths. Probe: testkit/jitter.js, 20/20 at 3 sizes.
+- Office jobs no longer write into the app's install folder.
+- Regression on the mock: e2e 124/124, journeys 20/20, ui_crawl 45/45, crawl_all 31/31, midrun 99/99, unit 149.

@@ -3,6 +3,24 @@
 Notes for the agent taking over office work. The coding and app-UX work continues separately on the same branch,
 so keep commits small, rebase before you push, and avoid editing `ui/app.js` / `ui/app.css` at the same time.
 
+## Where we left off (start here)
+
+The practical office run was stopped on purpose at 11:03 UTC, 13 November 2026, partway through the contract task.
+Done: proposal, sales_xlsx and deck for all four harnesses, and contract for Meshpool Work. Its output folders were
+in a session scratch directory and are gone, so rerun what you need. Key spend at the stop: $2.59. The owner's
+working budget was $4 total on this key, so about $1.40 is left; check the spend before each run with
+`python harness-lab/bench/spend.py`, and ask the owner before going over.
+
+Next steps, in order:
+1. Finish the run. This grades the files each task leaves and spends about $0.6:
+   `python testkit/practical/practical.py http://127.0.0.1:PORT OUT --only work --case contract,invoices,pdf,letters --budget 3.9`
+2. Run `git status`. If anything new appears under `app/`, the engines are still writing into the install folder
+   (see "Fixed during this check").
+3. Fix open issues 1 and 2 below. Rerun the affected cases.
+4. Test the capability gaps listed under "Still to check". Add a practical case for each one you build.
+5. Write the result for the owner: can Meshpool Work do what normal office tools do, and how it compares with
+   Claude Cowork. Put it in `docs/BENCHMARKS.md` and log it in `harness-lab/LOG.md`.
+
 ## What was tested, and how
 
 `testkit/practical/practical.py` runs real tasks through the app's own API on the real model, auto-approving like a
