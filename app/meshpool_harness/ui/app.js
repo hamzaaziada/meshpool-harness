@@ -286,7 +286,7 @@ function renderSide() {
   const el = $("#sideList"); if (!el) return;
   if (q) { return renderSearch(q); }
   const inMode = t => (t.kind || "code") === S.appMode;
-  const threads = S.threads.filter(t => !t.archived && inMode(t));
+  const threads = S.threads.filter(t => !t.archived && inMode(t) && !S.pendingDelete?.has(t.id));
   const pinned = threads.filter(t => t.pinned);
   const byProj = new Map();
   for (const p of S.projects) byProj.set(p.path, []);
@@ -297,7 +297,8 @@ function renderSide() {
   if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
   // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
   const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
-  const order = [...byProj].sort((a, z) => last(z[1]) - last(a[1]));
+  const keepEmpty = p => p === (S.cur?.view?.workdir || S.draft.project) || S.threads.every(t => t.workdir !== p);
+  const order = [...byProj].filter(([p, l]) => l.length || keepEmpty(p)).sort((a, z) => last(z[1]) - last(a[1]));
   for (const [path, list] of order) {
     const closed = S.closedProjects.has(path);
     html += `<div class="proj ${closed ? "closed" : ""}" data-p="${esc(path)}">
@@ -402,6 +403,15 @@ function projMenu(e, path) {
   ]);
 }
 async function threadAct(id, action) {
+  if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
+    S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
+    if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
+    if (S.cur?.id === id) newThread();
+    renderSide();
+    const t = setTimeout(async () => { S.pendingDelete.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
+    toast("Thread deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); renderSide(); toast("Thread restored"); }});
+    return;
+  }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
   if (action === "delete" && S.cur?.id === id) newThread();
   await loadThreads(); renderTop();
@@ -488,6 +498,7 @@ function renderTop() {
   const tabs = PANELS[curMode()].map(k => [k, ...ALL[k]]);
   const u = v?.usage; const cx = v?.context;
   const usage = u && u.in ? `${fmt(u.in)} in · ${u.in ? Math.round(100 * u.cached / u.in) : 0}% cached` : cx && cx.size ? `Context ${Math.round(100 * cx.used / cx.size)}%` : "";
+  $("#topbar").classList.toggle("newt", !v);
   $("#topbar").innerHTML = `
     ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
     <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New thread") : "New thread")}</span>
@@ -542,6 +553,7 @@ function curRoot() { return S.cur?.view?.workdir || S.draft.project || S.default
 /* ================================== composer ================================== */
 function setupComposer() {
   const inp = $("#input");
+  inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
@@ -629,6 +641,7 @@ async function stopNow() {
   wait();
 }
 async function sendNow(interrupt) {
+  try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
   const inp = $("#input"); let text = inp.value.trim();
   if (!text && !S.attachments.length) return;
   const busy = cfg().busy;
@@ -734,7 +747,7 @@ function harnessPop(anchor) {
   const other = S.appMode === "code" ? "cowork" : "code";
   const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], ["sub", "Your subscriptions"], [other, "Other agents"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
-    const hs = S.harnesses.filter(h => !h.error && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
+    const hs = S.harnesses.filter(h => !h.error && h.available !== false && (m === "sub" ? h.subscription : !h.subscription && h.mode === m)); if (!hs.length) return "";
     return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.available === false ? "disabled style='opacity:.55'" : ""}><span class="ol">${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.available === false ? " · not installed" : h.subscription && !h.signed_in ? " · sign in first" : ""}<span class="od">${esc(h.description || "")}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
   }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage agents</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
@@ -805,6 +818,10 @@ async function useHome() {
 }
 
 /* ================================== threads ================================== */
+function restoreDraft() {
+  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || "new")) || ""; } catch (e) {}
+  const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
+}
 function newThread() {
   if (S.cur) clearTimeout(S.cur.pollT);
   if (S.cur?.view?.workdir) { S.draft.project = S.cur.view.workdir; store("project", S.draft.project); }
@@ -812,7 +829,7 @@ function newThread() {
   S.draft.harness = modeHarness();
   if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
-  $("#input").focus();
+  restoreDraft(); $("#input").focus();
 }
 function renderHero() {
   const h = harness(S.draft.harness); const cw = S.appMode === "cowork";
@@ -847,7 +864,7 @@ function openThread(id, fresh) {
   S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
   $("#col").innerHTML = "";
-  closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } poll();
+  closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
 }
 async function poll() {
   const cur = S.cur; if (!cur) return;
@@ -872,11 +889,11 @@ async function poll() {
   let wk = $("#working");
   if (v.state === "working" && !cur.live && !$(".appr:not(.done)")) {
     if (!wk) { wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); }
-    $(".wt", wk).textContent = cur.activity || "Working";
+    $(".wt", wk).textContent = String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, "");
     $(".el", wk).textContent = Math.round((Date.now() - (cur.since || Date.now())) / 1000) + "s";
     $("#col").appendChild(wk);
   } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
-  if (first || prevState !== v.state) { renderTop(); renderBar(); }
+  if (first || prevState !== v.state || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   if (first && S.panel) renderPanel();
   scrollConv(first);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
@@ -984,13 +1001,14 @@ function applyEv(ev) {
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
+      const gKeep = cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild ? cur.group : null;
       for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "waiting for your OK"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this thread", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
         : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this thread</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
-      const g0 = cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild ? cur.group : null;
+      const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); }
       d.id = "appr-" + ev.id;
@@ -1002,7 +1020,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`;
+      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === $("#col").lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1153,7 +1171,7 @@ function panelOutputs(body) {
   loadTree($("#tree"), "");
 }
 async function panelDiff(body) {
-  if (!S.cur) { body.innerHTML = `<div class="pnote">Changes show up here once a thread edits files. Each turn is recorded, so you can see and undo what it changed.</div>`; return; }
+  if (!S.cur) { body.innerHTML = `<div class="pnote">This thread hasn't changed any files yet. Each reply's changes show here, and you can undo them.</div>`; return; }
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this thread</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
@@ -1558,7 +1576,7 @@ async function renderSection(sec) {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. Meshpool Auto picks a good one for each task. Meshpool Code, Meshpool Work, Pi, Codex and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Other agents can be added too.</p>
-      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " (made for " + (h.mode === "code" ? "Code" : "Work") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name.replace(/\s*\(([^)]*)\)$/, " · $1"))}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
@@ -1609,7 +1627,7 @@ async function renderSection(sec) {
     const u = await api("/api/usage"); const t = u.total;
     b.innerHTML = `${close}<h3>Usage</h3><p class="lead">How much Meshpool's own agents used on this computer. What it cost is on your <a href="https://meshpool.ai" target="_blank" rel="noopener">Meshpool account</a>.</p>
       <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div></div>
-      <h3 style="font-size:15px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Threads</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td>${esc(m)}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
+      <h3 style="font-size:15px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Threads</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
     b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
@@ -1639,7 +1657,7 @@ function showOnboarding() {
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
     ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Paste your Meshpool API key to get started. It stays on this computer.</p><p class="credit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a></p>
     <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
-    <details id="oAdv"><summary class="linkbtn" style="display:inline">Use another AI provider</summary><label class="field" style="max-width:none;margin-top:10px"><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://llm.meshpool.ai/v1"></label></details>
+    <details id="oAdv"><summary class="linkbtn" style="display:inline;margin-left:0;padding-left:0">Use another AI provider</summary><label class="field" style="max-width:none;margin-top:10px"><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://llm.meshpool.ai/v1"></label></details>
     <div class="res" id="oRes"></div>
     <div class="onb-go"><button class="bigbtn" id="oGo">Continue</button></div></div>
     <div class="onb-card" id="onbPerm" hidden></div>`;
@@ -1827,6 +1845,7 @@ async function restartApp() {
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
+  document.addEventListener("contextmenu", e => { const ph = e.target.closest?.("#sideList .proj-h"); if (ph) { e.preventDefault(); projMenu({currentTarget: ph, target: ph}, ph.parentElement.dataset.p); return; } });
   document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });
   const conv = $("#conv"); const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "↓ Latest"});
   conv.parentElement.appendChild(jd); jd.onclick = () => { conv.scrollTop = conv.scrollHeight; };
