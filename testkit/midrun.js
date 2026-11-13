@@ -59,8 +59,8 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
     check(T("the add-on reaches the agent"), (await log()).some(e => e.type === "assistant" && /color blue/.test(e.text)), JSON.stringify((await log()).filter(e => e.type !== "text_delta").slice(-3)));
     // 4. Interrupt button with empty box, then with text
     await send("long task please"); await waitState(id, ["working"]); await p.waitForTimeout(4000);
-    await p.fill("#input", ""); await p.click("#intrBtn"); await p.waitForTimeout(800);
-    check(T("Interrupt with an empty box keeps the task running"), (await st(id)) === "working");
+    await p.fill("#input", ""); await p.waitForTimeout(300);
+    check(T("Send now is off with an empty box, and the task keeps running"), (await p.$eval("#intrBtn", b => b.disabled)) && (await st(id)) === "working");
     await p.fill("#input", "what is the time"); t0 = Date.now(); await p.click("#intrBtn");
     for (let i = 0; i < 60 && !(await answeredAfterInterrupt("what is the time")); i++) await p.waitForTimeout(500);
     check(T("Interrupt button answers the new message"), await answeredAfterInterrupt("what is the time"), Date.now() - t0);
