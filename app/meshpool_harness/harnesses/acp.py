@@ -573,6 +573,7 @@ class ACPAgent:
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
         self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
                     "plan": self.plan})
+        self.save()                                       # the thread survives a restart mid-turn
         body = text
         if self.plan:
             body = ("[Plan mode] Investigate as needed, then reply with a clear, numbered plan for the request below. "

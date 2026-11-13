@@ -427,6 +427,7 @@ class Agent:
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
+        self.save()                                  # the thread and its message survive a restart mid-turn
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0], "images": [im.get("name", "image") for im in images or []],
                    "plan": self.plan})
         turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}

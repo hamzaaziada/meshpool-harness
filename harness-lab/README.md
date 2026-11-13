@@ -1,4 +1,4 @@
-> **Office and Meshpool Work: another agent is continuing this. Start at [OFFICE_HANDOFF.md](OFFICE_HANDOFF.md).**
+> **Office and Meshpool Work: another agent is continuing this. Start at [notes/OFFICE_HANDOFF.md](notes/OFFICE_HANDOFF.md).**
 
 # Harness lab
 
