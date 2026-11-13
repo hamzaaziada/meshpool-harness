@@ -139,12 +139,19 @@ def football_field(bk: Book) -> dict | None:
     bullets = []
     if marker:
         prov.append(bk.fact(f"{marker['label']}: {fmt_value(marker['value'], '$')}", f"{ws.title}!B{mk_row}"))
-        above = [c for c, l_ in zip(cats, lows) if l_ > marker["value"]]
-        below = [c for c, h_ in zip(cats, highs) if h_ < marker["value"]]
-        if above:
-            bullets.append({"text": f"Entirely above the {marker['label'].lower()}: {', '.join(above)}"})
-        if below:
-            bullets.append({"text": f"Entirely below the {marker['label'].lower()}: {', '.join(below)}"})
+        short = lambda c: re.sub(r"\s*\(.*?\)", "", c).strip()  # noqa: E731
+        above = [short(c) for c, l_ in zip(cats, lows) if l_ > marker["value"]]
+        below = [short(c) for c, h_ in zip(cats, highs) if h_ < marker["value"]]
+        mlab, mval = marker["label"].lower(), fmt_value(marker["value"], "$")
+        if len(above) == len(cats):
+            bullets.append({"text": f"Every method sits above the {mlab} of {mval}"})
+        elif len(below) == len(cats):
+            bullets.append({"text": f"Every method sits below the {mlab} of {mval}"})
+        else:
+            if above:
+                bullets.append({"text": f"Above the {mlab}: {', '.join(above).lower()}"})
+            if below:
+                bullets.append({"text": f"Below the {mlab}: {', '.join(below).lower()}"})
     widest = max(zip(cats, lows, highs), key=lambda t: t[2] - t[1])
     bullets.append({"text": f"Widest range: {widest[0]} ({fmt_value(widest[1], '$')}-{fmt_value(widest[2], '$')})"})
     return {"archetype": "football_field", "fixed": True, "title": title, "title_prov": prov[-1:],
