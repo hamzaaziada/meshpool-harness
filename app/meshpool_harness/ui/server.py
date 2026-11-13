@@ -234,7 +234,7 @@ def get_settings() -> dict:
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
-            "native": NATIVE[0], "platform": sys.platform, "user_home": str(Path.home()),
+            "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
 
 
@@ -761,7 +761,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/term":
                 b = self._json()
-                return self._send(200, W.term_run(b.get("root", ""), b.get("command", "")))
+                return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
             m = re.fullmatch(r"/api/term/(\w+)/stop", u.path)
             if m:
                 return self._send(200, W.term_stop(m.group(1)))

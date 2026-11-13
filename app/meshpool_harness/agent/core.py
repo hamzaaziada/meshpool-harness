@@ -309,8 +309,12 @@ class Agent:
     def system_prompt(self) -> str:
         from meshpool_harness.config import find_bash
         bash = find_bash()
-        shell = "bash" + (f" ({bash})" if os.name == "nt" and bash else "") if bash else \
-            ("cmd.exe (no bash found: write Windows commands)" if os.name == "nt" else "sh")
+        if os.name == "nt":
+            shell = (("bash (Git Bash). For Windows tools, run them through powershell -NoProfile -Command \"...\" "
+                      "or cmd /c \"...\"") if bash else
+                     "PowerShell (no bash on this computer: write PowerShell commands; cmd /c \"...\" also works)")
+        else:
+            shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
         if V3:

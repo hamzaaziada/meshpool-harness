@@ -458,6 +458,11 @@ class Session:
 
     def set_mode(self, mode: str):
         self.agent.mode = self.mode = mode if mode in MODES else "ask"
+        if hasattr(self.agent, "apply_mode"):
+            try:
+                self.agent.apply_mode()
+            except Exception:  # noqa: BLE001
+                pass
 
     def view(self, since: int) -> dict:
         self.touched = time.time()
