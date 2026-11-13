@@ -1095,6 +1095,27 @@ def normalize(s: dict) -> dict:
         s["callout"] = {"bullets": s["callout"]}
     if isinstance(s.get("source"), str):
         s["source"] = {"text": s["source"]}
+    gaps = []
+    gap_re = re.compile(r"\s*[\(\[]?\[GAP:?\s*([^\]]*)\][\)\]]?")
+
+    def scrub(v):                                          # prose: a gap is removed and noted, never shown
+        if isinstance(v, str) and "[GAP" in v:
+            gaps.extend(m.group(1).strip() for m in gap_re.finditer(v))
+            return re.sub(r"\s+([,.;:])", r"\1", gap_re.sub("", v)).strip()
+        if isinstance(v, list):
+            return [scrub(x) for x in v]
+        if isinstance(v, dict):
+            return {k: (x if k in ("table", "chart", "prov", "notes") else scrub(x)) for k, x in v.items()}
+        return v
+    for k in list(s):
+        if k not in ("table", "chart", "prov", "notes", "source", "footnotes"):
+            s[k] = scrub(s[k])
+    if gaps:
+        s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
+                      + "; ".join(g for g in gaps if g)).strip()
+    for k in ("title", "title_right"):
+        if isinstance(s.get(k), str) and s[k].rstrip().endswith(".") and not s[k].rstrip().endswith("..."):
+            s[k] = s[k].rstrip()[:-1]
     if isinstance(s.get("footnotes"), str):
         s["footnotes"] = [s["footnotes"]]
     return s
@@ -1119,6 +1140,12 @@ def chart_problems(c: dict) -> list[str]:
     if bad:
         out.append(f"{len(bad)} chart values are not numbers (gap markers or text); chart only the points the facts "
                    "support, or show the numbers you have as a stat stack")
+    if c.get("kind") == "waterfall" and len(series) == 1:
+        v = [x for x in series[0].get("values") or [] if isinstance(x, (int, float))]
+        if len(v) >= 3 and abs(v[0] + sum(v[1:-1]) - v[-1]) > max(0.015 * abs(v[-1]), 0.05):
+            out.append(f"the bridge does not add up: {v[0]:g} plus the steps ({sum(v[1:-1]):g}) is "
+                       f"{v[0] + sum(v[1:-1]):g}, not the end value {v[-1]:g}; a waterfall needs a start total, "
+                       "signed steps in the same unit, and an end total")
     if len(cats) < 2 and c.get("kind") != "waterfall":
         out.append("a chart with one bar shows nothing; give >= 3 comparable categories or use a stat stack")
     sunits = {bool(re.search(r"%|cagr|share|rate|growth", str(se.get("name", "")), re.I)) for se in series}
@@ -1136,21 +1163,48 @@ def chart_problems(c: dict) -> list[str]:
     return out
 
 
-def stat_stack(c: dict) -> dict:
-    """Unrelated headline numbers as big emphasised figures with labels (the consulting way)."""
+def _as_written(v: float, text: str) -> str | None:
+    """The figure as the slide's own text writes it ($65.37 per share -> $65.37/sh, $83.0bn, 35%)."""
+    if not text:
+        return None
+    forms = {f"{v:,.2f}", f"{v:,.1f}", f"{v:,.0f}" if v == int(v) else None, f"{v:g}"} - {None}
+    for f in sorted(forms, key=len, reverse=True):
+        m = re.search(r"(\$?)" + re.escape(f) + r"(?![\d.])\s?(bn|tn|m\b|%|x\b|/sh|per share)?", text)
+        if m and (m.group(1) or m.group(2)):
+            unit = {"per share": "/sh"}.get(m.group(2) or "", m.group(2) or "")
+            return f"{m.group(1)}{f}{unit}"
+    return None
+
+
+def stat_stack(c: dict, text: str = "") -> dict:
+    """Unrelated headline numbers as big emphasised figures with labels (the consulting way). Each figure keeps its
+    unit and precision, taken from how the slide's own text writes it when it does: $48.42/sh, $83.0bn, 35%."""
     items = []
+    cunit = str(c.get("unit", ""))
+    dec = c.get("decimals")
     for se in c.get("series") or []:
         for cat, v in zip(c.get("categories") or [], se.get("values") or []):
-            if isinstance(v, (int, float)):
-                unit = "%" if re.search(r"share|%|percent", cat, re.I) else ""
-                cur = "$" if re.search(r"\$|dollar|savings|cost", cat, re.I) else ""
-                mag = "M" if re.search(r"\$M|million", cat, re.I) else ("K" if re.search(r"thousand", cat, re.I) else "")
-                num = f"{v:,.0f}" if abs(v) >= 10 else f"{v:g}"
-                lab = re.sub(r"^\s*\d+[.)]\s*", "", re.sub(r"\s*\([^)]*\)", "", cat))
-                if len(c.get("series") or []) > 1:
-                    lab = f"{lab}: {se.get('name', '')}"
-                items.append({"value": f"{cur}{num}{mag}{unit}", "label": lab})
-    return {"kind": "stats", "items": items[:5]}
+            if not isinstance(v, (int, float)):
+                continue
+            ctx_ = f"{cat} {se.get('name', '')}"
+            pct = bool(re.search(r"%|share of|percent|premium|margin|growth", ctx_, re.I)) and abs(v) <= 100
+            cur = "$" if re.search(r"\$|dollar|price|value|cost|revenue|debt|capex", ctx_ + " " + cunit, re.I) and not pct else ""
+            per_share = bool(re.search(r"/\s*sh|per share|price", ctx_, re.I))
+            mag = ("" if per_share or pct else "bn" if re.search(r"\$?bn|billion", ctx_ + " " + cunit, re.I)
+                   else "m" if re.search(r"\$m\b|million", ctx_ + " " + cunit, re.I) else "")
+            d = dec if isinstance(dec, int) else (2 if per_share and v != int(v) else (1 if v != int(v) else 0))
+            if per_share:
+                d = 2
+            num = f"{v:,.{d}f}"
+            tail = "/sh" if per_share else ""
+            lab = re.sub(r"^\s*\d+[.)]\s*", "", re.sub(r"\s*\([^)]*\)", "", cat)).strip()
+            if len(c.get("series") or []) > 1:
+                lab = f"{lab}: {se.get('name', '')}"
+            written = _as_written(v, text)
+            items.append({"value": written or f"{cur}{num}{mag}{'%' if pct else ''}{tail}", "label": lab})
+    if len(items) > 6:                                  # keep the first and the last (start and end of a story)
+        items = items[:5] + items[-1:]
+    return {"kind": "stats", "items": items}
 
 
 def _stats(ctx, sl, n, c, x, y, w, h):
@@ -1209,7 +1263,7 @@ def fallback(s: dict) -> dict:
     s = dict(s)
     c = s.get("chart") or {}
     if c and chart_problems(c):                        # a misleading chart becomes a stat stack, layout kept
-        st = stat_stack(c)
+        st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
         if len(st["items"]) < 2:                       # one number is not an exhibit: full-width argument instead
             s["chart"] = None
             if s.get("title_right"):
