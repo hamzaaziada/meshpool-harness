@@ -457,3 +457,32 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 #onbSetup{max-width:640px}
 
 .imgview{padding:12px;overflow:auto;flex:1}.imgview img{max-width:100%;height:auto;border-radius:6px;border:1px solid var(--line);background:#fff}
+
+/* ---------- motion: short, calm, never moves the layout (opacity and transform only) ---------- */
+:root{--ease:cubic-bezier(.2,.7,.2,1)}
+@keyframes mp-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes mp-pop{from{opacity:0;transform:scale(.97) translateY(-2px)}to{opacity:1;transform:none}}
+@keyframes mp-fade{from{opacity:0}to{opacity:1}}
+@keyframes mp-rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes mp-toast{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.col>.enter{animation:mp-in .18s var(--ease) both}
+.pop{animation:mp-pop .12s var(--ease) both;transform-origin:top left}
+.scrim{animation:mp-fade .14s ease-out both}
+.scrim>.modal,.scrim>.dlg{animation:mp-rise .18s var(--ease) both}
+.toast{animation:mp-toast .18s var(--ease) both}
+.panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
+.onb-card{animation:mp-in .22s var(--ease) both}
+.th,.tbtn,.pill,.btn,.iconbtn,.side-foot button,.newbtn,.scopeopt,.updbar{transition:background-color .12s ease,color .12s ease,border-color .12s ease,box-shadow .12s ease}
+.btn:active,.bigbtn:active,.pill:active,.newbtn:active{transform:scale(.98)}
+.modesw [data-mode]{transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
+
+/* ---------- scrollbars: the same thin, steady scrollbars on Windows and Mac ----------
+   Windows draws full-width scrollbars that appear and vanish as content grows, which shifts the whole column
+   sideways. Reserve their space (scrollbar-gutter) and draw thin ones everywhere. */
+.side-list,.conv,.pbody,.mbody,.pop .pl,.cw,.impl{scrollbar-gutter:stable}
+*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:var(--ink-3)}
+::-webkit-scrollbar-corner{background:transparent}
