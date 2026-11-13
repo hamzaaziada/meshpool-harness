@@ -461,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 return self._send(200, IM.scan())
+            if u.path == "/api/import-context":
+                from meshpool_harness import importer as IM
+                return self._send(200, {"prompt": IM.context_prompt()})
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -479,6 +482,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"sessions": A.listing()})
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_info())
+            if u.path == "/api/mcp-library":
+                from meshpool_harness import mcp_library as ML
+                return self._send(200, ML.api_view())
             if u.path == "/api/harnesses":
                 return self._send(200, A.harness_info())
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -489,6 +495,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/skills":
                 from meshpool_harness import skills as SK
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+            if u.path == "/api/plugins":
+                from meshpool_harness import plugins as PL
+                return self._send(200, PL.api_view())
             if u.path == "/api/skill":
                 from meshpool_harness import skills as SK
                 sk = SK.get(q.get("id", ""))
@@ -593,6 +602,23 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 return self._send(200, HRS.login({"claude-subscription": "claude",
                                                   "chatgpt-subscription": "codex"}.get(b.get("id", ""), b.get("id", ""))))
+            if u.path == "/api/import-context":
+                # context from ChatGPT, Claude or another assistant: pasted answer, pasted instructions, or an export
+                from meshpool_harness import importer as IM
+                b = self._json()
+                if b.get("file"):
+                    import base64
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
+                        tf.write(base64.b64decode(b["file"].get("data", "")))
+                    try:
+                        return self._send(200, IM.import_export(tf.name))
+                    finally:
+                        os.unlink(tf.name)
+                if b.get("instructions"):
+                    return self._send(200, {"skill": IM.import_instructions_as_skill(
+                        b.get("name", ""), b["instructions"], b.get("description", ""))})
+                return self._send(200, IM.import_context_text(b.get("text", "")))
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])
@@ -619,6 +645,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_save(self._json()))
+            if u.path == "/api/mcp-library":
+                from meshpool_harness import mcp_library as ML
+                return self._send(200, ML.api_action(self._json()))
             if u.path == "/api/harnesses":
                 return self._send(200, A.harness_change(self._json()))
             if u.path == "/api/harnesses/open":
@@ -691,6 +720,9 @@ class Handler(BaseHTTPRequestHandler):
                     SK.folder().mkdir(parents=True, exist_ok=True)
                     reveal(SK.folder())
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+            if u.path == "/api/plugins":
+                from meshpool_harness import plugins as PL
+                return self._send(200, PL.api_action(self._json()))
             if u.path == "/api/file":
                 b = self._json()
                 return self._send(200, W.write_file(b.get("root", ""), b.get("path", ""), b.get("text", "")))
@@ -791,6 +823,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
+            if m:
+                s, b = A.get(m.group(1)), self._json()
+                s.reply(b.get("question_id", ""), b.get("answers"))
+                return self._send(200, s.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()

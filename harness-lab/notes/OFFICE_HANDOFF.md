@@ -95,3 +95,17 @@ Still to check, in this order:
 Sources: support.claude.com articles 13345190 (get started), 12111783 (create and edit files), 14128542 (computer
 use), 13364135 (using Cowork); claude.com/blog/cowork-research-preview; github.com/anthropics/skills (docx, xlsx,
 pdf skills).
+
+## Update, 13 Nov 2026 (office agent, branch claude/elegant-edison-1oey8d)
+
+- Open issue 1 fixed: Cowork now defaults to Meshpool Work (Hermes no longer marked default).
+- Open issue 2 fixed: WORK_SYSTEM tells Work to make .docx with make_document for memos/reports, and to run
+  check_deck / check_workbook / check_document (meshpool-office MCP tools) on every deliverable.
+- "Needs repair" in desktop Office: `engines/forge/ooxml_check.py` validates every part against the ECMA-376 schemas
+  plus relationships and ids (rules P0/X0, tool check_document). Fixed: negative chart axis ids from python-pptx.
+  Forge decks, make_document output and recalculated workbooks pass. Not yet confirmed by opening the files in
+  desktop PowerPoint/Word/Excel, which this container cannot run.
+- Step 1 done: contract, invoices, pdf, letters pass for Meshpool Work (4/4) and Auto (4/4); Pi is not installed in
+  the cloud container, Hermes is not vendored there.
+- New: forge deck engine v2 is the default behind `--engine slides` (`docs/deck-engine/design-grammar.md`).
+- Not done: the capability gaps under "Still to check". Key spend is about $3.1 of the $4 budget.

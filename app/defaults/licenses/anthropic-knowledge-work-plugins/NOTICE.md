@@ -1,0 +1,1 @@
+Meshpool bundles skills from Anthropic's knowledge-work plugins (finance, legal, sales, customer-support), licensed under the Apache License 2.0. Each bundled skill folder carries the licence and a NOTICE listing the changes. Folders: defaults/skills/finance-*, legal-*, sales-*, customer-support-*.

@@ -227,7 +227,7 @@ const GIT_WORD = {"??": "new", "A": "added", "M": "changed", "D": "deleted", "R"
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
-  $$("#col .work").forEach(d => d.open = S.steps || !d.dataset.done);
+  $$("#col .work").forEach(d => d.open = S.steps || !d.dataset.done || !!$(".appr:not(.done)", d));   // never fold away a pending approval
   $$("#col .think details").forEach(d => d.open = S.steps);
   renderTop(); toast(S.steps ? "Showing every step" : "Steps are folded; click one to open it");
 }
@@ -954,12 +954,13 @@ function workGroup() {
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
-  if (done) { g.dataset.done = "1"; g.open = !!S.steps; }
+  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); }
 }
 function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
 function applyEv(ev) {
   const cur = S.cur, col = $("#col");
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
+  if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
@@ -1010,7 +1011,7 @@ function applyEv(ev) {
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
-      if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); }
+      if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
       d.id = "appr-" + ev.id;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
@@ -1056,6 +1057,61 @@ function applyEv(ev) {
       }
       break; }
   }
+}
+/* ---------- ask_user: questions with options ---------- */
+// The agent asks 1-4 questions; each has 2-5 options (the recommended one is preselected) and a free-text "Other".
+// Answers go to POST /api/agent/<id>/reply {question_id, answers: [{selected: [labels], other: text}]}.
+function questionEv(ev, add) {
+  if ((ev.type === "tool_start" || ev.type === "tool_end") && ev.name === "ask_user") return true;   // the card shows it
+  if (ev.type === "question") { closeGroup(); questionCard(ev, add); S.cur.activity = "Waiting for your answer"; return true; }
+  if (ev.type === "question_done") { questionDone(ev); return true; }
+  return false;
+}
+function questionCard(ev, add) {
+  const qs = ev.questions || [], cid = "q-" + String(ev.id).replace(/[^\w-]/g, "");
+  const many = qs.length > 1;
+  const html = `<div class="qhead" id="${cid}-h">${many ? `${qs.length} questions before I go on` : "A question before I go on"}</div>` +
+    qs.map((q, i) => `<fieldset class="qq" data-i="${i}" data-multi="${q.multi ? 1 : 0}">
+      <legend><span class="qchip">${esc(q.header || `Question ${i + 1}`)}</span><span class="qtext">${esc(q.question)}</span>${q.multi ? `<span class="qhint">Pick any</span>` : ""}</legend>
+      <div class="qopts">${(q.options || []).map(o => `<button type="button" class="qopt" aria-pressed="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="ql">${esc(o.label)}${o.recommended ? ` <span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</button>`).join("")}</div>
+      <label class="qother"><span>Other</span><input type="text" placeholder="Type your own answer" aria-label="Your own answer to: ${esc(q.question)}"></label>
+    </fieldset>`).join("") +
+    `<div class="acts"><button type="button" class="btn primary qsend">Send ${many ? "answers" : "answer"}</button><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span></div>`;
+  const d = add(html, "qcard"); d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-labelledby", cid + "-h");
+  $$(".qq", d).forEach(fs => {
+    const multi = fs.dataset.multi === "1", btns = $$(".qopt", fs), inp = $("input", fs);
+    btns.forEach(b => b.onclick = () => {
+      const on = b.getAttribute("aria-pressed") !== "true";
+      if (!multi) { btns.forEach(x => x.setAttribute("aria-pressed", "false")); if (on) inp.value = ""; }
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    inp.oninput = () => { if (!multi && inp.value.trim()) btns.forEach(x => x.setAttribute("aria-pressed", "false")); };
+    inp.onkeydown = e => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $(".qsend", d).click(); } };
+  });
+  $(".qsend", d).onclick = async () => {
+    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[aria-pressed=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
+    $$("button, input", d).forEach(x => x.disabled = true);
+    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); }
+    catch (e) { $$("button, input", d).forEach(x => x.disabled = false); toast(e.message); }
+  };
+  if (!ev.timeout_s) $$("button, input", d).forEach(x => x.disabled = true);   // answered at once (no one to ask)
+  scrollConv(true);
+  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-pressed=true]", d)?.focus({preventScroll: true});
+}
+function questionDone(ev) {
+  const d = document.getElementById("q-" + String(ev.id).replace(/[^\w-]/g, "")); if (!d || d.classList.contains("done")) return;
+  d.classList.add("done");
+  const src = ev.source, head = $(".qhead", d);
+  if (head) head.textContent = src === "stopped" ? "Question (stopped)" : src === "user" || src === "replay" ? "You answered" : src === "timeout" ? "No answer in time: went with the recommendations" : "Went with the recommendations";
+  const ans = ev.answers || [];
+  const typed = src === "user" && /^You replied/.test(ev.text || "");
+  const rows = ans.length && !typed ? $$(".qq", d).map((fs, i) => {
+    const a = ans[i] || {}, q = $(".qtext", fs)?.textContent || "", h = $(".qchip", fs)?.textContent || "";
+    const val = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", ");
+    return `<div class="qa"><span class="qchip">${esc(h)}</span><span class="qtext">${esc(q)}</span><b>${esc(val || "-")}</b>${a.default && src === "user" ? `<span class="qhint">recommended</span>` : ""}</div>`;
+  }).join("") : `<div class="qa"><span class="qtext qpre">${esc(ev.text || "")}</span></div>`;
+  $$(".qq, .acts", d).forEach(x => x.parentNode.removeChild(x));
+  d.insertAdjacentHTML("beforeend", rows);
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
@@ -1330,6 +1386,7 @@ function panelPreview(body) {
 
 /* ================================== settings ================================== */
 const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
 function openSettings(sec = "general") {
   closePop();
   $(".scrim")?.remove();
@@ -1572,6 +1629,7 @@ async function renderSection(sec) {
     };
     $("#skCreate").onclick = () => { if (!$("#skName").value.trim() || !$("#skBody").value.trim()) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Give the skill a name and instructions."; return; } skillAct({action: "create", name: $("#skName").value, description: $("#skDesc").value, body: $("#skBody").value}); };
     $("#skOpen").onclick = () => post("/api/skills", {action: "open"});
+  } else if (sec === "plugins") { await drawPlugins(b, close);
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
@@ -1607,6 +1665,7 @@ async function renderSection(sec) {
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
     $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
     $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    drawMcpLibrary(b);
   } else if (sec === "permissions") {
     const draw = async body => {
       const r = await post("/api/permissions", body || {});
@@ -1680,6 +1739,112 @@ function showOnboarding() {
       $("#onbKey").remove(); permStep(o);
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
   };
+}
+
+/* Bring your context: what ChatGPT, Claude or Gemini already knows about you, by prompt or by data export, and
+   custom GPT / project instructions as skills. */
+async function contextPanel(box) {
+  if (!box) return;
+  let prompt = "";
+  try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
+  box.innerHTML = `<h3 class="onb-h">Bring your context</h3>
+    <p class="muted">So Meshpool knows how you work from day one. Pick either way; both take a minute.</p>
+    <ol class="ctx-steps">
+      <li><b>Ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
+        <div><button class="btn" id="ctxCopy">Copy the prompt</button></div>
+        <textarea id="ctxText" rows="4" placeholder="Paste the answer here"></textarea>
+        <div><button class="btn" id="ctxGo">Import the answer</button></div></li>
+      <li><b>Or upload your data export.</b> ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data.
+        Both email you a .zip. Meshpool keeps your projects' instructions as skills and lasting facts as memory; it does not copy your chats.
+        <div><input type="file" id="ctxZip" accept=".zip"></div></li>
+      <li><b>Have a custom GPT or a Claude project you rely on?</b> Paste its instructions to make it a skill.
+        <input id="ctxName" placeholder="Name, e.g. board-memo-writer">
+        <textarea id="ctxIns" rows="3" placeholder="Paste the instructions"></textarea>
+        <div><button class="btn" id="ctxSkill">Save as a skill</button></div></li>
+    </ol><div class="res" id="ctxRes"></div>`;
+  const res = (t, bad) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ""); r.textContent = t; };
+  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
+  $("#ctxGo", box).onclick = async () => {
+    const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
+    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : "")); } catch (e) { res(e.message, true); }
+  };
+  $("#ctxZip", box).onchange = async ev => {
+    const f = ev.target.files[0]; if (!f) return; res("Reading your export…");
+    const data = await new Promise(ok => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.readAsDataURL(f); });
+    try { const r = await post("/api/import-context", {file: {name: f.name, data}}); res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${r.skills.length} project skills, ${r.memory} facts into memory, ${r.instructions} instructions (from ${r.conversations_seen} conversations; chats not copied).`); } catch (e) { res(e.message, true); }
+  };
+  $("#ctxSkill", box).onclick = async () => {
+    const instructions = $("#ctxIns", box).value.trim(); if (!instructions) return res("Paste the instructions first.", true);
+    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`); } catch (e) { res(e.message, true); }
+  };
+}
+
+/* Settings, Plugins: built-in plugin groups (one switch each) and installed plugins in the Claude Code format.
+   Nothing in a plugin runs at install; its MCP servers stay off until the user turns each one on. */
+async function drawPlugins(b, close) {
+  let d;
+  try { d = await api("/api/plugins"); } catch (e) { b.innerHTML = `${close}<h3>Plugins</h3><div class="res bad">${esc(e.message)}</div>`; return; }
+  const say = (text, bad) => { RES("plRes").className = "res " + (bad ? "bad" : "ok"); RES("plRes").textContent = text; };
+  const act = async body => { try { const r = await post("/api/plugins", body); await loadSkills(); render(r); return r; } catch (e) { say(e.message, true); return null; } };
+  const installed = r => { if (!r?.installed?.length) return; const p = r.installed; const sv = p.reduce((n, x) => n + x.servers.length, 0); say(`Installed ${p.map(x => x.name).join(", ")}: ${p.reduce((n, x) => n + x.skills.length, 0)} skills${sv ? `, ${sv} MCP server${sv === 1 ? "" : "s"} (off until you turn them on)` : ""}.` + p.flatMap(x => x.notes).map(n => " " + n).join("")); };
+  const group = g => `<li><label class="switch"><input type="checkbox" data-pb="${esc(g.id)}" ${g.enabled ? "checked" : ""} aria-label="Use ${esc(g.name)}"><span></span></label><span class="tg"><b>${esc(g.name)}</b> <span class="badge modified">${g.skills.length} skills</span>${g.partly ? ` <span class="badge modified">Some on</span>` : ""}<small>${esc(g.description)}</small><small>${esc(g.source)}</small><details><summary style="cursor:pointer;font-size:12px;color:var(--ink-3)">Skills it turns on</summary><small>${g.skills.map(s => "$" + esc(s.id)).join(", ")}</small></details></span></li>`;
+  const server = s => `<span style="display:flex;gap:8px;align-items:center;margin-top:6px"><label class="switch" title="Run this server"><input type="checkbox" data-ps="${esc(s.name)}" data-cmd="${esc(s.target)}" ${s.enabled ? "checked" : ""} ${s.present ? "" : "disabled"} aria-label="Turn on ${esc(s.name)}"><span></span></label><code>${esc(s.target)}</code></span>`;
+  const plugin = p => `<li><label class="switch"><input type="checkbox" data-pi="${esc(p.name)}" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(p.name)}"><span></span></label><span class="tg"><b>${esc(p.name)}</b>${p.version ? ` <span class="badge modified">${esc(p.version)}</span>` : ""}<small>${esc(p.description)}</small>${p.skills.length ? `<small>Skills: ${p.skills.map(s => "$" + esc(s)).join(", ")}</small>` : ""}${(p.server_status || []).map(server).join("")}<small>From ${esc(p.source)}</small></span><button class="iconbtn" data-pr="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.x}</button></li>`;
+  const render = v => {
+    d = v;
+    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the same format as Claude Code plugins. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
+      <h3 style="font-size:15px;margin:14px 0 6px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
+      <h3 style="font-size:15px;margin:14px 0 6px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
+      <div class="keyrow"><input id="plSrc" placeholder="Folder, .zip, git URL or marketplace.json" spellcheck="false"><button class="btn primary" id="plAdd">Install</button></div>
+      <div class="dropzone" id="plDrop" style="margin-top:8px" tabindex="0" role="button">Or drop a plugin .zip or a marketplace.json here<input type="file" id="plFile" accept=".zip,.json" hidden></div><div class="res" id="plRes"></div>`;
+    $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
+    $$("[data-pb]", b).forEach(x => x.onchange = () => act({action: "enable", name: x.dataset.pb, on: x.checked}));
+    $$("[data-pi]", b).forEach(x => x.onchange = () => act({action: "enable", name: x.dataset.pi, on: x.checked}));
+    $$("[data-pr]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Remove this plugin?", text: "Its skills, MCP servers and files are removed. Skills you had before stay.", ok: "Remove plugin", danger: true})) act({action: "remove", name: x.dataset.pr}); });
+    $$("[data-ps]", b).forEach(x => x.onchange = async () => {
+      if (x.checked && !await ask({title: "Turn on this server?", text: `It runs on this computer: ${x.dataset.cmd}`, ok: "Turn on"})) { x.checked = false; return; }
+      try { await post("/api/mcp", {name: x.dataset.ps, enabled: x.checked}); } catch (e) { say(e.message, true); x.checked = !x.checked; }
+    });
+    $("#plAdd").onclick = async () => { const src = $("#plSrc").value.trim(); if (!src) { $("#plSrc").focus(); return; } say("Installing..."); installed(await act({action: "install", source: src})); };
+    const upload = async f => { if (!f) return; const data = await new Promise(res => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.readAsDataURL(f); }); say("Installing..."); installed(await act({action: "upload", file: {name: f.name, data}})); };
+    const dz = $("#plDrop"); dz.onclick = () => $("#plFile").click(); $("#plFile").onchange = () => upload($("#plFile").files[0]);
+    dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
+    dz.ondrop = e => { e.preventDefault(); dz.classList.remove("over"); upload(e.dataTransfer.files[0]); };
+  };
+  render(d);
+}
+
+/* Settings, MCP servers: a library of well-known servers. Adding one puts it in the list switched off; the user fills
+   its settings (saved in meshpool.config on this computer) and turns it on. OAuth ones sign in through Connectors. */
+async function drawMcpLibrary(b) {
+  const box = document.createElement("div"); b.appendChild(box);
+  let d;
+  try { d = await api("/api/mcp-library"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const say = (text, bad) => { RES("mlRes").className = "res " + (bad ? "bad" : "ok"); RES("mlRes").textContent = text; };
+  const secret = n => /KEY|TOKEN|SECRET|PASSWORD|URI|STRING/.test(n);
+  const fields = e => e.settings.map(s => `<label class="field" style="margin-top:6px"><span>${esc(s.name)}</span><input data-ms="${esc(s.name)}" type="${secret(s.name) ? "password" : "text"}" placeholder="${esc(s.hint)}" autocomplete="off" spellcheck="false"></label>`).join("");
+  const button = e => e.transport === "connector" || e.transport === "oauth" ? (e.enabled ? "" : `<button class="btn" data-ma="${esc(e.id)}">Connect</button>`)
+    : !e.added ? `<button class="btn" data-ma="${esc(e.id)}">Add</button>` : e.enabled ? "" : `<button class="btn primary" data-mo="${esc(e.id)}">${e.settings.length ? "Save and turn on" : "Turn on"}</button>`;
+  const row = e => `<li data-me="${esc(e.id)}"><span class="tg"><b>${esc(e.name)}</b> ${e.enabled ? `<span class="badge added">On</span>` : e.added ? `<span class="badge modified">Added, off</span>` : ""}<small>${esc(e.description)}</small>${e.target ? `<code>${esc(e.target)}</code>` : ""}<small>${esc(e.license)} · <a href="${esc(e.docs)}" target="_blank" rel="noopener">Docs</a>${e.settings.length ? ` · Needs ${e.settings.map(s => esc(s.name)).join(", ")}` : ""}</small>${e.added && !e.enabled && e.settings.length && e.transport !== "connector" ? fields(e) : ""}</span>${button(e)}</li>`;
+  const draw = () => {
+    const cat = S.mcpLibCat || "";
+    box.innerHTML = `<h3 style="font-size:15px;margin:18px 0 4px">Library</h3><p class="lead" style="font-size:12.5px">Well-known MCP servers, checked to exist. Adding one puts it in the list above, switched off. Fill in its settings, then turn it on. Keys stay on this computer.</p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${["", ...d.categories].map(c => `<button class="btn${c === cat ? " primary" : ""}" data-mc="${c}">${c ? c[0].toUpperCase() + c.slice(1) : "All"}</button>`).join("")}</div>
+      <ul class="rows2">${d.library.filter(e => !cat || e.category === cat).map(row).join("")}</ul><div class="res" id="mlRes"></div>`;
+    $$("[data-mc]", box).forEach(x => x.onclick = () => { S.mcpLibCat = x.dataset.mc; draw(); });
+    $$("[data-ma]", box).forEach(x => x.onclick = async () => {
+      try {
+        const r = await post("/api/mcp-library", {action: "add", id: x.dataset.ma});
+        if (r.result.connector) { await post("/api/connectors", {action: "connect", id: r.result.connector}); S.connCache = null; d = r; draw(); say("Finish signing in in your browser. New threads can then use it."); return; }
+        renderSection("mcp");
+      } catch (e) { say(e.message, true); }
+    });
+    $$("[data-mo]", box).forEach(x => x.onclick = async () => {
+      const values = {}; $$(`[data-me="${x.dataset.mo}"] [data-ms]`, box).forEach(i => { if (i.value.trim()) values[i.dataset.ms] = i.value.trim(); });
+      try { await post("/api/mcp-library", {action: "configure", id: x.dataset.mo, values}); renderSection("mcp"); } catch (e) { say(e.message, true); }
+    });
+  };
+  draw();
 }
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
@@ -1765,6 +1930,7 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
     ${subs.length ? `<h3 class="onb-h">Use your subscriptions</h3><ul class="rows2" id="oSubs">${subs.map(h => `<li><span class="tg"><b>${esc(h.name)}</b><small>${esc(h.description)}</small></span>${h.signed_in ? `<span class="badge added">Signed in</span>` : `<button class="btn" data-login="${esc(h.id)}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="oSubRes"></div>` : ""}
     <div id="oImport"></div>
+    <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   $$("[data-login]", card).forEach(x => x.onclick = async () => {
     try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("oSubRes").className = "res"; RES("oSubRes").textContent = r.message; } catch (e) { RES("oSubRes").className = "res bad"; RES("oSubRes").textContent = e.message; }
@@ -1773,6 +1939,7 @@ function setupStep(o, prev) {
     setTimeout(tick, 3000);
   });
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
+  contextPanel($("#oContext", card));
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click

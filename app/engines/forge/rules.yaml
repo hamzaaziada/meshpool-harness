@@ -1,0 +1,273 @@
+# Forge quality rules. Every threshold the validators use lives here.
+# A client template can override any key with a YAML file passed as --rules (deep-merged over this one).
+# Rule IDs: P1-P18 PowerPoint, X1-X13 Excel. "fix_scope" says who may fix a failure:
+#   content  -> the LLM content stage (it may change words, numbers, archetype choice, slide order)
+#   renderer -> the deterministic renderer (a bug: the model is never asked to fix it)
+#   template -> the client template or this config
+version: 1
+
+repair:
+  max_rounds: 3                 # content repair rounds before failures are frozen into the QA report
+  flag_in_file: true            # unresolved failures are written into the speaker notes as "[QA] ..." lines
+
+pptx:
+  render:
+    enabled: true               # headless LibreOffice render to PDF/PNG (P1)
+    dpi: 80
+    timeout_s: 240
+    box_tolerance_in: 0.08      # a rendered text span may sit this far outside its shape box
+  whitespace:                   # P20: dead space, measured on the render
+    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12
+    body_top: 0.20              # body band as fractions of page height (below the title block, above the source)
+    body_bottom: 0.90
+    exempt_archetypes: [cover, section_divider, appendix_divider, end]
+    max_row_air_in: 0.25        # a table row may be this much taller than its text (no stretched rows)
+    max_bar_in: 0.6             # estimated bar thickness (frame, categories, gap width): no slabs
+    max_column_in: 1.2
+    max_empty_share_by_density: # a presented slide may keep more air around one exhibit (balanced and read use
+                                # max_empty_share); slabs and stretched rows
+      present: 0.30             # stay forbidden in every mode
+  bookends:                     # P16: opening/closing slides the brief asks for
+    opening_archetypes: [cover]
+    closing_archetypes: [closing, end]
+  charts:                       # P2
+    picture_name_hints: "(?i)chart|graph|plot|figure|exhibit"
+  tables:                       # P3
+    picture_name_hints: "(?i)table|grid|matrix"
+    ocr_text_chars_max: 25      # an image with more OCR'd characters than this counts as text-in-image (when OCR is available)
+  fonts:                        # P4
+    allowlist: []               # extra families beyond the theme major/minor fonts
+    max_families: 2
+    max_sizes_per_role: 3       # untagged decks (reference / hand-made)
+    max_sizes_per_role_by_density:  # forge slides tagged "density:<mode>", counted per mode; roles not listed use the base.
+      # The renderer's type scale (density.py SCALES) gives body text 4-6 sizes per mode (lead, body, head, label,
+      # argument intro/exhibit) and fitting adds up to two steps; present also carries the larger action/step sizes.
+      read:     {body: 5, subtitle: 4}
+      balanced: {body: 6, subtitle: 5}
+      present:  {body: 8, subtitle: 3}
+    require_embedding: false    # true when the template licence allows embedding
+    metric_files:               # metric-compatible fonts for measurement when the real font is absent
+      Calibri: Carlito
+      Calibri Light: Carlito
+      Cambria: Caladea
+      Georgia: Gelasio
+      Arial: Liberation Sans
+      Helvetica: Liberation Sans
+      Arial Narrow: Liberation Sans Narrow
+      Times New Roman: Liberation Serif
+      Courier New: Liberation Mono
+  text_fit:                     # P5
+    min_body_pt: 12
+    min_footnote_pt: 8          # reference decks: footnotes 8 pt, source 9 pt
+    min_title_pt: 20
+    wrap_safety: 0.97           # PowerPoint wraps a little earlier than raw advance widths
+    line_height: 1.15           # Arial single spacing as a multiple of font size (calibrated on renders)
+    min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
+    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid]
+    overflow_tolerance_in: 0.04
+  colors:                       # P6
+    srgb_exceptions: []         # hex values allowed as hardcoded colours (e.g. "FFFFFF" for knockout text)
+    check_charts: true
+  layout:                       # P7, P8
+    grid_columns: 24
+    gutter_in: 0.125            # used only when the template does not define the grid
+    margin_in: 0.5              # used only when the template does not define the margins
+    snap_tolerance_in: 0.05
+    edge_check: [left, right]
+    title_exempt_layouts: "(?i)^(blank)$"
+    overlap_min_in: 0.05
+    overlap_declare_prefix: "ov_"   # shape names starting with this declare an intended overlap
+    allow_panel_containment: true   # a text-free filled panel fully containing other shapes is not an overlap
+  icons:                        # P9
+    max_per_slide: 4
+    max_per_slide_by_archetype: {challenge_matrix: 6}
+    max_icon_size_in: 1.0
+    tag_prefix: "icon:"         # alt text "icon:<set>:<name>" identifies an icon and its set
+    allowed_sets: [lucide]
+    forbid_gradients: true
+    forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
+    max_rule_weight_pt: 1.5
+    forbid_emoji: true
+  density:                      # P10. The keys below are the "read" caps (dense send-ahead deliverable); "modes" holds
+                                # the caps for the other density modes (engines/forge/density.py), merged over these.
+                                # A forge slide declares its mode in its name ("density:present"); a deck without one is
+                                # checked as "read".
+    default_mode: read
+    mode_regex: "density:([a-z]+)"
+    max_body_words: 80          # default for narrative archetypes
+    max_bullets: 5
+    max_bullet_levels: 2
+    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words)
+      executive_summary: 120
+      text_matrix: 160
+      case_example: 110
+      options_evaluation: 120
+      recommendations_now_next_later: 110
+      timeline_roadmap: 100
+      kpi_tiles: 50
+      table_highlight: 40       # words outside the table; table cells are counted separately
+      quote_voice: 60
+      challenge_matrix: 260      # reference page: ~230 words in 5 rows x 2 lenses
+      exhibit_argument: 170      # reference page: ~150 words of argument beside the exhibit
+      table_focus: 60
+      grid: 200                  # parts grid: up to four parts, each about a quarter-slide argument
+    bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
+      recommendations_now_next_later: 12
+      timeline_roadmap: 12
+      options_evaluation: 12
+      case_example: 9
+      two_exhibits: 6
+      text_matrix: 15
+      executive_summary: 10
+      challenge_matrix: 20
+      exhibit_argument: 10
+      grid: 16
+    modes:
+      balanced:                 # lighter than a send-ahead: ~60-110 body words, at most 4-5 bullets per list
+        max_body_words: 90
+        max_bullets: 5
+        by_archetype:
+          executive_summary: 100
+          text_matrix: 130
+          case_example: 90
+          options_evaluation: 100
+          recommendations_now_next_later: 90
+          timeline_roadmap: 80
+          kpi_tiles: 40
+          table_highlight: 40
+          quote_voice: 50
+          challenge_matrix: 160
+          exhibit_argument: 120
+          table_focus: 60
+          grid: 130
+          closing: 110
+        bullets_by_archetype:
+          recommendations_now_next_later: 9
+          timeline_roadmap: 9
+          options_evaluation: 9
+          case_example: 6
+          two_exhibits: 5
+          text_matrix: 10
+          executive_summary: 6
+          challenge_matrix: 10
+          exhibit_argument: 7
+          grid: 10
+          closing: 10
+      present:                  # presenter-led: one message, one exhibit, <= ~3 short bullets, ~40 body words
+        max_body_words: 45
+        max_bullets: 3
+        by_archetype:
+          executive_summary: 60
+          text_matrix: 70
+          case_example: 50
+          options_evaluation: 60
+          recommendations_now_next_later: 60
+          timeline_roadmap: 60
+          kpi_tiles: 30
+          table_highlight: 30
+          quote_voice: 40
+          challenge_matrix: 70
+          exhibit_argument: 70
+          table_focus: 45       # takeaway and up to 3 short bullets beside the table or chart
+          grid: 80              # parts headings, stat labels, process and timeline captions included
+          closing: 90           # column heads, actions, one-line details, owners and dates
+          argument_only: 50
+        bullets_by_archetype:
+          recommendations_now_next_later: 6
+          timeline_roadmap: 6
+          options_evaluation: 6
+          case_example: 4
+          two_exhibits: 3
+          text_matrix: 4
+          executive_summary: 4
+          challenge_matrix: 4
+          exhibit_argument: 3   # two points beside the exhibit, each with one short bullet, and one so-what
+          grid: 8               # up to 4 parts of 2 bullets
+          closing: 4
+  titles:                       # P11
+    max_words: 15
+    max_lines: 2
+    require_verb: true
+    exempt_archetypes: [cover, section_divider, agenda, appendix_divider, end]
+    exempt_layouts: "(?i)title slide|section header|^title only cover|closing"
+  storyline:                    # P12
+    max_title_similarity: 0.8
+    require_outline_node: true
+  provenance:                   # P13
+    gap_marker: "[GAP"          # visible marker the renderer writes when a number is blocked
+    require_source_line: true
+    source_regex: "(?i)^\\s*(source|sources|note|notes)\\s*:"
+    source_band_top_frac: 0.80  # the source line sits in the bottom 20% of the slide
+    ignore_numbers: "^(19|20)\\d{2}$|^[0-9]{1,2}$"   # years and small ordinals (slide numbers, list numbers)
+  agreement:                    # P14
+    rel_tolerance: 0.006        # 0.6% relative difference allowed after unit scaling
+    allow_derived: true         # pairwise differences, % changes, shares and sums of chart values count as matches
+  archetypes:                   # P15
+    max_consecutive_same: 3
+    tag_regex: "arch:([a-z0-9_]+)"
+    node_regex: "node:([A-Za-z0-9_.-]+)"
+  slide_count:                  # P16
+    appendix_section_regex: "(?i)appendix|backup|annex"
+  editability:                  # P17
+    text_in_shape_overlap: 0.8   # a text box this much inside a filled, empty shape belongs in that shape
+    max_group_depth: 1
+    forbidden_locks: [noSelect, noMove, noResize, noTextEdit, noRot, noUngrp, noCrop]
+  accessibility:                # P18
+    max_reading_order_inversions: 0
+  consistency:                  # P19: the same element looks and sits the same on every slide
+    geometry_tol_in: 0.03       # title box, content margins, source line, slide number
+    title_sizes_max: 1          # one title size across content slides (references: 24pt on every page)
+    title_faces_max: 1
+    body_faces_max: 1
+    chart_label_sizes_max: 1
+    min_slides: 3               # fewer content slides than this: not checked
+
+xlsx:
+  recalc:
+    enabled: true
+    timeout_s: 240
+  sheet_roles:                  # by sheet name; the engine can also set roles with a defined name _role_<Sheet>
+    input: "(?i)input|assumption|driver|data|source|raw|hist"
+    calc: "(?i)calc|model|build|schedule|forecast|p&l|pnl|income|balance|cash|bs$|is$|cf$|valuation|dcf"
+    output: "(?i)output|summary|dashboard|report|cover|kpi"
+    checks: "(?i)check|control|integrity"
+  constants:                    # X1, X9
+    period_header_min: 1900
+    period_header_max: 2100
+  literals:                     # X2
+    allowed: [0, 1, 2, 4, 12, 52, 100, 365, 1000, 1000000, 1000000000]
+  balance:                      # X3
+    plug_label_regex: "(?i)plug|balancing (item|figure)|difference to balance|squeeze|to balance"
+    assets_regex: "(?i)^total assets$"
+    liabilities_regex: "(?i)^total liabilities$"
+    equity_regex: "(?i)^total (shareholders'? |stockholders'? )?equity$"
+    liab_equity_regex: "(?i)^total liabilities (and|&) (shareholders'? |stockholders'? )?equity$"
+    tolerance: 0.005
+  historicals:                  # X4
+    header_regex: "(?i)^(fy)?\\s*\\d{2,4}\\s*a$|actual|hist"
+    tieout_label_regex: "(?i)tie[- ]?out|ties to|vs\\.? reported|difference to reported|variance to reported"
+    tolerance: 0.005
+    source_column_regex: "(?i)^source"
+  errors:                       # X5
+    error_values: ["#REF!", "#NAME?", "#VALUE!", "#DIV/0!", "#N/A", "#NUM!", "#NULL!", "Err:"]
+  circularity:                  # X6
+    breaker_name_regex: "(?i)circ|breaker|switch"
+  recompute:                    # X7
+    rel_tolerance: 0.001
+  consistency:                  # X8
+    allow_first_period_exception: true
+    min_run: 3
+  formatting:                   # X10
+    input_font_colors: ["FF0000FF", "000000FF", "0000FF"]
+    link_font_colors: ["FF008000", "008000", "007A33", "FF007A33"]
+    formula_font_colors: ["FF000000", "000000", null]
+    require_frozen_panes: true
+    require_paren_negatives: true
+    unit_regex: "(?i)\\$|€|£|%|\\bk\\b|\\bm\\b|\\bmm\\b|\\bbn\\b|thousand|million|billion|\\bx\\b|units|days|years|months|\\(.*\\)|#|count|ratio|per "
+  checks:                       # X12
+    master_flag_names: [MasterCheck, master_check, CHECK_ALL, checks_all]
+  hygiene:                      # X13
+    allow_macros: false
+  signs:                        # X14: a positive loss/cost added to an income or total is a sign error
+    cost_label_regex: "(?i)\\b(net loss|loss|losses|cost|costs|expense|expenses|outflow|outflows|foregone|capex|write-?down|impairment)\\b"
+    benefit_label_regex: "(?i)synerg|saving|reduction|avoided|benefit|negative|\\(-\\)"

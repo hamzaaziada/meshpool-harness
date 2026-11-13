@@ -46,6 +46,7 @@ def run_turn(c, harness, kind, text, workdir, limit):
     time.sleep(1.5)
     c(f"/api/agent/{sid}/send", {"text": text})
     asked = 0
+    seen_q: set = set()
     t0 = time.time()
     while time.time() - t0 < limit:
         v = c(f"/api/agent/{sid}?since=0")
@@ -55,6 +56,13 @@ def run_turn(c, harness, kind, text, workdir, limit):
             if e["type"] == "approval" and e["id"] not in done:
                 asked += 1
                 c(f"/api/agent/{sid}/answer", {"id": e["id"], "decision": "yes"})
+        answered = {e["id"] for e in evs if e["type"] == "question_done"}
+        for e in evs:                                # ask_user: pick the recommended options, as a user in a hurry
+            if e["type"] == "question" and e["id"] not in answered and e["id"] not in seen_q:
+                seen_q.add(e["id"])
+                picks = [{"selected": [o["label"] for o in q.get("options", []) if o.get("recommended")]
+                          or [q["options"][0]["label"]], "other": ""} for q in e.get("questions") or []]
+                c(f"/api/agent/{sid}/reply", {"question_id": e["id"], "answers": picks})
         if v.get("state") == "idle" and any(e["type"] == "turn_end" for e in evs):
             break
         time.sleep(1)

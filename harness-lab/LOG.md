@@ -202,6 +202,37 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   stop_check 28/28, jitter 20/20 (twice), update_flow 7/7, modes/about/intr/v24 no page errors, unit 150.
 - Not tested here: the real Mac and Windows windows (this container is Linux; Safari's engine cannot be installed).
 
+## 2026-11-13: office track picked up; forge deck/workbook quality layer
+
+- Forge (`app/engines/forge`, docs in `docs/deck-engine/`): validators for 19 deck rules (P1-P19) and 13 workbook
+  rules (X1-X13), deck/PDF/workbook anatomy measurers, rules config, slide and workbook JSON schemas, scorecard,
+  9 tests. Forge v2 (design grammar measured on McKinsey pages, render.py + build.py) is now the default deck engine
+  behind `--engine slides`; the old engine stays behind MH_DECK_ENGINE=v1. MCP tools in meshpool-office:
+  check_deck, check_workbook, check_document, measure_office_file.
+- 17 public consulting decks measured (1,186 pages) to calibrate thresholds; blind visual review of our sample deck
+  (overall consultant-made 2/5 vs 4-5 for reference pages).
+- McKinsey one-shot rebuild test (`engines/forge/rebuild_eval.py`): fails today. Titles and consistency are good;
+  0% source lines vs 50-87%, Calibri only, thin exhibits. $0.015 per rebuild; key spend now $2.63.
+- Handoff open issues: 1 (cowork default) -> Meshpool Work; 2 (Markdown reports) -> Work writes .docx with
+  make_document. Practical office run finished: Meshpool Work 4/4 and Auto 4/4 (contract, invoices, pdf, letters);
+  Pi not installed in this container. Unit tests 151 passed.
+- Opens-without-repair check (P0/X0, `ooxml_check.py`): every XML part against the ECMA-376 Transitional schemas,
+  with the forms Office itself writes accepted. It found negative chart axis ids in every python-pptx chart (forge
+  and the v1 engine); fixed. Also fixed: a plain-string `source` crashed the renderer; the title-verb check missed
+  chart verbs ("jumped"). Unit tests 155 passed, 8 skipped.
+- Dead space (P20): the largest empty block in each content slide's body, measured on the render, must stay under
+  20% (McKinsey content pages: median 6%, p90 12%). Renderer fixes: short takeaways go under a full-width chart,
+  short tables open up, stat stacks and matrix rows spread over the body, overflowing tables split evenly, table
+  cells keep the model's detail. DC sample: 4 failing slides -> 1 (thin content, left to the repair loop); Bain
+  sample: 5 -> 0. Opening/closing slides the brief asks for are planned, enforced and checked (P16); new cover
+  design and a `closing` (next steps) archetype. Unit tests 158 passed, 8 skipped.
+- Empty space, second pass (user review of slides 2, 3, 6, 7, 8): the first fix hid thin content by stretching
+  table rows, bars and gaps. Now the renderer never fakes fullness (natural row heights, set bar thickness, type up
+  before gaps), the layout follows the content (short tables and small charts beside their argument, small numeric
+  tables drawn as charts, takeaway column width from its text, so-what band on text slides), P20 also catches
+  stretched rows and slab bars, and thin slides go back to the content model before and after rendering with the
+  whole fact base. Repair stops after two rounds without progress. Unit tests 160 passed, 8 skipped.
+
 ## 2026-11-13: merged as 0.1.0 beta
 
 - Independent UX audits: 6.3, 6.6, 7.2, 7.2. All findings of the first three fixed. Audit 4 findings are open in

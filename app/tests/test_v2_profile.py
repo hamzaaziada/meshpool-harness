@@ -16,6 +16,16 @@ from meshpool_harness.core.loop import run  # noqa: E402
 from meshpool_harness.core.tools import Workspace  # noqa: E402
 
 
+def _free_port() -> str:
+    """A free local port: fixed ones collide with a running app (8791-8799 are its usual UI ports)."""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return str(p)
+
+
 def test_guard_defaults_and_overrides(monkeypatch):
     monkeypatch.delenv("MH_GUARDS", raising=False)
     monkeypatch.delenv("MH_HARNESS_PROFILE", raising=False)
@@ -88,7 +98,7 @@ def test_timing_log(monkeypatch, tmp_path):
 
 def test_typed_roles(monkeypatch):
     pytest.importorskip("playwright")
-    monkeypatch.setenv("MH_BROWSER_PORT", "8793")
+    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
     monkeypatch.setenv("MH_BROWSER_TYPED_ROLES", "1")
     import importlib
     from engines.browser import ctl
@@ -106,7 +116,7 @@ def test_typed_roles(monkeypatch):
 
 def test_date_inputs_accept_us_dates(monkeypatch):
     pytest.importorskip("playwright")
-    monkeypatch.setenv("MH_BROWSER_PORT", "8794")
+    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
     import importlib
     from engines.browser import ctl
     importlib.reload(ctl)

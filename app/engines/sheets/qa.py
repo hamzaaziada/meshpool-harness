@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 ERRORS = ("#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A", "#NUM!", "#NULL!", "Err:", "#ERR")
 CALC_SHEETS = re.compile(r"calc|model|output|summary|dashboard|p&l|pnl|forecast|valuation", re.I)
 INPUT_SHEETS = re.compile(r"input|assumption|data|source|raw", re.I)
+FINANCE_SHEETS = re.compile(r"comps|precedent|dcf|valuation", re.I)
 
 
 def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
@@ -94,3 +95,48 @@ def value(xlsx_path: str, ref: str):
     dn = wb.defined_names[ref]
     (sh, cell), = list(dn.destinations)
     return wb[sh][cell.replace("$", "")].value
+
+
+def _blue(c) -> bool:
+    col = c.font.color if c.font is not None else None
+    return bool(col is not None and col.type == "rgb" and str(col.rgb).upper().endswith("0000FF"))
+
+
+def missing_sources(xlsx_path: str) -> list[str]:
+    """Valuation workbooks (a Comps, Precedents, DCF or Valuation tab): every typed input (blue number) must carry a
+    Source in its table's Source column (the assumption book on Inputs; the peer/deal rows on Comps/Precedents).
+    Returns one entry per input row without a source, e.g. "Inputs!C7 (Risk-free rate (%))"."""
+    wb = load_workbook(xlsx_path)
+    if not any(FINANCE_SHEETS.search(s) for s in wb.sheetnames):
+        return []
+    out = []
+    for ws in wb.worksheets:
+        if re.search(r"check|cover", ws.title, re.I):
+            continue
+        is_inputs = bool(INPUT_SHEETS.search(ws.title))
+        headers: dict[int, int | None] = {}                 # header row -> Source column (None: table has none)
+        for row in ws.iter_rows():
+            for c in row:
+                if c.fill is not None and c.fill.fgColor is not None and str(c.fill.fgColor.rgb).endswith("1B2333"):
+                    headers.setdefault(c.row, None)
+                    if isinstance(c.value, str) and c.value.strip().lower().startswith("source"):
+                        headers[c.row] = c.column
+        done = set()
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                if c.row in done or not (isinstance(v, (int, float)) and not isinstance(v, bool)) or not _blue(c):
+                    continue
+                label = ws.cell(row=c.row, column=1).value or ""
+                above = [h for h in headers if h < c.row]
+                sc = headers[max(above)] if above else None
+                if sc is None:
+                    if is_inputs:
+                        out.append(f"{ws.title} row {c.row} ({label}): no Source column; use B.assumption_book")
+                        done.add(c.row)
+                    continue
+                s = ws.cell(row=c.row, column=sc).value
+                if s is None or not str(s).strip():
+                    out.append(f"{ws.title}!{ws.cell(row=c.row, column=sc).coordinate} ({label})")
+                done.add(c.row)
+    return out

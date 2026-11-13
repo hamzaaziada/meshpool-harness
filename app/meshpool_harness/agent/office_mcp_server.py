@@ -2,7 +2,7 @@
 PowerPoint, Excel and Word output, using Meshpool's benchmarked office engines.
 
 Tools
-  make_deck(request, files?)          -> .pptx built and checked by the slides engine
+  make_deck(request, files?, brief)   -> .pptx built and checked by the slides engine (or BRIEF NEEDED questions)
   make_spreadsheet(request, files?)   -> .xlsx with live formulas, checked by the sheets engine
   analyze_data(request, files)        -> charts, tables and a written analysis from data files
   make_document(markdown, filename)   -> .docx from Markdown (headings, lists, tables, bold, code)
@@ -10,9 +10,15 @@ Tools
   convert_document(path, to)          -> docx/pptx/xlsx to PDF and back, through LibreOffice when installed
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
+  check_deck(path, slide_count?)      -> the forge deck rules (P0-P19), each failure as a fix instruction
+  check_workbook(path)                -> the forge workbook rules (X0-X13) after a headless recalculation
+  check_document(path)                -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
+  measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
+  find_icon(query, set?, limit?)      -> bundled outline icons (Lucide, Tabler) that fit a meaning, with SVG paths
 
-Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 240 s, under the usual 300 s MCP
-timeout); a longer job returns a job id to check with office_job_status. Files go to "<project>/Meshpool outputs".
+Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
+timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
+office_job_status. Files go to "<project>/Meshpool outputs".
 """
 from __future__ import annotations
 
@@ -28,7 +34,10 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[2]
 JOBS: dict[str, dict] = {}
-WAIT = float(os.environ.get("OFFICE_WAIT_S", "240"))
+REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of one engine in a session before we say stop
+REBUILD_WINDOW_S = 45 * 60
+WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s client timeout; a longer job returns
+                                                       # a job id for office_job_status instead of timing out
 
 
 def _project() -> Path:
@@ -72,10 +81,32 @@ def _report(jid: str) -> tuple[str, bool]:
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
-    checks = "passed" if res.get("ok") else "did not all pass (review the file)"
+    qa = ""
+    try:                                    # forge QA on every produced deck/workbook (never fails the job)
+        from engines.forge.tools import qa_summary
+        qa = qa_summary([m for m in made if m.endswith((".pptx", ".xlsx"))])
+    except Exception:
+        pass
+    # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
+    # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).
+    flagged = "rules failing:" in notes and not re.search(r"rules failing:\s*(none)?\s*$", notes, re.M) \
+        or bool(re.search(r"forge rules failing: (?!none)", qa))
+    if not res.get("ok"):
+        checks = "did not all pass (review the file)"
+    elif flagged:
+        checks = "flagged some items (listed below); the file is built and usable"
+    else:
+        checks = "passed"
     lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {m}" for m in made]
     if notes:
         lines.append("Engine notes: " + notes[:2500])
+    if qa:
+        lines += ["Forge QA:", qa]
+    n = j.get("build_no", 1)
+    if n >= REBUILD_LIMIT:
+        lines.append(f"This is build {n} from the {j['engine']} engine in this session. If you are rebuilding to clear "
+                     "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
+                     "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made
 
 
@@ -92,15 +123,34 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     cmd = [sys.executable, "-m", "meshpool_harness", "run", request, "--engine", engine, "--out", str(out)]
     if paths:
         cmd += ["--files", *paths]
-    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": time.time()}
+    now = time.time()
+    recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
+    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1}
     t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
     t.start()
     t.join(WAIT)
     return _report(jid)
 
 
-def make_deck(request: str, files: list | None = None):
-    return _engine("slides", request, files)
+def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
+              density: str | None = None, slides: int | None = None, theme: str | None = None,
+              opening: str | None = None, closing: str | None = None, sources: str | None = None,
+              brief_ok: bool = False):
+    """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
+    or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
+    or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
+    fields = {k: v for k, v in dict(audience=audience, purpose=purpose, density=density, slides=slides, theme=theme,
+                                    opening=opening, closing=closing, sources=sources).items() if v not in (None, "")}
+    try:
+        if str(APP) not in sys.path:
+            sys.path.insert(0, str(APP))
+        from engines.forge import brief as BR
+    except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
+        return _engine("slides", request, files)
+    qs = BR.questions(request, files, fields)
+    if qs and not (brief_ok or BR.wants_defaults(request) or os.environ.get("MH_ASK_AUTO") == "1"):
+        return BR.needed_text(qs, "make_deck"), False
+    return _engine("slides", BR.complete(request, files, fields), files)
 
 
 def make_spreadsheet(request: str, files: list | None = None):
@@ -152,6 +202,20 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
     doc.styles["Normal"].font.size = Pt(11)
     if title:
         doc.add_heading(title, level=0)
+    clarity_note = ""
+    if os.environ.get("MH_CLARITY", "1") != "0":          # a second, smaller model reads the prose for clarity;
+        try:                                               # numbers and facts are guarded, failures never block
+            if str(APP) not in sys.path:
+                sys.path.insert(0, str(APP))
+            from engines.forge.clarity import review_markdown
+            from meshpool_harness.core.client import LiveClient
+            markdown, rep = review_markdown(markdown, LiveClient("clarity_doc"),
+                                            main_model=os.environ.get("MH_MODEL"), task_id="clarity-doc")
+            if rep.get("model"):
+                clarity_note = (f" Clarity check ({rep['model']}): {rep['changed']} of {rep['checked']} lines made "
+                                "clearer, numbers unchanged.")
+        except Exception:
+            pass
     lines = markdown.replace("\r\n", "\n").split("\n")
     i = 0
     while i < len(lines):
@@ -200,7 +264,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         i += 1
     path = out / name
     doc.save(path)
-    return f"Saved the Word document: {path}", False
+    return f"Saved the Word document: {path}.{clarity_note}", False
 
 
 def read_document(path: str, sheet: str | None = None, pages: str | None = None, language: str | None = None,
@@ -326,12 +390,44 @@ def convert_document(path: str, to: str = "pdf"):
     return f"Saved: {dst}", False
 
 
+def find_icon(query: str, set: str | None = None, limit: int = 8):
+    """Icons from the bundled outline sets that fit a meaning, best first (read-only)."""
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
+    from engines import icons as IC
+    try:
+        rows = IC.search(query, set=set or None, limit=max(1, min(int(limit or 8), 40)))
+    except ValueError as e:
+        return str(e), True
+    if not rows:
+        return f"No icon matches {query!r}. Try a simpler word (money, growth, risk, people, time).", False
+    lines = [f"{r['set']}:{r['name']}  score {r['score']}  {r['path']}" + (f"  tags: {', '.join(r['tags'][:5])}"
+             if r["tags"] else "") for r in rows]
+    return ("Use one set for the whole deck. Best matches (set:name, score, SVG path):\n" + "\n".join(lines)), False
+
+
 S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
 TOOLS = {
     "make_deck": (make_deck, "Build a finished PowerPoint deck (.pptx) with Meshpool's slides engine, which plans "
-                  "the storyline, lays out charts and checks the result. Describe the audience, slide count and "
-                  "content in `request`. Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),
+                  "the storyline, lays out charts and checks the result. Describe the content in `request` and give "
+                  "the brief as fields (audience, purpose, density, slides, theme, opening, closing, sources). If "
+                  "audience, density, length or look is left open, it does not build: it answers BRIEF NEEDED with "
+                  "questions, options and a recommendation for each. Ask the user, then call again with the answers, "
+                  "or pass brief_ok=true to build with the recommendations. Takes 2 to 6 minutes.",
+                  {"request": S, "files": FILES,
+                   "audience": {"type": "string", "description": "Who the deck is for, e.g. the board, investors"},
+                   "purpose": {"type": "string", "description": "What it should achieve, e.g. approve the budget"},
+                   "density": {"type": "string", "enum": ["present", "balanced", "read"],
+                               "description": "present: visual, few words, to present live; balanced; read: a dense "
+                                              "pre-read"},
+                   "slides": {"type": "integer", "description": "Number of slides"},
+                   "theme": {"type": "string", "description": "navy, ocean, forest, burgundy, graphite or mono"},
+                   "opening": {"type": "string", "description": "Opening slides, e.g. title and agenda"},
+                   "closing": {"type": "string", "description": "Closing slides, e.g. next steps, questions"},
+                   "sources": {"type": "string", "description": "Sources to use or leave out"},
+                   "brief_ok": {"type": "boolean", "description": "Build now: recommended answers for anything not "
+                                                                  "given"}}, ["request"]),
     "make_spreadsheet": (make_spreadsheet, "Build a finished Excel workbook (.xlsx) with live formulas, such as a "
                          "model, budget or tracker, with Meshpool's sheets engine (it recalculates and checks the "
                          "formulas). Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),
@@ -353,9 +449,31 @@ TOOLS = {
     "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "
                          "to PDF, or Markdown to PDF or Word. `to` is the target extension.",
                          {"path": S, "to": S}, ["path", "to"]),
+    "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
+                  "\"risk\"). Searches the bundled outline sets, Lucide (ISC) and Tabler (MIT), by name, tags and "
+                  "synonyms, and returns set:name and the SVG path, best first. `set` (lucide or tabler) keeps a "
+                  "deck to one set; `limit` is the number of results (default 8).",
+                  {"query": S, "set": S, "limit": {"type": "integer"}}, ["query"]),
     "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }
+
+
+def _forge_tool(name):
+    def call(path: str, **kw):
+        from engines.forge import tools as FT
+        return getattr(FT, name)(str(_resolve(path)), **kw)
+    return call
+
+
+try:                                        # forge checks and measurement (engines/forge), when the engines ship
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
+    from engines.forge.tools import TOOLS as _FORGE
+    for _k, (_fn, _d, _p, _r) in _FORGE.items():
+        TOOLS[_k] = (_forge_tool(_k), _d, _p, _r)
+except Exception:
+    pass
 
 
 def handle(msg: dict) -> dict | None:
@@ -376,10 +494,15 @@ def handle(msg: dict) -> dict | None:
         name, args = p.get("name"), p.get("arguments") or {}
         if name not in TOOLS:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"unknown tool {name}"}}
+        props = TOOLS[name][2] or {}
+        extra = sorted(k for k in args if k not in props) if props else []
+        args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument (seen: engine=) costs a turn
         try:
             text, err = TOOLS[name][0](**args)
         except Exception as e:
             text, err = f"{type(e).__name__}: {e}", True
+        if extra:
+            text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         res = {"content": [{"type": "text", "text": text}], "isError": bool(err)}
     else:
         return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {m}"}}

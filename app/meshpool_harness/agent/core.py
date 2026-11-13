@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import pace as PACE
+from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -32,17 +33,21 @@ from meshpool_harness.core.wire import sse_to_chat
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
-READ_ONLY = {"read_file", "grep", "glob", "symbol", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill"}
+READ_ONLY = {"read_file", "grep", "glob", "symbol", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
+             "ask_user"}
 SAFE_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
             "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__memory_save",
             "mcp__meshpool_assistant__memory_forget", "mcp__meshpool_assistant__schedule_task",
             "mcp__meshpool_assistant__list_scheduled_tasks", "mcp__meshpool_assistant__search_chats",
             "mcp__meshpool_assistant__run_subtasks", "mcp__meshpool_office__read_document",
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
-            "mcp__meshpool_tools__calculate"}
-PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill"]
+            "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
+            "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
+            "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon"}
+PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
+              "ask_user"]
 BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
-           "web_research", "todo_write", "use_skill"]
+           "web_research", "todo_write", "use_skill", "ask_user"]
 # Harness v3 (benchmarked 2026-11-12, run C): bash_many, todo follow-through, loop and stall breakers, a turn-budget
 # note and an environment snapshot. MH_AGENT_V3=0 turns them off.
 V3 = os.environ.get("MH_AGENT_V3", "1") != "0"
@@ -55,6 +60,7 @@ if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug bef
 WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
+T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
 T.SCHEMAS.setdefault("use_skill", T._fn(
     "use_skill", "Load a skill's full instructions by name (from the skills list in your instructions). Do this before "
     "a task that matches a skill, and whenever the user writes $skill-name.", {"name": T.S}, ["name"]))
@@ -86,7 +92,8 @@ How to work
 3. Make focused changes. Use edit for existing files: read the file first and copy `old` exactly, without the \
 line-number prefix. Use write_file for new files.
 4. Check your work: run the tests, the build, or the script with bash, and fix what fails.
-5. Do what was asked, nothing more. If the request is unclear, ask one short question instead of guessing.
+5. Do what was asked, nothing more. If the request is unclear in a way that changes what you build, ask with \
+ask_user (short options, your recommendation marked) instead of guessing; look up what you can find yourself first.
 6. When you finish a request, reply with a short summary of what you changed and how you checked it, without \
 calling a tool. That reply ends your turn; the user then answers or gives the next request.
 
@@ -126,7 +133,16 @@ T.SCHEMAS.setdefault("office_task", T._fn(
     "slide decks (.pptx), spreadsheets and financial models (.xlsx), and data analysis with charts. Describe the "
     "whole deliverable in `request`; list input files from the project folder in `files`.",
     {"engine": {"type": "string", "enum": ["slides", "sheets", "data"]}, "request": T.S,
-     "files": {"type": "array", "items": T.S}}, ["engine", "request"]))
+     "files": {"type": "array", "items": T.S},
+     # the deck brief (engine slides; engines/forge/brief.py): what is not given is asked, or recommended
+     "audience": {"type": "string", "description": "slides: who the deck is for"}, "purpose": T.S,
+     "density": {"type": "string", "enum": ["present", "balanced", "read"],
+                 "description": "slides: present (visual, few words, to present live), balanced, read (dense pre-read)"},
+     "slides": {"type": "integer", "description": "slides: number of slides"},
+     "theme": {"type": "string", "description": "slides: navy, ocean, forest, burgundy, graphite or mono"},
+     "opening": T.S, "closing": T.S, "sources": T.S,
+     "brief_ok": {"type": "boolean", "description": "slides: build now with the recommended answers to anything "
+                                                    "not given, without asking"}}, ["engine", "request"]))
 
 WORK_SYSTEM = """You are Meshpool Cowork, an assistant that does real work for the user on their own computer: \
 research, writing, analysis, spreadsheets, presentations and file housekeeping. You work through tools, and the user \
@@ -138,17 +154,48 @@ Environment
 - Shell for the bash tool: {shell}
 
 How to work
-1. Understand the job. If something important is unclear (audience, format, scope), ask one short question first.
+1. Understand the job, then ask before you build (see "Asking the user" below).
 2. For a multi-step job, keep a short plan with todo_write and update it as you go.
 3. Gather material: read the user's files (read_file, glob, grep), research the web with web_research and \
 web_search, read pages and PDFs with fetch_url, and use connected apps (mcp__ tools) when they fit. For a big \
 research job, split it into parts, research each, then write up.
 4. Produce real deliverables as files in the working folder. For decks, spreadsheets, models and data analysis use \
-office_task: it returns a finished, checked file. For notes, memos and reports write Markdown with write_file. Use \
-Python through bash for quick calculations.
-5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish.
+office_task: it returns a finished, checked file. For memos, reports, letters and proposals make a Word document \
+(.docx) with the make_document tool (or python-docx through bash for edits to an existing .docx); write Markdown only \
+when the user asks for it. Use Python through bash for quick calculations.
+5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish. \
+Research budget: when the request or its files already hold sourced research, use it and only look up what they \
+mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
+stop researching once each number you need has a source. Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
+office_task can make it: the engines carry the design system and the checks. If an engine call returns a job id, \
+wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
+(e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
+and check_document on every .docx you deliver; fix each failure it lists (content \
+failures by changing the words or numbers, then rebuild) and tell the user about any that remain. Rebuild at most \
+twice to clear check results; failures marked /renderer are the engine's own and a rebuild does not fix them.
 6. Finish with a short reply: what you made, where the files are, and anything the user should check. Do not call \
 a tool in that reply.
+
+Asking the user (ask_user)
+The user wants the result they had in mind, not a good guess. ask_user shows them clickable options; they can also \
+type their own answer.
+- Before you build a deliverable (deck, workbook, document, report, analysis), make ONE ask_user call with the 2 to \
+4 questions whose answers change the result most and that the request and files do not already answer. Typical ones: \
+audience and purpose; density, with the options "present" (visual, few words, to present live), "balanced" and \
+"read" (a dense pre-read); length (e.g. number of slides or pages); look or theme (navy, ocean, forest, burgundy, \
+graphite, mono); sources to use or leave out. Give every question 2 to 5 short options, mark the one you recommend \
+with recommended: true, and say in its description what it means for the result.
+- Skip any question the request or the files already answer. Look facts up (files, web, connected apps) instead of \
+asking for them. A quick question or a small, clear task needs no questions.
+- While you work, ask a short follow-up whenever something material is ambiguous (two readings of the data, a \
+missing number, a choice the user would care about). Never make two ask_user calls in a row without doing work in \
+between.
+- Before you finish, confirm anything important you assumed, with one short ask_user call if it could change the result.
+- Pass the answers on to the engines in plain words: put them in the make_deck, make_spreadsheet, make_document or \
+office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides", "audience: the board").
+- If the result says no one answered, go ahead with your recommendations and list them as assumptions in your reply.
+- If make_deck answers "BRIEF NEEDED", ask its questions (keep its options and recommendations) in one ask_user call, \
+then call it again with the answers as fields. If you already asked them, pass brief_ok=true.
 
 Rules
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
@@ -203,6 +250,9 @@ def _summary(name: str, args: dict) -> str:
         return args.get("question", "")[:160]
     if name == "use_skill":
         return args.get("name", "")
+    if name == "ask_user":
+        qs = args.get("questions") if isinstance(args.get("questions"), list) else []
+        return " / ".join(str(q.get("question", "")) for q in qs if isinstance(q, dict))[:300]
     if name == "todo_write":
         items = args.get("items") or []
         return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
@@ -571,7 +621,7 @@ class Agent:
             raise Interrupted()
 
     def _maybe_compact(self):
-        limit = int(os.environ.get("MH_COMPACT_CHARS", "400000"))
+        limit = int(os.environ.get("MH_COMPACT_CHARS", "280000"))   # well under a 128K-token window
         size = sum(len(m.get("content") or "") if isinstance(m.get("content"), str) else 0 for m in self.messages)
         if size > limit:
             _compact(self.messages, keep_recent=12)
@@ -656,6 +706,13 @@ class Agent:
                         continue
                 if attempt >= 5:
                     raise
+                if re.search(r"HTTP 5\d\d", msg) and attempt >= 1:   # a big request that keeps failing upstream:
+                    size = sum(len(m.get("content") or "") for m in self.messages if isinstance(m.get("content"), str))
+                    if size > 150000:                      # shrink it instead of resending the same thing
+                        _compact(self.messages, keep_recent=8)
+                        body = self._body()
+                        self.emit({"type": "status", "text": "The request was very large; older tool outputs were "
+                                                             "shortened before trying again."})
                 self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
@@ -829,6 +886,8 @@ class Agent:
             elif name == "web_search":
                 out = self._wait(self._search, args["query"], args.get("max_results", 8), args.get("recency", ""),
                                  args.get("site", ""))
+            elif name == "ask_user":
+                out = self._ask_user(args)
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))
@@ -859,11 +918,90 @@ class Agent:
                    "output": out[:6000] + ("\n..." if len(out) > 6000 else "")})
         return out
 
+    # ---------- questions (ask_user) -----------------------------------------------------------------------------
+    def pending_question(self) -> dict | None:
+        p = getattr(self, "_question", None)
+        return {"id": p["id"], "questions": p["questions"]} if p else None
+
+    def reply(self, question_id: str, answers) -> None:
+        """A front end answers the waiting ask_user question: answers is a list with one {"selected": [labels],
+        "other": text} per question, or plain text the user typed instead of picking."""
+        p = getattr(self, "_question", None)
+        if not p or (question_id and p["id"] != question_id):
+            raise ValueError("That question is no longer waiting.")
+        p["answers"] = answers if answers is not None else []
+        p["ev"].set()
+
+    def _ask_user(self, args: dict) -> str:
+        return self._ask(ASK.normalize(args))[2]
+
+    def _ask(self, qs: list) -> tuple[list, str, str]:
+        """Ask the user and wait; returns (answers, source, tool result). Who answers: a front end's own
+        `ask(qid, questions)` callback (the terminal), a page that calls reply() while this waits (`interactive`
+        true: the web app), or no one (headless runs, ACP, tests, auto mode with MH_ASK_AUTO=1): then the
+        recommended options, and the result says so."""
+        qid = "q-" + uuid.uuid4().hex[:10]
+        wait = ASK.timeout_s()
+        own = getattr(self, "ask", None)
+        live = getattr(self, "interactive", False)
+        live = bool(live() if callable(live) else live)
+        source = ""
+        if self.mode == "auto" and os.environ.get("MH_ASK_AUTO") == "1":
+            source = "auto"
+        elif not own and not live:
+            source = "headless"
+        self.emit({"type": "question", "id": qid, "questions": qs, "timeout_s": 0 if source else int(wait)})
+        raw = None
+        if not source and own:
+            raw = own(qid, qs)
+            source = "user" if raw is not None else "headless"
+        elif not source:
+            p = {"id": qid, "questions": qs, "ev": threading.Event(), "answers": None}
+            self._question = p
+            end = time.time() + wait
+            try:
+                while not p["ev"].wait(0.2):
+                    if self._stop:
+                        break
+                    if time.time() > end:
+                        break
+            finally:
+                self._question = None
+            if p["ev"].is_set():
+                raw, source = p["answers"], "user"
+            elif self._stop:
+                self.emit({"type": "question_done", "id": qid, "source": "stopped", "answers": [],
+                           "text": "Stopped before you answered."})
+                raise Interrupted()
+            else:
+                source = "timeout"
+        answers, shown, result = ASK.finish(qs, raw, source, wait)
+        self.emit({"type": "question_done", "id": qid, "source": source, "answers": answers, "text": shown})
+        return answers, source, result
+
+    def _deck_brief(self, args: dict) -> str:
+        """office_task with engine slides: settle the deck brief (engines/forge/brief.py) before building. The
+        open questions go to the user in one question card; with no one to ask, the recommended answers."""
+        req = args["request"]
+        try:
+            from engines.forge import brief as BR
+        except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
+            return req
+        fields = {k: args[k] for k in BR.FIELDS if args.get(k) not in (None, "")}
+        qs = BR.questions(req, args.get("files"), fields)
+        if not qs or args.get("brief_ok") or BR.wants_defaults(req):
+            return BR.complete(req, args.get("files"), fields)
+        answers, source, _ = self._ask(ASK.normalize({"questions": qs}))
+        fields.update(BR.answers_from(qs, answers))
+        return BR.complete(req, args.get("files"), fields)
+
     def _office(self, args: dict) -> tuple[str, bool]:
         """Run a one-shot engine (slides, sheets, data) in its own process; files land in the working folder."""
         import subprocess
         import sys as _sys
         engine = args["engine"]
+        if engine == "slides":
+            args = dict(args, request=self._deck_brief(args))
         stamp = time.strftime("%Y%m%d-%H%M%S")
         out = self.root / "Meshpool outputs" / f"{stamp}-{engine}"
         out.mkdir(parents=True, exist_ok=True)

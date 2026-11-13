@@ -81,8 +81,11 @@ def build(spec: dict, path: str) -> dict:
                 sh, row = "Calc", calc_rows[key]
             elif key in series_rows:
                 sh, row = "Inputs", series_rows[key]
+            elif key in names:                    # a scalar input written in braces (a common model slip):
+                return names[key]                 # the same absolute cell in every period
             else:
-                raise SpecError(f"unknown reference {{{key}}}; known rows: {sorted(calc_rows) + sorted(series_rows)}")
+                raise SpecError(f"unknown reference {{{key}}}; known rows: {sorted(calc_rows) + sorted(series_rows)}; "
+                                f"scalar inputs (use bare, no braces): {sorted(names)}")
             first, last = get_column_letter(FIRST_COL), get_column_letter(FIRST_COL + n - 1)
             if mod == "@all":
                 return f"'{sh}'!{first}{row}:{last}{row}"
@@ -196,6 +199,14 @@ def build_model(request: str, files: list[str], out_path: str, client, task_id: 
                                    + ". Fix the model logic (periods, rates per period, signs), not the checks."})
             except Exception:
                 issues.append({"check": "checks_tab", "cell": "Checks!F3", "detail": "a check shows ERROR"})
+            try:                                     # the forge workbook rules: logic errors QA cannot see
+                from engines.forge.validate_xlsx import validate as forge_validate
+                fr = forge_validate(out_path)
+                issues += [{"check": f["rule"], "cell": f.get("cell") or f.get("sheet") or "", "detail": f["message"]}
+                           for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"
+                           and f.get("fix_scope", "content") == "content"][:8]
+            except Exception:
+                pass
             if not issues:
                 Path(out_path).with_suffix(".json").write_text(json.dumps(spec, indent=1))
                 return {"ok": True, "calls": calls, "path": out_path, "spec": spec, "stats": res["stats"]}

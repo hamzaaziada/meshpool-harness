@@ -212,8 +212,10 @@ def run(*a, **kw):
 
 def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dict, system_text: str,
         tool_names: list[str] | None = None, caps: Caps | None = None, allow_test_edits=False,
-        require_check=True, temperature=None, extra=None, finish_check=None, _box=None) -> LoopResult:
-    """finish_check(answer, artifacts, ws) -> error message or None: engine-specific deterministic verifier."""
+        require_check=True, temperature=None, extra=None, finish_check=None, turn_hook=None,
+        _box=None) -> LoopResult:
+    """finish_check(answer, artifacts, ws) -> error message or None: engine-specific deterministic verifier.
+    turn_hook(turn, max_turns, ws) -> message or None: an engine-specific note injected after a turn's tools ran."""
     caps = caps or Caps()
     tool_names = tool_names or (CORE + (["load_skill"] if ws.skills else []))
     if os.environ.get("MH_MULTI_CMD") == "1" and "bash" in tool_names and "bash_many" not in tool_names:
@@ -404,6 +406,10 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         if os.environ.get("MH_TURN_NOTE") == "1" and caps.max_turns >= 30 and turn == caps.max_turns - 15:
             injected.append("NOTE: 15 turns left. Make sure what the task asks for exists and works now (files, "
                             "outputs, the fix); refine it afterwards if turns remain.")
+        if turn_hook:
+            g = turn_hook(turn, caps.max_turns, ws)
+            if g:
+                injected.append(g)
         if injected:
             messages.append({"role": "user", "content": "\n".join(injected)})
     res.reason = f"turn cap {caps.max_turns} reached"

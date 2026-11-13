@@ -14,6 +14,13 @@ mcp-health.json
 app/routing.csv
 harness-lab/bench/results/raw/
 app/vendor/
+app/engines/forge/schemas/ooxml/
+/projects.json
+# the app run from source keeps its settings and data in the repo root (MESHPOOL_HOME defaults there)
+/meshpool.config
+/mcp.json
+/harnesses/
+/memory/
 # downloaded packages and runtime logs never belong in the repo
 *.whl
 app/timing.jsonl

@@ -98,7 +98,11 @@ def leak_and_continue(hid, sid, marker):
     check(f"[{hid}] the next message is answered", last and "done thinking" not in last[-1].lower(), last[-1:])
 
 
+LISTED = {h["id"] for h in call("/api/harnesses").get("harnesses", [])}
 for hid, kind in (("meshpool-code", "code"), ("meshpool-work", "cowork"), ("pi", "code"), ("hermes", "cowork")):
+    if hid not in LISTED:                      # e.g. no Pi or Hermes in a cloud container: say so, do not crash
+        print(f"SKIP [{hid}] not installed here", flush=True)
+        continue
     sid, _ = stop_case(hid, kind, "think slowly please", "slow model")
     leak_and_continue(hid, sid, "done thinking")
     stop_case(hid, kind, "long task please", "long command")

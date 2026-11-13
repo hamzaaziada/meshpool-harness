@@ -8,9 +8,9 @@ Used on 2026-11-12 to walk every journey in `testkit/JOURNEYS.md` against this r
 fakehome/
   .claude/skills/claude-skill/SKILL.md          name: claude-skill; body "Say hello in French."
   .codex/skills/codex-skill/SKILL.md            name: codex-skill; body "Say hello in German."
-  .config/Claude/claude_desktop_config.json     {"mcpServers": {"desk-server": {"command": "echo"}}}
-  .cursor/mcp.json                              {"mcpServers": {"cursor-server": {"command": "echo"}}}
-  .codex/config.toml                            [mcp_servers.codex-server] command = "echo"
+  .config/Claude/claude_desktop_config.json     {"mcpServers": {"desk-server": {"command": "echo", "args": ["desk"]}}}
+  .cursor/mcp.json                              {"mcpServers": {"cursor-server": {"command": "echo", "args": ["cursor"]}}}
+  .codex/config.toml                            [mcp_servers.codex-server] command = "echo", args = ["codex"]
 ```
 
 ## Pi and Hermes as in the installers

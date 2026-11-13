@@ -15,7 +15,7 @@ def test_read_only_yes(cmd):
 
 @pytest.mark.parametrize("cmd", ["echo x > f", "rm -rf build", "sed -i s/a/b/ f", "pip install x", "python3 t.py",
                                  "git checkout -- .", "make", "find . -delete", "cat $(ls)", "tee f", "cd d && ls",
-                                 "npm install", "cat <<EOF\nx\nEOF", "find . -exec rm {} \;", "ls | xargs rm",
+                                 "npm install", "cat <<EOF\nx\nEOF", "find . -exec rm {} \\;", "ls | xargs rm",
                                  "awk 'BEGIN{system(\"rm f\")}'", "curl -o f http://x", "sleep 2", "'unclosed"])
 def test_read_only_no(cmd):
     assert not read_only(cmd)
