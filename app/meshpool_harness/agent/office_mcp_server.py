@@ -34,6 +34,8 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[2]
 JOBS: dict[str, dict] = {}
+REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of one engine in a session before we say stop
+REBUILD_WINDOW_S = 45 * 60
 WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s client timeout; a longer job returns
                                                        # a job id for office_job_status instead of timing out
 
@@ -79,17 +81,32 @@ def _report(jid: str) -> tuple[str, bool]:
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
-    checks = "passed" if res.get("ok") else "did not all pass (review the file)"
-    lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {m}" for m in made]
-    if notes:
-        lines.append("Engine notes: " + notes[:2500])
+    qa = ""
     try:                                    # forge QA on every produced deck/workbook (never fails the job)
         from engines.forge.tools import qa_summary
         qa = qa_summary([m for m in made if m.endswith((".pptx", ".xlsx"))])
-        if qa:
-            lines += ["Forge QA:", qa]
     except Exception:
         pass
+    # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
+    # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).
+    flagged = "rules failing:" in notes and not re.search(r"rules failing:\s*(none)?\s*$", notes, re.M) \
+        or bool(re.search(r"forge rules failing: (?!none)", qa))
+    if not res.get("ok"):
+        checks = "did not all pass (review the file)"
+    elif flagged:
+        checks = "flagged some items (listed below); the file is built and usable"
+    else:
+        checks = "passed"
+    lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {m}" for m in made]
+    if notes:
+        lines.append("Engine notes: " + notes[:2500])
+    if qa:
+        lines += ["Forge QA:", qa]
+    n = j.get("build_no", 1)
+    if n >= REBUILD_LIMIT:
+        lines.append(f"This is build {n} from the {j['engine']} engine in this session. If you are rebuilding to clear "
+                     "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
+                     "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made
 
 
@@ -106,7 +123,9 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     cmd = [sys.executable, "-m", "meshpool_harness", "run", request, "--engine", engine, "--out", str(out)]
     if paths:
         cmd += ["--files", *paths]
-    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": time.time()}
+    now = time.time()
+    recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
+    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1}
     t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
     t.start()
     t.join(WAIT)
@@ -475,10 +494,15 @@ def handle(msg: dict) -> dict | None:
         name, args = p.get("name"), p.get("arguments") or {}
         if name not in TOOLS:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"unknown tool {name}"}}
+        props = TOOLS[name][2] or {}
+        extra = sorted(k for k in args if k not in props) if props else []
+        args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument (seen: engine=) costs a turn
         try:
             text, err = TOOLS[name][0](**args)
         except Exception as e:
             text, err = f"{type(e).__name__}: {e}", True
+        if extra:
+            text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         res = {"content": [{"type": "text", "text": text}], "isError": bool(err)}
     else:
         return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {m}"}}
