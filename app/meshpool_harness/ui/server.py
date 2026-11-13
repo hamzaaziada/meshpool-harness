@@ -482,6 +482,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"sessions": A.listing()})
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_info())
+            if u.path == "/api/mcp-library":
+                from meshpool_harness import mcp_library as ML
+                return self._send(200, ML.api_view())
             if u.path == "/api/harnesses":
                 return self._send(200, A.harness_info())
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -642,6 +645,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_save(self._json()))
+            if u.path == "/api/mcp-library":
+                from meshpool_harness import mcp_library as ML
+                return self._send(200, ML.api_action(self._json()))
             if u.path == "/api/harnesses":
                 return self._send(200, A.harness_change(self._json()))
             if u.path == "/api/harnesses/open":
