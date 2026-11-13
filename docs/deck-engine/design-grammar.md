@@ -52,6 +52,38 @@ sizes, colours or positions.
    content types and ids are checked, so PowerPoint should never show its "repair" prompt. The check found one
    defect, now fixed: python-pptx writes negative chart axis ids, which the schema does not allow.
 
+## Density modes
+
+One deck is either presented, read, or something in between, so density is chosen per deck
+(`engines/forge/density.py`). `engine.solve` reads it from the request ("for presenting", "keynote", "visual",
+"presentation" -> present; "send-ahead", "pre-read", "detailed", "dense", "deliverable" -> read; otherwise
+balanced), and an explicit `density` option or "density: present|balanced|read" in the request wins.
+`build(..., density=)` passes it on.
+
+| | present | balanced (default) | read |
+|---|---|---|---|
+| Use | presenter-led, spoken to | stands on its own, not crowded | send-ahead deliverable |
+| On the slide | title carries the point; one big exhibit; <= 3 headline bullets (~40 body words) | one exhibit, takeaway, 2-4 bullets (~60-110 words) | full sentences, footnotes, dense tables and matrices |
+| Type (body / lead / numbers) | 16 / 18 / 28 pt; parts +4 pt | 13 / 13 / 20 pt; parts +1 pt | 12 / 12 / 20 pt |
+| Challenge matrix | becomes a grid of 3-4 short parts | lead + 1 bullet per cell | lead + 2-3 bullets per cell |
+| Footnotes | at most one | up to three | all |
+| P10 caps | `density.modes.present` | `density.modes.balanced` | the base caps |
+| P20 dead space | 30% | 20% | 20% |
+
+- The storyline and content prompts plan and write for the mode (present: fewer words, more visual parts, the
+  detail in the speaker notes; read: evidence-dense). `fill_checks` never asks a presented slide for more text: its
+  minimum is an exhibit and a takeaway, and it sends back slides too busy to present.
+- The renderer's safety net (`density.condense`) trims what the model wrote too densely for the mode: bullets cut to
+  their lead clause, lists capped, tables cut to their top rows (highlight and total kept), milestones and extra
+  footnotes dropped. Everything it cuts goes to the speaker notes under "Detail for the presenter", so nothing is
+  lost or invented. Read mode is never trimmed.
+- Every slide is tagged `density:<mode>` in its name, and `validate_pptx` checks P10 and P20 against that mode (an
+  untagged third-party deck is checked as read). Stretched rows and slab bars stay forbidden in every mode.
+- Short content steps up the type scale before it gets more air (closing steps, side tables, matrix rows, grid
+  text), so a lighter slide looks intentional, not empty.
+
+![The same five slides in present, balanced and read](examples/density_modes.png)
+
 ## Evidence
 
 - Exact rebuilds of the four reference pages (kept out of the repo because they reproduce the reference text)

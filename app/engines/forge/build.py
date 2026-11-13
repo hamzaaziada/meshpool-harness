@@ -20,14 +20,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from engines.forge.common import load_rules  # noqa: E402
+from engines.forge.density import DEFAULT as DEFAULT_DENSITY, FILL, STORY, WRITE, normalize as _density  # noqa: E402
 from engines.forge.render import ARCHETYPES, render  # noqa: E402
 from engines.forge.validate_pptx import _candidates, _numbers, validate  # noqa: E402
 
 MODEL = os.environ.get("FORGE_MODEL") or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
-ARCH_HELP = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
-renderer applies a strict consulting design; you only fill fields. Dense is good when it is organised.
+_ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
+renderer applies a strict consulting design; you only fill fields.
 - cover: title, subtitle, "date" (e.g. "Board meeting, March 2026").
 - grid: a slide assembled from PARTS on a grid when one exhibit is not enough (or too much). "layout": full, halves,
   halves_v, thirds, quarters, main_side (2/3 + 1/3), side_main, main_stack (left half + two stacked quarters right),
@@ -61,12 +62,17 @@ renderer applies a strict consulting design; you only fill fields. Dense is good
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories} on the left 2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
-FILL: every slide must carry enough substance to fill its page the way a top strategy firm's slide does; the
-renderer never stretches thin content. Targets: challenge_matrix cells = lead + 2-3 bullets; exhibit_argument =
-2-3 blocks of intro + 2-3 bullets; chart slides = takeaway + 3 bullets of 15-25 words; a table under 12 rows needs
-2-4 bullets. If the evidence for a slide is thin, merge it into a neighbour instead of padding.
+{fill}
 Text markup: **bold phrase**; a bold phrase containing a number is shown in the emphasis colour; ^1 is a
 superscript footnote marker. Numbers in bullets are emphasised automatically. Footnotes go in "footnotes"."""
+
+
+def arch_help(density: str = "read") -> str:
+    """The archetype guide with the density mode's FILL targets (density.py)."""
+    return _ARCH.replace("{fill}", FILL[density])
+
+
+ARCH_HELP = arch_help("read")                     # the dense send-ahead guide (kept for callers that import it)
 
 SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","title","title_prov":[fact ids],
  ...archetype fields..., "source": {"text": original sources, "prov": [ids]}, "footnotes": [...], "tags": optional
@@ -189,41 +195,112 @@ def _words(v) -> int:
     return len(str(v).split()) if isinstance(v, str) else 0
 
 
-def fill_checks(slides) -> dict[int, list[str]]:
-    """Pre-render: is there enough substance to fill the archetype? A thin slide is sent back for more evidence
-    (or a merge), never stretched by the renderer to look full."""
+EXHIBIT_PARTS = ("chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey")
+
+
+def _lists(s) -> list[list]:
+    """Every bullet list on a slide (slide bullets, block bullets, cell bullets, part bullets, callout bullets)."""
+    out = [s.get("bullets") or []]
+    out += [b.get("bullets") or [] for b in s.get("blocks") or [] if isinstance(b, dict)]
+    out += [c.get("bullets") or [] for r in s.get("rows") or [] if isinstance(r, dict)
+            for c in r.get("cells") or [] if isinstance(c, dict)]
+    out += [p.get("bullets") or [] for p in s.get("parts") or [] if isinstance(p, dict)]
+    if isinstance(s.get("callout"), dict):
+        out.append(s["callout"].get("bullets") or [])
+    return [x for x in out if isinstance(x, list)]
+
+
+def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
+    """Pre-render: does the slide carry what its density mode needs? In 'read' (dense send-ahead) a thin slide is
+    sent back for more evidence (or a merge), never stretched by the renderer to look full. 'balanced' asks for less;
+    'present' never asks for MORE text: it asks for an exhibit and a takeaway, and sends back slides that are too
+    busy to present (the detail belongs in the speaker notes)."""
+    density = _density(density) or "read"
     out: dict[int, list[str]] = {}
     for n, s in enumerate(slides, 1):
         a, msgs = s.get("archetype"), []
-        if a == "challenge_matrix":
-            thin = [i + 1 for i, r in enumerate(s.get("rows") or [])
-                    for c in (r.get("cells") or []) if isinstance(c, dict) and len(c.get("bullets") or []) < 2]
-            if thin:
-                msgs.append(f"rows {sorted(set(thin))}: each cell needs a lead and 2-3 evidence bullets so the "
-                            "matrix fills the slide; add the evidence, or drop the row")
-        elif a in ("table_focus", "table_highlight"):
-            rows = len((s.get("table") or {}).get("rows") or [])
-            if rows < 12 and len(s.get("bullets") or []) < 2:
-                msgs.append(f"the table has {rows} rows: add 'bullets' (2-4 lines interpreting it, with numbers); "
-                            "they sit beside a table this short. Or show it as a chart in exhibit_argument")
-        elif a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
-            if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < 35:
-                msgs.append("the takeaway column is thin: give 3 bullets (15-25 words each, with the numbers) that "
-                            "interpret the chart: the driver, the comparison, the implication")
+        if density == "present":
+            msgs += _present_checks(s, a)
+        else:
+            msgs += _fill_targets(s, a, density)
         c = s.get("chart") or {}
         if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
             msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
                         "split over time, or a comparison with a benchmark")
-        if a == "exhibit_argument":
-            if len(s.get("blocks") or []) < 2 or _words(s.get("blocks")) < 60:
-                msgs.append("the argument is thin: give 2-3 blocks, each an intro sentence and 2-3 bullets with "
-                            "numbers, so the right half is full")
-        elif a == "closing":
-            if any(not st.get("detail") or not st.get("milestones") for st in s.get("steps") or [] if isinstance(st, dict)):
-                msgs.append("every step needs a 'detail' (what it involves, with numbers) and 1-3 'milestones'")
         if msgs:
             out[n] = msgs
     return out
+
+
+def _present_checks(s, a) -> list[str]:
+    """Present mode: minimums are an exhibit and a takeaway; the rest is a cap (detail goes to the notes)."""
+    msgs = []
+    if a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
+        if not (s.get("takeaway") or {}).get("text") and not s.get("bullets"):
+            msgs.append("give the chart a takeaway: one bold line (<= 12 words) that says what it shows")
+    elif a in ("table_focus", "table_highlight"):
+        if not (s.get("takeaway") or {}).get("text"):
+            msgs.append("give the table a takeaway: one bold line (<= 12 words) that says what it shows")
+    elif a == "exhibit_argument":
+        if not s.get("blocks"):
+            msgs.append("the argument is missing: give 1-2 short points (an intro line, one bullet) beside the exhibit")
+    elif a == "grid":
+        parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
+        if parts and not any(p.get("type") in EXHIBIT_PARTS + ("quote",) for p in parts) and len(parts) < 3:
+            msgs.append("a presented slide needs one exhibit: show the point as a chart, 2-4 big numbers (stats), a "
+                        "process, a timeline or a 2x2, with at most one short text part beside it")
+    elif a == "challenge_matrix":
+        if any(not (c or {}).get("lead") for r in s.get("rows") or [] if isinstance(r, dict)
+               for c in r.get("cells") or [] if isinstance(c, dict)):
+            msgs.append("every cell needs a 'lead': one short line (<= 10 words); evidence goes in 'notes'")
+    elif a == "closing":
+        if any(not st.get("action") for st in s.get("steps") or [] if isinstance(st, dict)):
+            msgs.append("every step needs an 'action' (imperative, <= 8 words)")
+    busy = [len(x) for x in _lists(s) if len(x) > 3]
+    long_ = [b for x in _lists(s) for b in x if _words(b) > 16]
+    if busy or long_ or len(s.get("rows") or []) > 4 or len(s.get("parts") or []) > 4:
+        msgs.append("too busy to present: at most 3 bullets per list, each a headline of <= 12 words, at most 4 rows "
+                    "or parts; move the full sentences and evidence to 'notes' (the speaker notes)")
+    return msgs
+
+
+def _fill_targets(s, a, density) -> list[str]:
+    """Read: today's dense targets. Balanced: the same shapes with lighter minimums."""
+    light = density == "balanced"
+    msgs = []
+    if a == "challenge_matrix":
+        need = 1 if light else 2
+        thin = [i + 1 for i, r in enumerate(s.get("rows") or [])
+                for c in (r.get("cells") or []) if isinstance(c, dict) and len(c.get("bullets") or []) < need]
+        if thin:
+            msgs.append(f"rows {sorted(set(thin))}: each cell needs a lead and "
+                        + ("1-2 evidence bullets; add the evidence, or drop the row" if light else
+                           "2-3 evidence bullets so the matrix fills the slide; add the evidence, or drop the row"))
+    elif a in ("table_focus", "table_highlight"):
+        rows = len((s.get("table") or {}).get("rows") or [])
+        if rows < 12 and len(s.get("bullets") or []) < (1 if light else 2):
+            msgs.append(f"the table has {rows} rows: add 'bullets' ({'1-3' if light else '2-4'} lines interpreting it, "
+                        "with numbers); they sit beside a table this short. Or show it as a chart in exhibit_argument")
+    elif a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
+        if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < (20 if light else 35):
+            msgs.append("the takeaway column is thin: give " + ("2-3 bullets (10-18 words each" if light else
+                        "3 bullets (15-25 words each") + ", with the numbers) that interpret the chart: the driver, "
+                        "the comparison, the implication")
+    if a == "exhibit_argument":
+        if len(s.get("blocks") or []) < 2 or _words(s.get("blocks")) < (35 if light else 60):
+            msgs.append("the argument is thin: give 2-3 blocks, each an intro sentence and "
+                        + ("1-2 bullets" if light else "2-3 bullets") + " with numbers, so the right half is full")
+    elif a == "closing":
+        if any(not st.get("detail") or (not light and not st.get("milestones"))
+               for st in s.get("steps") or [] if isinstance(st, dict)):
+            msgs.append("every step needs a 'detail' (what it involves, with numbers)"
+                        + ("" if light else " and 1-3 'milestones'"))
+    if light:
+        busy = [len(x) for x in _lists(s) if len(x) > 5]
+        if busy or _words({k: v for k, v in s.items() if k in ("bullets", "blocks", "rows", "parts", "callout")}) > 180:
+            msgs.append("too dense for a balanced slide: at most 4-5 bullets per list and about 60-110 words on the "
+                        "slide; move secondary detail to 'notes'")
+    return msgs
 
 
 def chart_checks(slides) -> dict[int, list[str]]:
@@ -261,7 +338,11 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
 
 
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
-          theme=None) -> dict:
+          theme=None, density: str | None = None) -> dict:
+    """density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
+    steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
+    density = _density(density) or DEFAULT_DENSITY
+    help_ = arch_help(density)
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()
@@ -281,13 +362,14 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "title": str, "archetype": str,
 "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
-Exactly {slides_wanted} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below; prefer challenge_matrix, exhibit_argument and table_focus for dense evidence.
-Plan FEWER, DENSER slides: each slide must have enough evidence to fill its page. Plan ONLY slides whose evidence
+Exactly {slides_wanted} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.
+{STORY[density]}
+Each slide must have the evidence its point needs. Plan ONLY slides whose evidence
 is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
-{ARCH_HELP}""", f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}", task_id + "-story", 6000)
+{help_}""", f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}", task_id + "-story", 6000)
     calls += 1
     (out / "storyline.json").write_text(json.dumps(story, indent=1))
     nodes = [{"id": s.get("node"), "title": s.get("title")} for s in story.get("slides", [])]
@@ -302,9 +384,9 @@ supports it. Choose varied archetypes that prove each title.
         rel = [f for f in facts if f["id"] in ev] or facts
         try:
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
-design. Fill the archetype's fields completely and densely, the way a top strategy firm's slide carries evidence.
+design. {WRITE[density]}
 {SLIDE_SHAPE}
-{ARCH_HELP}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
+{help_}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
                 + f"\n\nThis slide: {json.dumps(x)}\n\nFacts (cite by id):\n"
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
@@ -319,14 +401,14 @@ design. Fill the archetype's fields completely and densely, the way a top strate
     rounds = []
     pptx = out / "deck.pptx"
     for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r = render(slides, str(pptx), carry=False, theme=theme)          # the brief's slide count is a hard limit
+        r = render(slides, str(pptx), carry=False, theme=theme, density=density)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
-                       storyline={"nodes": nodes}, render=True)
+                       storyline={"nodes": nodes}, render=True, density=density)
         fails = _content_failures(res)
         for n, msgs in number_checks(slides, facts, rules).items():
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
-        for n, msgs in fill_checks(slides).items():
+        for n, msgs in fill_checks(slides, density).items():
             fails.setdefault(n, []).extend(f"[fill] {m}" for m in msgs)
         for n, msgs in chart_checks(slides).items():
             fails.setdefault(n, []).extend(f"[chart] {m}" for m in msgs)
@@ -357,8 +439,9 @@ design. Fill the archetype's fields completely and densely, the way a top strate
             try:
                 fixed = _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
+{WRITE[density]}
 {SLIDE_SHAPE}
-{ARCH_HELP}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
+{help_}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
                     "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 6000)
                 calls += 1
                 if fixed.get("archetype") in ARCHETYPES:
@@ -376,16 +459,16 @@ choice or the number of items; never layout. Keep node and keep the point of the
         for n, msgs in left.items():
             if n - 1 < len(slides):
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        r = render(slides, str(pptx), carry=False, theme=theme)          # the brief's slide count is a hard limit
+        r = render(slides, str(pptx), carry=False, theme=theme, density=density)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
-                       storyline={"nodes": nodes}, render=True)
+                       storyline={"nodes": nodes}, render=True, density=density)
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts, indent=1))
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
     (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))
-    return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"],
+    return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}}
 
 
@@ -397,6 +480,7 @@ if __name__ == "__main__":
     ap.add_argument("brief")
     ap.add_argument("out_dir")
     ap.add_argument("--slides", type=int, default=12)
+    ap.add_argument("--density", choices=["present", "balanced", "read"], default=None)
     a = ap.parse_args()
-    r = build(Path(a.brief).read_text(), a.out_dir, a.slides)
+    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density)
     print(json.dumps(r, indent=1, default=str))

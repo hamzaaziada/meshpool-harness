@@ -24,6 +24,9 @@ pptx:
     max_row_air_in: 0.25        # a table row may be this much taller than its text (no stretched rows)
     max_bar_in: 0.6             # estimated bar thickness (frame, categories, gap width): no slabs
     max_column_in: 1.2
+    max_empty_share_by_density: # a presented slide may keep more air around one exhibit (balanced and read use
+                                # max_empty_share); slabs and stretched rows
+      present: 0.30             # stay forbidden in every mode
   bookends:                     # P16: opening/closing slides the brief asks for
     opening_archetypes: [cover]
     closing_archetypes: [closing, end]
@@ -79,7 +82,12 @@ pptx:
     forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
     max_rule_weight_pt: 1.5
     forbid_emoji: true
-  density:                      # P10
+  density:                      # P10. The keys below are the "read" caps (dense send-ahead deliverable); "modes" holds
+                                # the caps for the other density modes (engines/forge/density.py), merged over these.
+                                # A forge slide declares its mode in its name ("density:present"); a deck without one is
+                                # checked as "read".
+    default_mode: read
+    mode_regex: "density:([a-z]+)"
     max_body_words: 80          # default for narrative archetypes
     max_bullets: 5
     max_bullet_levels: 2
@@ -108,6 +116,68 @@ pptx:
       challenge_matrix: 20
       exhibit_argument: 10
       grid: 16
+    modes:
+      balanced:                 # lighter than a send-ahead: ~60-110 body words, at most 4-5 bullets per list
+        max_body_words: 90
+        max_bullets: 5
+        by_archetype:
+          executive_summary: 100
+          text_matrix: 130
+          case_example: 90
+          options_evaluation: 100
+          recommendations_now_next_later: 90
+          timeline_roadmap: 80
+          kpi_tiles: 40
+          table_highlight: 40
+          quote_voice: 50
+          challenge_matrix: 160
+          exhibit_argument: 120
+          table_focus: 60
+          grid: 130
+          closing: 110
+        bullets_by_archetype:
+          recommendations_now_next_later: 9
+          timeline_roadmap: 9
+          options_evaluation: 9
+          case_example: 6
+          two_exhibits: 5
+          text_matrix: 10
+          executive_summary: 6
+          challenge_matrix: 10
+          exhibit_argument: 7
+          grid: 10
+          closing: 10
+      present:                  # presenter-led: one message, one exhibit, <= ~3 short bullets, ~40 body words
+        max_body_words: 45
+        max_bullets: 3
+        by_archetype:
+          executive_summary: 60
+          text_matrix: 70
+          case_example: 50
+          options_evaluation: 60
+          recommendations_now_next_later: 60
+          timeline_roadmap: 60
+          kpi_tiles: 30
+          table_highlight: 30
+          quote_voice: 40
+          challenge_matrix: 70
+          exhibit_argument: 70
+          table_focus: 45       # takeaway and up to 3 short bullets beside the table or chart
+          grid: 80              # parts headings, stat labels, process and timeline captions included
+          closing: 90           # column heads, actions, one-line details, owners and dates
+          argument_only: 50
+        bullets_by_archetype:
+          recommendations_now_next_later: 6
+          timeline_roadmap: 6
+          options_evaluation: 6
+          case_example: 4
+          two_exhibits: 3
+          text_matrix: 4
+          executive_summary: 4
+          challenge_matrix: 4
+          exhibit_argument: 3   # two points beside the exhibit, each with one short bullet, and one so-what
+          grid: 8               # up to 4 parts of 2 bullets
+          closing: 4
   titles:                       # P11
     max_words: 15
     max_lines: 2

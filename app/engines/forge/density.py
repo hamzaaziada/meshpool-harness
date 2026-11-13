@@ -74,8 +74,8 @@ SCALES = {
 # ------------------------------------------------------------------ limits the renderer enforces (content beyond goes to notes)
 LIMITS = {
     "read": None,
-    "balanced": {"bullets": 5, "cell_bullets": 2, "block_bullets": 2, "blocks": 3, "callout": 3, "rows": 5,
-                 "table_rows": 12, "steps": 5, "milestones": 2, "parts": 4, "footnotes": 3, "words": 26,
+    "balanced": {"bullets": 4, "cell_bullets": 1, "block_bullets": 2, "blocks": 3, "callout": 3, "rows": 5,
+                 "table_rows": 12, "steps": 5, "milestones": 1, "parts": 4, "footnotes": 3, "words": 20,
                  "part_bullets": 4, "quadrant_items": 3, "stats": 6},
     "present": {"bullets": 3, "cell_bullets": 0, "block_bullets": 1, "blocks": 3, "callout": 2, "rows": 4,
                 "table_rows": 6, "steps": 4, "milestones": 0, "parts": 3, "footnotes": 1, "words": 12,
@@ -110,6 +110,8 @@ def headline(text: str, max_words: int) -> str:
             if k > max_words:
                 break
     words = t.split()
+    if len(words) <= max_words + 5:                     # one sentence with no clean break: keep it whole
+        return t
     return _balance(" ".join(words[:max_words])) + "…"
 
 
@@ -181,7 +183,7 @@ def _matrix_as_grid(s: dict, lim: dict, notes: _Notes) -> dict:
                       "bullets": bl})
     out = {k: v for k, v in s.items() if k not in ("rows", "columns")}
     out.update(archetype="grid", layout={1: "full", 2: "halves", 3: "thirds", 4: "quarters"}[max(1, len(parts))],
-               look=s.get("look") or "boxed", parts=parts)
+               look=s.get("look") or "bold", parts=parts)
     return out
 
 
@@ -271,8 +273,9 @@ def condense(s: dict, mode: str) -> dict:
                 r["cells"] = [dict(c, bullets=_bullets(c.get("bullets"), lim["cell_bullets"], lim, notes))
                               if isinstance(c, dict) else c for c in r.get("cells") or []]
         s["rows"] = rows
+    arg = a == "exhibit_argument" and mode == "present"     # two short points and one so-what beside the exhibit
     if isinstance(s.get("blocks"), list):
-        blocks = _cap(s["blocks"], lim["blocks"], notes)
+        blocks = _cap(s["blocks"], 2 if arg else lim["blocks"], notes)
         nb = lim["block_bullets"] if a == "exhibit_argument" else lim["bullets"]
         out = []
         for b in blocks:
@@ -286,7 +289,7 @@ def condense(s: dict, mode: str) -> dict:
         s["blocks"] = out
     co = s.get("callout")
     if isinstance(co, dict) and isinstance(co.get("bullets"), list):
-        s["callout"] = dict(co, bullets=_bullets(co["bullets"], lim["callout"], lim, notes))
+        s["callout"] = dict(co, bullets=_bullets(co["bullets"], 1 if arg else lim["callout"], lim, notes))
     if a in ("table_focus", "table_highlight") and isinstance(s.get("table"), dict):
         s["table"] = _table(s["table"], lim["table_rows"], notes)
         if mode == "present":                              # the mode's type scale sets the table size
@@ -315,6 +318,8 @@ def condense(s: dict, mode: str) -> dict:
         for p in parts[k:]:
             notes.add(f"{_plain(p.get('heading') or p.get('type'))}: " + json.dumps(
                 {x: y for x, y in p.items() if x not in ("type", "heading", "prov")}, ensure_ascii=False)[:400])
+        if mode == "present" and len(parts[:k]) >= 3:     # three or four parts: two bullets each
+            lim = dict(lim, part_bullets=2)
         s["parts"] = [_part(p, lim, notes) for p in parts[:k]]
     fn = s.get("footnotes")
     if isinstance(fn, list) and len(fn) > lim["footnotes"]:
@@ -364,7 +369,7 @@ FILL = {
                 "takeaway and 2-4 bullets of 10-18 words; about 60-110 body words in all; challenge_matrix cells = "
                 "lead + 1-2 bullets; exhibit_argument = 2-3 blocks of intro + 1-2 bullets; tables of up to 12 rows. "
                 "Secondary detail goes in \"notes\". If the evidence for a slide is thin, merge it into a neighbour.",
-    "read": "FILL: every slide must carry enough substance to fill its page the way a top strategy firm's slide does; "
+    "read": "Dense is good when it is organised. FILL: every slide must carry enough substance to fill its page the way a top strategy firm's slide does; "
             "the renderer never stretches thin content. Targets: challenge_matrix cells = lead + 2-3 bullets; "
             "exhibit_argument = 2-3 blocks of intro + 2-3 bullets; chart slides = takeaway + 3 bullets of 15-25 words; "
             "a table under 12 rows needs 2-4 bullets. If the evidence for a slide is thin, merge it into a neighbour "
