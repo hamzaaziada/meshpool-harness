@@ -18,7 +18,8 @@ BUILTIN = [
                     "for every agent): 7 of 9 tasks solved.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
      "description": ("Best for: documents, spreadsheets, decks, data analysis and research. Makes Word, Excel and "
-                    "PowerPoint files with Meshpool's office engines; needs nothing else installed.")},
+                    "PowerPoint files with Meshpool's office engines and checks every deck and workbook against "
+                    "Meshpool's consulting-quality rules; needs nothing else installed.")},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
       "description": ("Best for: simple coding tasks at low cost. Pi is the small open-source coding agent by "
@@ -74,7 +75,9 @@ def _bundled_hermes() -> dict | None:
         env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
     else:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return {"id": "hermes", "name": "Hermes", "mode": "cowork", "type": "acp", "default": True, "prepare": "hermes",
+    # Not the cowork default (office handoff, 13 Nov 2026): Meshpool Work passed every office task tested, was faster
+    # on the Word proposal (42 s vs 64 s) and runs the forge deck/workbook checks; Hermes stays one click away.
+    return {"id": "hermes", "name": "Hermes", "mode": "cowork", "type": "acp", "prepare": "hermes",
             "models": "meshpool", "command": sys.executable, "args": ["-m", "acp_adapter"], "env": env, "description": HERMES_NOTE}
 
 

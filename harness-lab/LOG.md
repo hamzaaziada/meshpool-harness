@@ -187,3 +187,16 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   unchanged. Top bar no longer truncates or wraps at laptop widths. Probe: testkit/jitter.js, 20/20 at 3 sizes.
 - Office jobs no longer write into the app's install folder.
 - Regression on the mock: e2e 124/124, journeys 20/20, ui_crawl 45/45, crawl_all 31/31, midrun 99/99, unit 149.
+
+## 2026-11-13: office track picked up; forge deck/workbook quality layer
+
+- Forge (`app/engines/forge`, docs in `docs/deck-engine/`): validators for 19 deck rules (P1-P19) and 13 workbook
+  rules (X1-X13), deck/PDF/workbook anatomy measurers, rules config, slide and workbook JSON schemas, scorecard,
+  9 tests. Exposed in Cowork as read-only tools on meshpool-office: check_deck, check_workbook, measure_office_file;
+  every make_deck/make_spreadsheet report now ends with a forge QA line.
+- 17 public consulting decks measured (1,186 pages) to calibrate thresholds; blind visual review of our sample deck
+  (overall consultant-made 2/5 vs 4-5 for reference pages).
+- McKinsey one-shot rebuild test (`engines/forge/rebuild_eval.py`): fails today. Titles and consistency are good;
+  0% source lines vs 50-87%, Calibri only, thin exhibits. $0.015 per rebuild; key spend now $2.63.
+- Handoff open issues: 1 (cowork default) -> Meshpool Work; 2 (Markdown reports) -> Work writes .docx with
+  make_document and runs check_deck/check_workbook on deliverables. Unit tests 151 passed.

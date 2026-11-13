@@ -19,7 +19,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-P_RULES = [f"P{i}" for i in range(1, 19)]
+P_RULES = [f"P{i}" for i in range(1, 20)]
 X_RULES = [f"X{i}" for i in range(1, 14)]
 VISUAL = ["hierarchy", "white_space", "grid_discipline", "chart_clarity", "consultant_made"]
 METRICS = ["slides_or_pages", "body_words_median", "title_words_median", "title_verb_share", "source_line_share",

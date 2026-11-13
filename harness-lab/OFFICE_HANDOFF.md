@@ -95,3 +95,12 @@ Still to check, in this order:
 Sources: support.claude.com articles 13345190 (get started), 12111783 (create and edit files), 14128542 (computer
 use), 13364135 (using Cowork); claude.com/blog/cowork-research-preview; github.com/anthropics/skills (docx, xlsx,
 pdf skills).
+
+## Update, 13 Nov 2026 (office agent, branch claude/elegant-edison-1oey8d)
+
+- Open issue 1 fixed: Cowork now defaults to Meshpool Work (Hermes no longer marked default).
+- Open issue 2 fixed: WORK_SYSTEM tells Work to make .docx with make_document for memos/reports, and to run the new
+  check_deck/check_workbook tools on every deliverable.
+- New: forge quality layer (`app/engines/forge`, `docs/deck-engine/README.md`).
+- Not done: the paid practical run (step 1) and the capability gaps under "Still to check". Key spend is $2.63 of the
+  $4 budget.

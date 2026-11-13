@@ -159,8 +159,10 @@ def test_good_deck_passes_content_rules(decks):
 
 def test_bad_deck_fails_each_defect(decks):
     _, bad, _ = decks
-    r = VP.validate(str(bad), brief={"slide_count": 3}, provenance={"slides": {}}, render=False)
+    r = VP.validate(str(bad), brief={"slide_count": 3}, provenance={"slides": {}}, render=HAS_LO)
     st = r["rules"]
+    if HAS_LO:
+        assert st["P1"] == "fail"                                # rendered text spills outside its box
     for rule in ("P2", "P4", "P5", "P6", "P7", "P9", "P10", "P11", "P13", "P15", "P16", "P18"):
         assert st[rule] == "fail", (rule, st[rule], [f["message"] for f in r["failures"] if f["rule"] == rule])
     msgs = " ".join(f["message"] for f in r["failures"])
