@@ -171,7 +171,8 @@ office_task can make it: the engines carry the design system and the checks. If 
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
 and check_document on every .docx you deliver; fix each failure it lists (content \
-failures by changing the words or numbers, then rebuild) and tell the user about any that remain.
+failures by changing the words or numbers, then rebuild) and tell the user about any that remain. Rebuild at most \
+twice to clear check results; failures marked /renderer are the engine's own and a rebuild does not fix them.
 6. Finish with a short reply: what you made, where the files are, and anything the user should check. Do not call \
 a tool in that reply.
 

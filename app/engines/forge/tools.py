@@ -31,7 +31,20 @@ def check_deck(path: str, slide_count: int | None = None, render: bool = True) -
     brief = {"slide_count": int(slide_count)} if slide_count else _sidecar(p, "brief")
     res = validate(str(p), brief=brief, provenance=_sidecar(p, "provenance"), storyline=_sidecar(p, "storyline"),
                    render=render)
-    return report_text(res, 30), False
+    return report_text(res, 30) + _scope_note(res), False
+
+
+def _scope_note(res: dict) -> str:
+    """Tell the agent which failures a rebuild can fix. Without it, renderer-scope failures (layout, type sizes,
+    typefaces) sent agents into rebuild loops they could never win."""
+    fs = [f for f in res.get("failures", []) if f.get("status") == "fail"]
+    if not fs:
+        return ""
+    if any(f.get("fix_scope") != "content" for f in fs):
+        return ("\nFailures marked /renderer or /template come from the engine's own layout; a rebuild with a new "
+                "request does not fix them. Do not rebuild for them; mention them to the user if they matter. "
+                "Rebuild at most twice for /content failures, then deliver the best version and list what remains.")
+    return "\nRebuild at most twice for these, then deliver the best version and list what remains."
 
 
 def check_workbook(path: str) -> tuple[str, bool]:
@@ -40,7 +53,7 @@ def check_workbook(path: str) -> tuple[str, bool]:
     if not p.exists():
         return f"File not found: {path}", True
     res = validate(str(p), recompute=_sidecar(p, "recompute"))
-    return report_text(res, 30), False
+    return report_text(res, 30) + _scope_note(res), False
 
 
 def check_document(path: str) -> tuple[str, bool]:
