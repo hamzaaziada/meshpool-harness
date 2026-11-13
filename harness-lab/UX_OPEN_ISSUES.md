@@ -4,7 +4,9 @@ Merged at 7.2/10 at the owner's request; the target is 9/10. Earlier audits: 6.3
 audits found was fixed. These are the findings still open, most important first. The audit used the mock model;
 screenshots were in the session scratchpad and are not kept.
 
-## P0: history and data
+## Fixed on 13 Nov (after merge): items 1-9 (all P0 and P1). Remaining: P2 below.
+
+## P0: history and data (fixed)
 1. **Restart loses messages.** A thread running when the app restarts comes back blank ("New thread", message
    gone), or loses the message that was being worked on with no "interrupted" note. Expected: the message is kept,
    marked Interrupted, and can be resent.
@@ -13,7 +15,7 @@ screenshots were in the session scratchpad and are not kept.
 3. **Diff shows another thread's changes.** "All changes in this thread" lists files made later by another thread
    in the same folder (e.g. `Meshpool outputs/spend.docx` under unrelated Code threads). Per-reply Undo is correct.
 
-## P1
+## P1 (fixed)
 4. "Remove from Meshpool" (folder menu) gives no confirmation or toast, and a folder with threads stays in the
    sidebar.
 5. Diff panel: picking "Reply 1" shows Undo above "This thread hasn't changed any files yet."; that Undo erases

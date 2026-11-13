@@ -387,7 +387,18 @@ function projMenu(e, path) {
     {label: isMac ? "Open in Finder" : "Open in File Explorer", fn: () => post("/api/open-path", {path}).catch(err => toast(err.message))},
     {label: "Open in code editor", fn: () => post("/api/open-editor", {path}).then(r => toast(r.message)).catch(err => toast(err.message))},
     {label: "Rename", fn: async () => { const n = await ask({title: "Rename folder", text: "The name shown in Meshpool. The folder on disk keeps its name.", value: projName(path), ok: "Rename"}); if (n) { await post("/api/projects", {action: "rename", path, name: n}); await loadProjects(); renderSide(); } }},
-    {label: "Remove from Meshpool", danger: true, fn: async () => { await post("/api/projects", {action: "remove", path}); await loadProjects(); renderSide(); }},
+    {label: "Remove from Meshpool", danger: true, fn: async () => {
+      const ts = S.threads.filter(t => t.workdir === path && !t.archived);
+      if (!await ask({title: `Remove ${projName(path)} from Meshpool?`, text: `The folder and its files stay on your computer.${ts.length ? ` Its ${ts.length} thread${ts.length === 1 ? " is" : "s are"} archived; you can find ${ts.length === 1 ? "it" : "them"} under Show archived.` : ""}`, ok: "Remove folder", danger: true})) return;
+      await post("/api/projects", {action: "remove", path});
+      for (const t of ts) await post(`/api/threads/${t.id}`, {action: "archive"}).catch(() => {});
+      if (S.cur?.view?.workdir === path) newThread();
+      await loadProjects(); await loadThreads(); renderSide();
+      toast(`${projName(path)} removed`, 6000, {label: "Undo", fn: async () => {
+        await post("/api/projects", {action: "add", path}).catch(e => toast(e.message));
+        for (const t of ts) await post(`/api/threads/${t.id}`, {action: "unarchive"}).catch(() => {});
+        await loadProjects(); await loadThreads(); renderSide(); }});
+    }},
   ]);
 }
 async function threadAct(id, action) {
@@ -408,27 +419,50 @@ function browseFolder(start) {
   return new Promise(resolve => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     sc.innerHTML = `<div class="dlg fb" role="dialog" aria-modal="true" aria-label="Choose a folder"><h3>Choose a folder</h3>
-      <div class="fbpath" id="fbPath"></div><ul class="fblist" id="fbList"></ul>
-      <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
+      <div class="fbcrumbs" id="fbCrumbs"></div>
+      <input id="fbIn" spellcheck="false" aria-label="Folder path" placeholder="Or type a folder path and press Enter">
+      <ul class="fblist" id="fbList" role="listbox" tabindex="0"></ul>
+      <div class="row"><span class="fbsel" id="fbSel"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Use this folder</button></div></div>`;
     document.body.appendChild(sc);
-    let cur = "";
-    const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
-    const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(""); } };
+    let cur = "", home = "", act = -1;
+    const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); if (v) store("fb_last", v); resolve(v); };
+    const items = () => $$("#fbList [data-p]", sc);
+    const mark = n => { const it = items(); if (!it.length) return; act = Math.max(0, Math.min(it.length - 1, n)); it.forEach((b, k) => b.classList.toggle("act", k === act)); it[act].scrollIntoView({block: "nearest"}); };
+    const key = e => {
+      if (e.key === "Escape") { e.stopPropagation(); done(""); return; }
+      if (e.target.id === "fbIn") { if (e.key === "Enter") { e.preventDefault(); go(e.target.value.trim()); } return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); mark(act + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); mark(act - 1); }
+      else if (e.key === "Enter" && act >= 0) { e.preventDefault(); go(items()[act].dataset.p); }
+      else if (e.key === "Backspace") { e.preventDefault(); const up = $("#fbList [data-up]", sc); if (up) go(up.dataset.p); }
+    };
     document.addEventListener("keydown", key, true);
     const go = async path => {
       try {
         const r = await post("/api/projects", {action: "dirs", path});
-        cur = r.path;
-        const crumbs = r.path.replace(r.home, "~");
-        $("#fbPath", sc).textContent = crumbs;
-        $("#fbList", sc).innerHTML = (r.parent ? `<li><button data-p="${esc(r.parent)}">${ICON.chev} Up one level</button></li>` : "") +
-          (r.dirs.length ? r.dirs.map(d => `<li><button data-p="${esc(r.path.replace(/[\\/]$/, "") + (r.path.includes("\\") ? "\\" : "/") + d)}">${ICON.dir}<span>${esc(d)}</span></button></li>`).join("") : `<li class="pnote">No folders inside.</li>`);
-        $$("#fbList [data-p]", sc).forEach(b => b.onclick = () => go(b.dataset.p));
+        cur = r.path; home = r.home; act = -1;
+        const sep = r.path.includes("\\") ? "\\" : "/";
+        const parts = r.path.split(/[\\/]/).filter(Boolean);
+        let acc = r.path.startsWith("/") ? "" : "";
+        $("#fbCrumbs", sc).innerHTML = (r.path.startsWith("/") ? `<button data-c="/">/</button>` : "") + parts.map((p, k) => {
+          acc = (k === 0 && !r.path.startsWith("/")) ? p + sep : acc + (acc.endsWith(sep) || acc === "" ? "" : sep) + p;
+          const full = r.path.startsWith("/") ? "/" + parts.slice(0, k + 1).join("/") : acc;
+          return `<button data-c="${esc(full)}" class="${k === parts.length - 1 ? "here" : ""}">${esc(full === home ? "Home" : p)}</button>`;
+        }).join(`<span class="sep">›</span>`);
+        $$("#fbCrumbs [data-c]", sc).forEach(b => b.onclick = () => go(b.dataset.c));
+        $("#fbIn", sc).value = "";
+        $("#fbList", sc).innerHTML = (r.parent ? `<li><button data-p="${esc(r.parent)}" data-up="1">${ICON.chev}<span>Up one level</span></button></li>` : "") +
+          (r.dirs.length ? r.dirs.map(d => `<li><button data-p="${esc(r.path.replace(/[\\/]$/, "") + sep + d)}">${ICON.dir}<span>${esc(d)}</span></button></li>`).join("") : `<li class="pnote">No folders inside.</li>`);
+        items().forEach((b, k) => { b.onclick = () => mark(k); b.ondblclick = () => go(b.dataset.p); });
+        const name = r.path === r.home ? "your whole home folder" : (parts[parts.length - 1] || r.path);
+        $("#fbSel", sc).textContent = `Selected: ${name}`;
+        $("[data-a='1']", sc).textContent = r.path === r.home ? "Use the whole home folder" : `Use ${name}`;
+        $("#fbList", sc).focus();
       } catch (e) { toast(e.message); }
     };
     $$("[data-a]", sc).forEach(b => b.onclick = () => done(b.dataset.a === "1" ? cur : ""));
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(""); });
-    go(start || "");
+    go(start || store("fb_last") || "");
   });
 }
 async function pickProject() {
@@ -888,7 +922,7 @@ const TOOL_DONE = {make_document: "Made a Word document", make_pdf: "Made a PDF"
 // What a step is about, in words: a file name, a query or a command; never raw JSON.
 function stepSummary(name, ev) {
   const s = String(ev.summary || "");
-  if (!ev.mcp || !s.trim().startsWith("{")) return s;
+  if (!s.trim().startsWith("{")) return s;
   try { const a = JSON.parse(s); return String(a.filename || a.path || a.query || a.question || a.url || a.title || a.request || a.expression || "").split("\n")[0].slice(0, 120); }
   catch (e) { return ""; }
 }
@@ -941,7 +975,7 @@ function applyEv(ev) {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
       const out = String(ev.output || ""), stopped = !ev.ok && /not run: stopped by the user|^\[exit 130\]|stopped by the user/i.test(out);
-      const planned = !ev.ok && /plan mode/i.test(out);
+      const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
       const nm = d.dataset.name || "";
@@ -968,7 +1002,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`;
+      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === $("#col").lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1123,13 +1157,13 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this thread</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
-    if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || "This thread hasn't changed any files yet. Other changes in this folder are under Git and CI.")}</div>`; return; }
+    if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || sel ? "This reply didn't change any files." : "This thread hasn't changed any files yet. Other changes in this folder are under Git and CI.")}</div>`; return; }
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
@@ -1638,9 +1672,9 @@ async function importPanel(box, onDone) {
   const rows = [...f.skills, ...f.mcp];
   if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
   const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
-  box.innerHTML = `${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
+  box.innerHTML = `<div class="impsel"><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div>${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
     ${f.mcp.length ? `<h3 class="onb-h">Tools from other apps (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">They keep their settings from the other app and stay on this computer.</p>` : ""}
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div><div class="res" id="impRes"></div>`;
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button></div><div class="res" id="impRes"></div>`;
   $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
   $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
   $("#impGo", box).onclick = box._import = async () => {
