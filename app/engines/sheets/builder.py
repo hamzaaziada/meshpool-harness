@@ -499,6 +499,12 @@ def dcf_block(ws, row, years, drivers, revenue=None, margin="ebitda_margin", nam
     return _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text)
 
 
+BRIDGE_ITEMS = [("other_claims", "Less: minorities and preferred ($m)", -1),
+                ("minorities", "Less: minority interest ($m)", -1), ("preferred", "Less: preferred equity ($m)", -1),
+                ("leases", "Less: lease liabilities ($m)", -1), ("pensions", "Less: unfunded pensions ($m)", -1),
+                ("investments", "Plus: equity investments and other non-operating assets ($m)", 1)]
+
+
 def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=False) -> dict:
     """WACC build-up, terminal value (Gordon + exit multiple), EV -> equity bridge and sensitivity grids, shared by
     dcf_block and dcf_from_statements. rows must hold t, ebitda, fcf, dp, pv (forecast columns cols)."""
@@ -558,9 +564,10 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
     single("b_debt", "Less: total debt ($m)", f"=-{N['debt']}")
     single("b_cash", "Plus: cash ($m)", f"={N['cash']}")
     claims = ""
-    if N.get("other_claims"):
-        single("b_other", "Less: minorities and preferred ($m)", f"=-{N['other_claims']}")
-        claims = f"-{N['other_claims']}"
+    for key, lab, sign in BRIDGE_ITEMS:                       # itemised: each claim or asset on its own line
+        if N.get(key):
+            single(f"b_{key}", lab, f"={'-' if sign < 0 else ''}{N[key]}")
+            claims += f"{'-' if sign < 0 else '+'}{N[key]}"
     eq = single("equity", "Equity value ($m)", f"=SUM(B{b0}:B{r - 1})", total=True, name="equity")
     sh = single("shares", "Diluted shares (m)", f"={N['shares']}", "num")
     single("per_share", "Value per share ($)", f"=IF({sh}=0,0,{eq}/{sh})", "usd2", total=True, name="per_share")
@@ -577,7 +584,7 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
         e = f"={N['g']}-2*{N['g_step']}" if j == 0 else f"={gcols[j - 1]}{gh}+{N['g_step']}"
         _f(ws, f"{c}{gh}", e, "pct").fill = SECTION_FILL
     fr, dpr, tr_ = rows["fcf"], rows["dp"], rows["t"]
-    other = f"-{N['other_claims']}" if N.get("other_claims") else ""
+    other = claims
     pv_x = lambda w: f"SUMPRODUCT(${F0}${fr}:${L}${fr}/(1+{w})^${F0}${dpr}:${L}${dpr})"  # noqa: E731
     for i in range(5):
         rr = gh + 1 + i
@@ -624,7 +631,8 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
     ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 46)
     for c in cols + gcols:
         ws.column_dimensions[c].width = max(ws.column_dimensions[c].width or 0, 13)
-    return {"header_row": hdr, "rows": rows, "cols": cols, "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}",
+    return {"header_row": hdr, "rows": rows, "cols": cols, "sheet_name": ws.title,
+            "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}",
             "grid_centre": f"'{ws.title}'!{centre}", "names": {k: P(k) for k in
             ("wacc", "ev", "ev_exit", "tv_share", "equity", "per_share", "per_share_exit")}, "next_row": r + 1,
             **out_extra}
@@ -788,7 +796,7 @@ TS_NAMES = {"tax": "tax_rate", "dso": "dso", "dio": "dio", "dpo": "dpo", "capex_
             "cash_open": "cash_open", "ar_open": "ar_open", "inv_open": "inv_open", "other_ca_open": "other_ca_open",
             "ppe_open": "ppe_open", "other_nca_open": "other_nca_open", "ap_open": "ap_open",
             "other_cl_open": "other_cl_open", "revolver_open": "revolver_open", "term_debt_open": "term_debt_open",
-            "other_ncl_open": "other_ncl_open", "equity_open": "equity_open"}
+            "other_ncl_open": "other_ncl_open", "equity_open": "equity_open", "sbc": None}
 DEFAULT_OPEX = [{"key": "sga", "label": "Selling, general and administrative ($m, negative)", "pct": "sga_pct"}]
 
 
@@ -826,7 +834,9 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
     if last_actual is None:
         y0 = years[0]
         last_actual = f"{y0 - 1}A" if isinstance(y0, int) else "Last actual"
-    need = {N[k] for k in TS_NAMES} | {o["pct"] for o in opex if "pct" in o}
+    need = {N[k] for k in TS_NAMES if N[k]} | {o["pct"] for o in opex if "pct" in o}
+    if N.get("sbc"):                       # share-based compensation: a real expense (in EBITDA and EPS), non-cash
+        opex = list(opex) + [{"key": "sbc", "label": "Share-based compensation ($m, negative)", "pct": N["sbc"]}]
     for s in segments:
         if "gross_margin" in s:
             need.add(s["gross_margin"])
@@ -1020,6 +1030,8 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
     rows["eq_ni"] = eq_ni
     line("dividends", "Dividends paid ($m, negative)")          # formula written below, once net income exists
     line("buybacks", "Share repurchases ($m, negative)", "=-" + nm("buyback"))
+    if N.get("sbc"):
+        line("eq_sbc", "Share-based compensation credited to equity ($m)", "=-{sbc}")
     line("eq_end", "Equity at end of year ($m)", None, "=" + nm("equity_open"), total=True)
 
     # ---- balance sheet
@@ -1052,11 +1064,14 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
     band("Cash flow statement")
     line("cf_ni", "Net income ($m)", "={net_income}")
     line("cf_da", "Add back: depreciation ($m)", "={dep}")
+    if N.get("sbc"):
+        line("cf_sbc", "Add back: share-based compensation ($m)", "=-{sbc}")
     line("cf_ar", "(Increase) / decrease in receivables ($m)", "={ar@prev}-{ar}")
     line("cf_inv", "(Increase) / decrease in inventory ($m)", "={inv@prev}-{inv}")
     line("cf_ap", "Increase / (decrease) in payables ($m)", "={ap}-{ap@prev}")
     line("cf_nwc", "(Increase) / decrease in working capital ($m)", "=SUM({cf_ar}:{cf_ap})")
-    line("cfo", "Cash from operating activities ($m)", "={cf_ni}+{cf_da}+{cf_nwc}", total=True)
+    line("cfo", "Cash from operating activities ($m)",
+         "={cf_ni}+{cf_da}+{cf_nwc}" + ("+{cf_sbc}" if N.get("sbc") else ""), total=True)
     line("cf_capex", "Capital expenditure ($m, negative)", "=-{additions}")
     line("cfi", "Cash from investing activities ($m)", "={cf_capex}", total=True)
     line("cf_draw", "Term debt drawn ($m)", "={term_draw}")
@@ -1085,8 +1100,8 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
         "={bs_cash@prev}+{cfo}+{cfi}+{term_draw}+{term_repay}+{dividends}+{buybacks}")
     put(eq_ni, "eq_ni", "Net income ($m)", "={net_income}")
     put(rows["dividends"], "dividends", "Dividends paid ($m, negative)", f"=-MAX(0,{{net_income}})*{nm('payout')}")
-    put(rows["eq_end"], "eq_end", "Equity at end of year ($m)", "={eq_beg}+{eq_ni}+{dividends}+{buybacks}",
-        "=" + nm("equity_open"), total=True)
+    put(rows["eq_end"], "eq_end", "Equity at end of year ($m)", "={eq_beg}+{eq_ni}+{dividends}+{buybacks}"
+        + ("+{eq_sbc}" if N.get("sbc") else ""), "=" + nm("equity_open"), total=True)
     put(bs_cash, "bs_cash", "Cash ($m)", "={cash_end}", "=" + nm("cash_open"))
     r = end_row
     flush()
@@ -1130,7 +1145,8 @@ def three_statement(ws, row, years, segments, opex=None, capex_growth=None, name
 DCF_STMT_NAMES = {"rf": "risk_free", "beta_u": "beta_unlevered", "erp": "equity_risk_premium", "kd": "cost_of_debt",
                   "debt_weight": "debt_weight", "g": "terminal_growth", "exit_multiple": "exit_multiple",
                   "mid_year": "mid_year", "shares": "diluted_shares", "wacc_step": "wacc_step", "g_step": "g_step",
-                  "exit_step": None, "other_claims": None, "size_premium": None}
+                  "exit_step": None, "other_claims": None, "size_premium": None, "minorities": None,
+                  "preferred": None, "leases": None, "pensions": None, "investments": None}
 
 
 def dcf_from_statements(ws, row, model, names=None, prefix="dcf_", title_text="DCF") -> dict:
@@ -1149,7 +1165,8 @@ def dcf_from_statements(ws, row, model, names=None, prefix="dcf_", title_text="D
     N = {**DCF_STMT_NAMES, **(names or {})}
     if N.get("exit_step") is None and "exit_step" in _names_in(wb):
         N["exit_step"] = "exit_step"
-    need = [v for k, v in N.items() if v and k not in ("other_claims", "size_premium", "exit_step")]
+    need = [v for k, v in N.items() if v and k not in ("other_claims", "size_premium", "exit_step", "minorities",
+                                                         "preferred", "leases", "pensions", "investments")]
     missing = [n for n in need if n.lower() not in _names_in(wb)]
     if missing:
         raise ValueError(f"dcf_from_statements: define these named inputs first: {', '.join(missing)}")
@@ -1600,3 +1617,92 @@ def valuation_summary(ws, row, methods, profile, marker=None, tv_share_name="dcf
     return {"selection": {k: v for k, v in sel.items() if not k.startswith("_")}, "weighted": weighted,
             "prefilled_weights": pre, "first_row": first, "last_row": last, "total_row": tot_row, "gaps": gaps,
             "floors": floors, "football_field": ff, "names": res, "next_row": ff["next_row"]}
+
+
+# --------------------------------------------------------------------------- share count and model alerts
+def diluted_shares(ws, row, basic="basic_shares", price="share_price", options=(), rsus=None, converts=(),
+                   name="diluted_shares", title_text="Diluted shares (treasury stock method)") -> dict:
+    """Fully diluted share count from named inputs: basic shares + in-the-money options under the treasury stock
+    method (n x (1 - strike / price)) + RSUs + convertibles that are in the money (if-converted). options:
+    [(count_name, strike_name)], converts: [(shares_name, conversion_price_name)]. Defines `name`."""
+    wb = ws.parent
+    section(ws, row, title_text, 3)
+    r = row + 1
+    header(ws, r, ["Component", "Shares (m)", "Note"])
+    r += 1
+    first = r
+    ws.cell(row=r, column=1, value="Basic shares outstanding (m)")
+    _f(ws, f"B{r}", f"={basic}", "num")
+    r += 1
+    for i, (n_, k_) in enumerate(options, 1):
+        ws.cell(row=r, column=1, value=f"Options tranche {i}: net new shares (m)")
+        _f(ws, f"B{r}", f"=IF({price}>{k_},{n_}*(1-{k_}/{price}),0)", "num")
+        ws.cell(row=r, column=3, value="Treasury stock method: exercise proceeds buy back shares at the price")
+        r += 1
+    if rsus:
+        ws.cell(row=r, column=1, value="Restricted stock units (m)")
+        _f(ws, f"B{r}", f"={rsus}", "num")
+        r += 1
+    for i, (sh_, cp_) in enumerate(converts, 1):
+        ws.cell(row=r, column=1, value=f"Convertible {i}: shares if converted (m)")
+        _f(ws, f"B{r}", f"=IF({price}>{cp_},{sh_},0)", "num")
+        ws.cell(row=r, column=3, value="Counted only when in the money (dilutive)")
+        r += 1
+    ws.cell(row=r, column=1, value="Diluted shares (m)").font = Font(name=FONT, bold=True)
+    _f(ws, f"B{r}", f"=SUM(B{first}:B{r - 1})", "num", total=True)
+    define_name(wb, name, _abs(ws, f"B{r}"))
+    return {"cell": f"'{ws.title}'!B{r}", "next_row": r + 2}
+
+
+def alerts(wb, model: dict, dcf: dict | None = None, sheet: str = "Alerts") -> dict:
+    """Banker sanity alerts on the forecast (they warn, they do not fail the master check): revenue growth fades,
+    capex covers depreciation while growing, growth and margins rarely rise together, terminal growth at or below
+    the risk-free rate, terminal value share of EV, the revolver never short. Each row shows the test and REVIEW or
+    OK; thresholds are labelled constants on the Checks tab."""
+    ws = wb[sheet] if sheet in wb.sheetnames else wb.create_sheet(
+        sheet, index=wb.sheetnames.index("Checks") if "Checks" in wb.sheetnames else None)
+    ws.sheet_view.showGridLines = False
+    title(ws, "Model alerts: tests a reviewer would run (REVIEW = look again; they do not fail the model)")
+    header(ws, 3, ["Alert", "Measured", "Status", "Why it matters"])
+    msh, rows, cols = model["sheet"], model["rows"], model["cols"]
+    F0, L = cols[0], cols[-1]
+    rng = lambda k, a=F0, b=L: f"'{msh}'!{a}{rows[k]}:{b}{rows[k]}"  # noqa: E731
+    cell = lambda k, c: f"'{msh}'!{c}{rows[k]}"  # noqa: E731
+    tv_max = model_constant(wb, "alert_tv_share_max", "Alert: terminal value share of EV above (%)", 0.75, "pct")
+    r = 4
+    out = {}
+
+    def add(key, label, measured, ok_expr, why, fmt="num"):
+        nonlocal r
+        ws.cell(row=r, column=1, value=label)
+        _f(ws, f"B{r}", measured, fmt)
+        _f(ws, f"C{r}", f'=IF({ok_expr.format(v=f"B{r}")},"OK","REVIEW")')
+        ws.cell(row=r, column=4, value=why)
+        out[key] = f"'{sheet}'!C{r}"
+        r += 1
+    add("growth_fades", "Final-year revenue growth minus first-year growth (pp)",
+        f"={cell('growth', L)}-{cell('growth', F0)}", "{v}<=0",
+        "Growth should generally fade toward a steady state (BIWS)", "pct")
+    add("capex_vs_dep", "Forecast years where additions are below depreciation while revenue grows (#)",
+        f"=SUMPRODUCT(--({rng('additions')}<{rng('dep')}),--({rng('growth')}>0))", "{v}=0",
+        "A growing business usually invests more than it depreciates", "int")
+    if len(cols) > 1:
+        add("growth_and_margin", "Years where revenue growth and EBITDA margin both rise (#)",
+            f"=SUMPRODUCT(--({rng('growth', cols[1], L)}>{rng('growth', F0, cols[-2])}),"
+            f"--({rng('ebitda_margin', cols[1], L)}>{rng('ebitda_margin', F0, cols[-2])}))", "{v}=0",
+            "Growth and margins rarely rise at the same time; check the drivers", "int")
+    add("shortfall", "Largest cash shortfall below minimum after the revolver ($m)",
+        f"=MAX({rng('shortfall')})", "{v}=0", "The plan needs more funding than the revolver provides", "usd")
+    if dcf:
+        p = dcf.get("names", {}).get("tv_share", "dcf_tv_share").rsplit("tv_share", 1)[0]
+        add("tv_share", "Terminal value share of enterprise value (%)", f"={p}tv_share", f"{{v}}<={tv_max}",
+            "Most of the value rests on the terminal assumptions; extend the forecast or cross-check", "pct")
+        dr, dn = dcf["rows"], dcf["sheet_name"]
+        add("g_vs_rf", "Terminal growth minus the risk-free rate (pp)", f"='{dn}'!B{dr['g']}-'{dn}'!B{dr['rf']}",
+            "{v}<=0", "Long-run growth above the risk-free rate implies outgrowing the economy forever (Damodaran)",
+            "pct")
+    ws.column_dimensions["A"].width = 70
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 70
+    return {"sheet": sheet, "status": out}

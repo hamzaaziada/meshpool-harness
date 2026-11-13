@@ -117,6 +117,8 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
   sp = S.spread(facts, years=3)    # standard IS/BS/CF, each cell with tag, accession, filing date; sp.gaps (left
       empty, never estimated), sp.checks (balance sheet balances, cash flow ties, net income ties); report both
   S.history_metrics(sp)            # growth, gross margin, SG&A %, DSO/DIO/DPO, capex %, D&A %, tax rate, payout
+  q = S.spread_quarters(facts, 8)  # fiscal quarters from 10-Q/10-K (Q4 = year less Q1-Q3; cash flow from YTD)
+  S.ltm(q, "revenue"); S.calendarize({{"2025-06-30": 100, "2026-06-30": 120}}, 2025)   # LTM; calendar-year peers
   h = S.write_spread(wb["Historicals"], 4, sp)       # tab "Historicals" before Inputs; sourced blue inputs, names
       h_<line>_<fy> (h_revenue_fy2025)
   sb = B.scenario_book(wb["Inputs"], 3)    # Assumption | Selected case | Base | Bull | Bear | Source | Evidence
@@ -146,9 +148,17 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       other_cl_open, revolver_open, term_debt_open, other_ncl_open, equity_open (override with names={{...}}).
       Adds the checks: balance sheet balances every year, closing cash equals balance sheet cash, net income ties,
       revolver and PP&E never negative.
+  SBC: names={{"sbc": "sbc_pct"}} in three_statement adds share-based compensation as an expense in EBITDA, adds it
+      back in operating cash flow and credits equity (not added back in unlevered FCF).
+  B.diluted_shares(ws, row, basic="basic_shares", price="share_price", options=[("opt_n", "opt_strike")],
+      rsus="rsus", converts=[("conv_shares", "conv_price")])     # treasury stock method; defines diluted_shares
+  B.alerts(wb, m, d)               # Alerts tab: growth fades, capex vs depreciation, growth and margin both rising,
+      cash shortfall, terminal value share, terminal growth vs risk-free; explain every REVIEW in your answer
   d = B.dcf_from_statements(wb["DCF"], 3, m)   # names risk_free, beta_unlevered, equity_risk_premium, cost_of_debt,
       debt_weight, terminal_growth, exit_multiple, mid_year, diluted_shares, wacc_step, g_step (exit_step adds a WACC x
-      exit multiple grid); dcf_* names as dcf_block
+      exit multiple grid); EV bridge items by name: minorities, preferred, leases, pensions, investments;
+      dcf_* names as dcf_block. A deck built after the model takes its football field, comps, precedents, DCF
+      bridge and sensitivities, scenarios and statement summary straight from the workbook.
   B.scenario_summary(wb["Outputs"], 3, dict(years=..., segments=..., opex=..., capex_growth=...))   # same args as
       three_statement: pinned Base/Bull/Bear case tabs + table + a live-vs-pinned check
   v = B.valuation_summary(wb["Valuation inputs"], 3,

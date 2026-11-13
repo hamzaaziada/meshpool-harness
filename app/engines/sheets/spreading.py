@@ -641,3 +641,168 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
             f"API ({API.format(cik=sp.cik)}).").font = Font(name=B.FONT, italic=True, color="5B6577")
     return {"rows": where, "cols": dict(zip(sp.years, cols)), "check_rows": check_rows, "next_row": r + 3,
             "name": nm}
+
+
+# ------------------------------------------------------------------------------------------------- quarters, LTM
+QUARTER_FORMS = ANNUAL_FORMS + ("10-Q", "10-Q/A")
+
+
+def _facts_by_end(facts: dict, tag: str, unit: str, kind: str, lo: int, hi: int) -> dict[str, dict]:
+    """end date -> latest-filed fact (durations lo..hi days long; instants when kind == 'instant')."""
+    node = facts.get("facts", {}).get("us-gaap", {}).get(tag)
+    out: dict[str, dict] = {}
+    if not node:
+        return out
+    for f in node.get("units", {}).get(unit, []):
+        if f.get("form") not in QUARTER_FORMS or "end" not in f or f.get("val") is None:
+            continue
+        if kind == "duration":
+            if "start" not in f or not lo <= _days(f["start"], f["end"]) <= hi:
+                continue
+        elif "start" in f:
+            continue
+        cur = out.get(f["end"])
+        if cur is None or (f.get("filed", ""), f.get("accn", "")) > (cur.get("filed", ""), cur.get("accn", "")):
+            out[f["end"]] = f
+    return out
+
+
+@dataclass
+class Quarters:
+    entity: str
+    cik: str
+    labels: list[str]                       # "Q1 FY2026", oldest first
+    ends: dict[str, str]
+    cells: dict[str, dict[str, Cell]]
+    gaps: list[dict] = field(default_factory=list)
+
+    def value(self, key: str, label: str) -> float | None:
+        return self.cells.get(key, {}).get(label, Cell(None)).value
+
+
+def spread_quarters(facts: dict, quarters: int = 8, keys: list[str] | None = None) -> Quarters:
+    """Quarterly IS/CF flows and quarter-end balances from 10-Q and 10-K filings. Fiscal quarters are labelled from
+    the fiscal year-end dates (XBRL's fy/fp fields describe the filing, not the period). A fourth quarter that is
+    not reported for three months on its own is derived as the full year less the first three quarters, and the
+    source says so. Cash flow lines are reported year-to-date in 10-Qs; quarters are the differences of YTD values."""
+    cik = _cik10(facts.get("cik", 0))
+    fy_ends = fiscal_year_ends(facts)
+    if not fy_ends:
+        raise ValueError("no annual facts: cannot place quarters in fiscal years")
+    keys = keys or [k for k in LINE if k not in ("cf_cash_end",)]
+
+    def fy_of(end: str) -> tuple[str, int] | None:
+        """(fiscal year label, quarter number) for a quarter end date."""
+        from datetime import timedelta
+        ends = list(fy_ends)
+        nxt = date.fromisoformat(ends[-1])
+        while nxt <= date.fromisoformat(end) + timedelta(days=200):
+            nxt = nxt + timedelta(days=364)
+            ends.append(nxt.isoformat())
+        for i, e in enumerate(ends):
+            if end <= e or _days(e, end) <= 7:
+                start = ends[i - 1] if i else None
+                if start is None:
+                    return None
+                q = max(1, min(4, round(_days(start, end) / 91.3)))
+                return f"FY{e[:4]}", q
+        return None
+    q_ends: set[str] = set()
+    for key in ("revenue", "net_income"):
+        for t in LINE[key]["tags"]:
+            q_ends |= set(_facts_by_end(facts, t, "USD", "duration", 80, 100))
+    q_ends |= set(fy_ends)
+    placed = {}
+    for e in sorted(q_ends):
+        lab = fy_of(e)
+        if lab:
+            placed[f"Q{lab[1]} {lab[0]}"] = e
+    labels = sorted(placed, key=lambda k: placed[k])[-quarters:]
+    ends = {k: placed[k] for k in labels}
+    cells: dict[str, dict[str, Cell]] = {}
+    gaps = []
+    for key in keys:
+        line = LINE[key]
+        cells[key] = {}
+        scale = 1.0 if line["unit"] == "USD/shares" else SCALE
+        for lab in labels:
+            e = ends[lab]
+            got = None
+            for tag in line["tags"]:
+                if line["kind"] == "instant":
+                    f = _facts_by_end(facts, tag, line["unit"], "instant", 0, 0).get(e)
+                    if f:
+                        got = Cell(line["sign"] * f["val"] / scale, tag, f.get("accn"), f.get("form"), f.get("filed"), e,
+                                   _filing_url(cik, f.get("accn", "")))
+                elif line["statement"] == "CF":                    # YTD in 10-Qs: difference of YTD values
+                    ytd = _facts_by_end(facts, tag, line["unit"], "duration", 80, 380)
+                    nodes = {k: v for k, v in ytd.items()}
+                    f = nodes.get(e)
+                    if f:
+                        span_d = _days(f["start"], f["end"])
+                        if span_d <= 100:
+                            v = f["val"]
+                            how = None
+                        else:                                       # find the YTD ending one quarter earlier
+                            prev = [x for x in nodes.values() if x["start"] == f["start"] and x["end"] < e
+                                    and 60 <= _days(x["end"], e) <= 100]
+                            if not prev:
+                                continue
+                            v = f["val"] - prev[0]["val"]
+                            how = f"year-to-date to {e} less year-to-date to {prev[0]['end']}"
+                        got = Cell(line["sign"] * v / scale, tag, f.get("accn"), f.get("form"), f.get("filed"), e,
+                                   _filing_url(cik, f.get("accn", "")), derived=how and f"{how} (us-gaap:{tag}, "
+                                   f"{f.get('form')} {f.get('accn')})")
+                else:
+                    q = _facts_by_end(facts, tag, line["unit"], "duration", 80, 100).get(e)
+                    if q:
+                        got = Cell(line["sign"] * q["val"] / scale, tag, q.get("accn"), q.get("form"), q.get("filed"),
+                                   e, _filing_url(cik, q.get("accn", "")))
+                    elif lab.startswith("Q4"):                      # full year less the first three quarters
+                        fy = _facts_by_end(facts, tag, line["unit"], "duration", 340, 390).get(e)
+                        prior = [x for x in labels if x.split()[1] == lab.split()[1] and x != lab]
+                        qs = [_facts_by_end(facts, tag, line["unit"], "duration", 80, 100).get(ends[x]) for x in prior]
+                        if fy and len(qs) == 3 and all(qs):
+                            v = fy["val"] - sum(x["val"] for x in qs)
+                            got = Cell(line["sign"] * v / scale, tag, fy.get("accn"), fy.get("form"), fy.get("filed"),
+                                       e, _filing_url(cik, fy.get("accn", "")),
+                                       derived=f"fiscal year less Q1-Q3 (us-gaap:{tag}, 10-K {fy.get('accn')})")
+                if got:
+                    break
+            if got is None:
+                cells[key][lab] = Cell(None, end=e)
+                gaps.append({"line": key, "label": line["label"], "year": lab, "tags_tried": line["tags"],
+                             "kind": "not reported" if key in OPTIONAL_ZERO else "missing"})
+            else:
+                cells[key][lab] = got
+    return Quarters(facts.get("entityName", ""), cik, labels, ends, cells, gaps)
+
+
+def ltm(q: Quarters, key: str) -> tuple[float | None, str]:
+    """Last twelve months: the sum of the last four quarters for a flow, the latest value for a balance. Returns the
+    value and how it was built; None when a quarter is missing (never guessed)."""
+    line = LINE[key]
+    labs = q.labels[-4:] if line["kind"] == "duration" else q.labels[-1:]
+    vals = [q.value(key, lab) for lab in labs]
+    if len(labs) < (4 if line["kind"] == "duration" else 1) or any(v is None for v in vals):
+        return None, f"LTM not available: {key} missing in {[lb for lb, v in zip(labs, vals) if v is None]}"
+    how = (f"sum of {', '.join(labs)}" if line["kind"] == "duration" else f"as at {q.ends[labs[0]]}")
+    return sum(vals) if line["kind"] == "duration" else vals[0], how
+
+
+def calendarize(by_fy_end: dict[str, float], year: int) -> tuple[float | None, str]:
+    """Calendar-year value from fiscal-year values: CY = (m/12) x FY ending in the year + ((12 - m)/12) x FY ending
+    the next year, m = the fiscal year-end month. by_fy_end: {"2026-06-30": value, ...}."""
+    ends = sorted(by_fy_end)
+    this = next((e for e in ends if e[:4] == str(year)), None)
+    if this is None:
+        return None, f"no fiscal year ends in {year}"
+    m = int(this[5:7]) if int(this[8:10]) >= 15 else int(this[5:7]) - 1      # a 52/53-week year ending 2 Oct is Sept
+    m = max(1, min(12, m))
+    if m == 12:
+        return by_fy_end[this], "fiscal year is the calendar year"
+    nxt = next((e for e in ends if e > this), None)
+    if nxt is None:
+        return None, f"needs the fiscal year after {this}"
+    return (m / 12) * by_fy_end[this] + ((12 - m) / 12) * by_fy_end[nxt], \
+        f"{m}/12 x FY ending {this} + {12 - m}/12 x FY ending {nxt}"
