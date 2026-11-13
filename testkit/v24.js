@@ -5,6 +5,8 @@ const {chromium} = require("playwright");
   await p.addInitScript(() => { try { localStorage.clear(); localStorage.setItem("mp_permsAsked", "1"); } catch (e) {} });
   await p.goto("http://127.0.0.1:8799/"); await p.waitForSelector(".hero");
   // composer while busy: add-on, then stop
+  // a folder only shows in the mode it has threads in, so switch if needed
+  await p.evaluate(() => { if (!document.querySelector(".proj[data-p='/tmp/proj1']")) setAppMode(S.appMode === "code" ? "cowork" : "code"); }); await p.waitForTimeout(400);
   await (await p.$(".proj[data-p='/tmp/proj1'] .proj-h")).hover(); await p.click(".proj[data-p='/tmp/proj1'] [data-newin]");
   await p.fill("#input", "long task please"); await p.keyboard.press("Enter");
   await p.waitForFunction(() => S.cur && S.cur.view && S.cur.view.state === "working", null, {timeout: 30000}); await p.waitForTimeout(2500);
