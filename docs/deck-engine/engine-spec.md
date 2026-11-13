@@ -156,7 +156,7 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | P17 | not editable | group depth ≤1; no forbidden locks |
 | P18 | inaccessible | alt text on pictures/charts (a file name doesn't count); reading order |
 | P19 | inconsistent fonts and placement | title box, title size and face, body face, content margin, source line, chart label size identical across content slides |
-| P20 | big empty areas ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`); chart plot areas count as content. Calibrated on references: McKinsey content pages median 6%, p90 12%; Bain 13–15% |
+| P20 | big or disguised empty space ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`; chart plot areas count as content; McKinsey content pages median 6%, p90 12%). From the file: table rows ≤0.25in taller than their text (`max_row_air_in`); bars ≤0.6in and columns ≤1.2in thick (`max_bar_in`, `max_column_in`). Before render: fill targets per archetype (`build.fill_checks`) |
 
 **Excel (validate_xlsx.py)**: recalculates headless in LibreOffice first.
 

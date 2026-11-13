@@ -279,6 +279,61 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
         _dead_space(str(pdf), m, R, failures, stats)
 
 
+def _proportions(path: str, R: dict, failures: list):
+    """P20, from the file: thin content must not be disguised. Table rows are not stretched far past their text, and
+    bars and columns are not slabs."""
+    from pptx import Presentation
+    from pptx.util import Emu
+    from .common import font_file, wrap_lines
+    Wd = R["whitespace"]
+    f, _ = font_file("Arial", False, False, (("Arial", "Liberation Sans"),))
+    prs = Presentation(path)
+    for n, sl in enumerate(prs.slides, 1):
+        for sh in sl.shapes:
+            if sh.has_table:
+                tbl = sh.table
+                cw = [Emu(c.width).inches for c in tbl.columns]
+                airy = 0
+                for r_i, row in enumerate(tbl.rows):
+                    if r_i == 0:
+                        continue
+                    need = 0.0
+                    for ci, cell in enumerate(row.cells):
+                        txt = cell.text_frame.text
+                        sz = next((r.font.size.pt for p in cell.text_frame.paragraphs for r in p.runs if r.font.size), 12)
+                        lines = wrap_lines(txt, max(0.3, cw[ci] - 0.12), sz, f, 0.97) if txt.strip() else 1
+                        need = max(need, lines * sz * 1.15 / 72 + 0.045)
+                    if Emu(row.height).inches > need + Wd["max_row_air_in"]:
+                        airy += 1
+                if airy:
+                    failures.append(F("P20", "stretched_rows", f"Slide {n}, {sh.name}: {airy} table rows are stretched "
+                                      f"more than {Wd['max_row_air_in']}in past their text. A short table needs a "
+                                      "different composition (beside its argument), not taller rows.", slide=n,
+                                      shape=sh.name, fix_scope="renderer"))
+            if sh.has_chart:
+                ch = sh.chart
+                try:
+                    ncat = len(ch.plots[0].categories)
+                    ctype = str(ch.chart_type)
+                except Exception:
+                    continue
+                if not ncat:
+                    continue
+                horiz = "BAR" in ctype
+                if not (horiz or "COLUMN" in ctype):
+                    continue
+                gap = ch.plots[0].gap_width if ch.plots[0].gap_width is not None else 150
+                nser = len(list(ch.plots[0].series)) if "CLUSTERED" in ctype else 1
+                dim = (Emu(sh.height).inches if horiz else Emu(sh.width).inches) * 0.85
+                thick = dim / ncat / (1 + gap / 100) / max(1, nser)
+                limit = Wd["max_bar_in"] if horiz else Wd["max_column_in"]
+                if thick > limit:
+                    failures.append(F("P20", "oversized_bars", f"Slide {n}, {sh.name}: {'bars' if horiz else 'columns'} "
+                                      f"about {thick:.1f}in thick (limit {limit}in) read as slabs. Size the chart to its "
+                                      "data.", slide=n, shape=sh.name, fix_scope="renderer", measured=round(thick, 2),
+                                      limit=limit))
+
+
 def _dead_space(pdf_path: str, m: dict, R: dict, failures: list, stats: dict):
     """P20: no large empty block in a content slide's body (measured on the render)."""
     from .whitespace import page_empty, where
@@ -359,6 +414,11 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         _render_check(path, m, R, failures, stats)
     else:
         failures.append(F("P1", "render", "Render check skipped (--no-render).", fix_scope="renderer", status="not_run"))
+    try:
+        _proportions(path, R, failures)
+    except Exception as e:  # never let a proportion check break validation
+        failures.append(F("P20", "proportions", f"Proportion check could not run: {e}", status="not_run",
+                          severity="info", fix_scope="renderer"))
 
     for s in slides:
         n = s["n"]
