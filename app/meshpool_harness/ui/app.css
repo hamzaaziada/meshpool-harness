@@ -98,8 +98,8 @@ code,pre,kbd{font-family:var(--mono)}
 .empty-side{color:var(--ink-3);font-size:12.5px;padding:8px}
 .updbar{display:flex;align-items:center;gap:8px;margin:6px 8px 0;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--hover);color:var(--ink);font-weight:500;font-size:12.5px;text-align:left;cursor:pointer}
 .updbar[hidden]{display:none}
-.updbar .dot{width:7px;height:7px;border-radius:50%;background:var(--accent,#2563eb);flex:none}
-.updbar .go{margin-left:auto;color:var(--accent,#2563eb);font-weight:600}
+.updbar .dot{width:7px;height:7px;border-radius:50%;background:var(--pool);flex:none}
+.updbar .go{margin-left:auto;color:var(--pool);font-weight:600}
 .updbox{margin:14px 0 4px;padding:12px;border:1px solid var(--line);border-radius:var(--r-s)}
 .side-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px;align-items:center}
 .side-foot button{flex:1;display:flex;align-items:center;gap:8px;border:0;background:none;border-radius:var(--r-s);padding:7px 8px;color:var(--ink-2);font-weight:500}
@@ -433,7 +433,7 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .scope{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .scopeopt{display:flex;flex-direction:column;gap:3px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;cursor:pointer}
 .scopeopt b{font-size:13.5px}.scopeopt small{font-size:12px;color:var(--ink-3);line-height:1.35}
-.scopeopt:hover{border-color:var(--ink-3)}.scopeopt[aria-checked="true"]{border-color:var(--accent,#2563eb);box-shadow:0 0 0 1px var(--accent,#2563eb) inset}
+.scopeopt:hover{border-color:var(--ink-3)}.scopeopt[aria-checked="true"]{border-color:var(--pool);box-shadow:0 0 0 1px var(--pool) inset}
 #onbPerm{max-width:640px}
 @media (max-width:640px){.scope{grid-template-columns:1fr}}
 
@@ -486,3 +486,10 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 ::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;border:3px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-thumb:hover{background-color:var(--ink-3)}
 ::-webkit-scrollbar-corner{background:transparent}
+
+.onb-steps{display:flex;align-items:center;gap:6px;margin:-14px 0 18px}
+.onb-steps span{width:22px;height:4px;border-radius:4px;background:var(--line);transition:background-color .2s ease}
+.onb-steps span.on{background:var(--pool)}
+.onb-steps small{margin-left:6px;color:var(--ink-3);font-size:12px}
+.field>.keyrow{display:flex;gap:6px;align-items:center}
+.field>.keyrow input{flex:1;width:auto}

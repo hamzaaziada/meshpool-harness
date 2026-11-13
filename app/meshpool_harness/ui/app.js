@@ -1424,14 +1424,15 @@ async function renderSection(sec) {
 }
 
 /* ================================== first run ================================== */
+const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
 function showOnboarding() {
   if ($("#onb")) return;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    <h1>Welcome to Meshpool</h1><p>Paste your Meshpool API key to start. It is saved only on this computer.</p><p class="credit">Made by Meshpool · meshpool.ai</p>
+    ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Paste your Meshpool API key to get started. It stays on this computer.</p><p class="credit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a></p>
     <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
-    <details id="oAdv"><summary class="linkbtn" style="display:inline">Use a different endpoint</summary><label class="field" style="max-width:none;margin-top:10px"><span>Base URL</span><input id="oBase" spellcheck="false" placeholder="https://llm.meshpool.ai/v1"></label></details>
+    <details id="oAdv"><summary class="linkbtn" style="display:inline">Use another AI provider</summary><label class="field" style="max-width:none;margin-top:10px"><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://llm.meshpool.ai/v1"></label></details>
     <div class="res" id="oRes"></div>
     <div class="onb-go"><button class="bigbtn" id="oGo">Continue</button></div></div>
     <div class="onb-card" id="onbPerm" hidden></div>`;
@@ -1441,13 +1442,13 @@ function showOnboarding() {
   $("#oKey").onkeydown = e => { if (e.key === "Enter") $("#oGo").click(); };
   $("#oGo").onclick = async () => {
     const key = $("#oKey").value.trim(); const res = RES("oRes");
-    if (!key) { res.className = "res bad"; res.textContent = "Paste your API key first."; return; }
-    $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key...";
+    if (!key) { res.className = "res bad"; res.textContent = "Paste your API key first."; $("#oKey").focus(); return; }
+    $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
       const values = {MESHPOOL_API_KEY: key}; if ($("#oBase").value.trim()) values.MESHPOOL_BASE_URL = $("#oBase").value.trim();
       await post("/api/settings", {values});
       const r = await post("/api/test");
-      if (!r.ok) { res.className = "res bad"; res.textContent = "That key did not work: " + r.detail; $("#oGo").disabled = false; return; }
+      if (!r.ok) { res.className = "res bad"; res.textContent = "That key didn't work. Check that you copied all of it. (" + r.detail + ")"; $("#oGo").disabled = false; return; }
       await loadSettings(); await loadModels(true); renderBar();
       $("#onbKey").remove(); permStep(o);
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
@@ -1467,7 +1468,7 @@ async function importPanel(box, onDone) {
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div><div class="res" id="impRes"></div>`;
   $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
   $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
-  $("#impGo", box).onclick = async () => {
+  $("#impGo", box).onclick = box._import = async () => {
     const keys = $$("[data-key]", box).filter(x => x.checked).map(x => x.dataset.key);
     if (!keys.length) { $("#impRes", box).className = "res"; $("#impRes", box).textContent = "Nothing selected."; return; }
     $("#impGo", box).disabled = true;
@@ -1476,7 +1477,7 @@ async function importPanel(box, onDone) {
       await loadSkills(); S.connCache = null;
       $("#impRes", box).className = "res " + (r.errors.length ? "bad" : "ok");
       $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"} and ${r.mcp.length} MCP server${r.mcp.length === 1 ? "" : "s"}. Every harness can use them in new threads.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
-      onDone?.(r);
+      box.dataset.done = "1"; onDone?.(r);
     } catch (e) { $("#impRes", box).className = "res bad"; $("#impRes", box).textContent = e.message; }
     $("#impGo", box).disabled = false;
   };
@@ -1492,15 +1493,14 @@ function permStep(host) {
   if (!card) { card = document.createElement("div"); card.className = "onb-card"; card.id = "onbPerm"; o.appendChild(card); }
   card.hidden = false;
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    <h1>Set Meshpool up once</h1><p>Allow these now so tasks do not stop to ask later. You can change any of them in Settings, Permissions.</p>
-    <h3 class="onb-h">Where Meshpool can work</h3>
+    ${onbSteps(2)}<h1>Choose where Meshpool can work</h1><p>Meshpool only works in the places you allow. You can change this any time in Settings → Permissions.</p>
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now. Safest.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
       <button class="scopeopt" data-scope="later" role="radio"><b>Decide per task</b><small>Pick a folder when you start each task.</small></button>
     </div><div class="res" id="oScope"></div>
-    <h3 class="onb-h">What Meshpool can do</h3>
-    <ul class="rows2" id="oPerms"></ul>
+    <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
+    <ul class="rows2" id="oPerms"></ul></div>
     <div class="onb-go"><button class="bigbtn" id="oAll">Allow all</button><button class="btn" id="oDone">Continue</button></div>`;
   const draw = async body => {
     try {
@@ -1508,6 +1508,9 @@ function permStep(host) {
       const rows = r.rows.filter(x => x.id !== "automation");
       $("#oPerms", card).innerHTML = rows.map(x => `<li><span class="tg"><b>${esc(x.name)}</b><small>${esc(x.why)}</small></span>${x.ok ? `<span class="badge added">Allowed</span>` : mac || x.id === "notifications" ? `<button class="btn" data-p="${esc(x.id)}">${x.id === "disk" ? "Open settings" : "Allow"}</button>` : `<span class="badge">Not found</span>`}</li>`).join("") || `<li class="pnote">${esc(r.note)}</li>`;
       $$("[data-p]", card).forEach(x => x.onclick = () => draw({id: x.dataset.p}));
+      const needs = rows.some(x => !x.ok && (mac || x.id === "notifications"));
+      $("#oAll", card).hidden = !needs; $("#oPermH", card).hidden = !rows.length;
+      $("#oDone", card).className = needs ? "btn" : "bigbtn";
     } catch (e) { /* the step still works without the list */ }
   };
   $$("[data-scope]", card).forEach(x => x.onclick = async () => {
@@ -1531,7 +1534,7 @@ function setupStep(o, prev) {
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
   const subs = S.harnesses.filter(h => h.subscription);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    <h1>Bring your setup</h1><p>Use what you already have in Claude, ChatGPT, Codex or Cursor. Everything here is optional, and you can do it later in Settings.</p>
+    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
     ${subs.length ? `<h3 class="onb-h">Use your subscriptions</h3><ul class="rows2" id="oSubs">${subs.map(h => `<li><span class="tg"><b>${esc(h.name)}</b><small>${esc(h.description)}</small></span>${h.signed_in ? `<span class="badge added">Signed in</span>` : `<button class="btn" data-login="${esc(h.id)}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="oSubRes"></div>` : ""}
     <div id="oImport"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
@@ -1542,7 +1545,11 @@ function setupStep(o, prev) {
     setTimeout(tick, 3000);
   });
   importPanel($("#oImport", card));
-  $("#oFinish", card).onclick = () => { o.remove(); renderBar(); renderHero(); };
+  $("#oFinish", card).onclick = async () => {        // ticked items are imported on the way out; no extra click
+    const box = $("#oImport", card);
+    if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
+    o.remove(); renderBar(); renderHero();
+  };
 }
 
 /* ================================== updates ================================== */
