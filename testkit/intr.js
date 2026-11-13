@@ -4,7 +4,9 @@ const {chromium} = require("playwright");
   const errs = []; p.on("pageerror", e => errs.push(e.message));
   await p.addInitScript(() => { try { localStorage.setItem("mp_permsAsked", "1"); } catch (e) {} });
   await p.goto("http://127.0.0.1:8799/"); await p.waitForSelector(".hero");
+  const listed = (await p.evaluate(() => api("/api/harnesses"))).harnesses.map(x => x.id);
   for (const h of ["meshpool-code", "pi", "hermes"]) {
+    if (!listed.includes(h)) { console.log(h, "SKIP: not installed here"); continue; }   // e.g. no Pi in a cloud container
     const id = await p.evaluate(async h => (await post("/api/agent", {workdir: "/tmp/proj1", harness: h, mode: "auto", kind: "code"})).id, h);
     await p.evaluate(id => openThread(id, true), id); await p.waitForTimeout(3000);
     await p.fill("#input", "long task please"); await p.keyboard.press("Enter");

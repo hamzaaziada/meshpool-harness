@@ -178,6 +178,9 @@ for hid, kind in (("meshpool-code", "code"), ("meshpool-work", "cowork"), ("pi",
 # documents through agents
 for hid in ("meshpool-code", "pi"):
     v = call("/api/agent", {"workdir": P, "harness": hid, "kind": "code", "mode": "auto"})
+    if not v.get("id"):                    # e.g. Pi not installed: one failed check, not a crash of the whole run
+        check(f"[{hid}] reads a PDF through the document reader", False, v)
+        continue
     time.sleep(2)
     call(f"/api/agent/{v['id']}/send", {"text": "read the pdf"})
     v = wait_idle(v["id"])

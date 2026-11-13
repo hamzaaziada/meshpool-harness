@@ -7,6 +7,12 @@ const {chromium} = require("playwright");
   // cowork thread with the default cowork harness
   await (await p.$(".proj[data-p='/tmp/proj2'] .proj-h")).hover(); await p.click(".proj[data-p='/tmp/proj2'] [data-newin]");
   await p.fill("#input", "Write a word doc report"); await p.keyboard.press("Enter");
+  // the default cowork harness may ask before it writes (Meshpool Work in Supervised mode): click Allow like a user
+  for (let i = 0; i < 240 && !(await p.evaluate(() => S.cur && S.cur.view && S.cur.view.state === "idle" && (S.cur.log || []).some(e => e.type === "turn_end"))); i++) {
+    await p.evaluate(async () => { const ap = (S.cur?.log || []).filter(e => e.type === "approval"); const done = new Set((S.cur?.log || []).filter(e => e.type === "approval_done").map(e => e.id));
+      for (const e of ap) if (!done.has(e.id)) await post(`/api/agent/${S.cur.id}/answer`, {id: e.id, decision: "yes"}); }).catch(() => {});
+    await p.waitForTimeout(500);
+  }
   await p.waitForFunction(() => S.cur && S.cur.view && S.cur.view.state === "idle" && (S.cur.log || []).some(e => e.type === "turn_end"), null, {timeout: 120000}); await p.waitForTimeout(1500); await p.screenshot({path: out + "/m2-cowork-done.png"});
   // code mode
   await p.click(".modesw [data-mode=code]"); await p.waitForTimeout(500); await p.screenshot({path: out + "/m3-code-home.png"});
