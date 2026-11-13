@@ -108,8 +108,11 @@ def nice_title(text: str) -> str:
     t = re.sub(r"https?://\S+", "", t)
     t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
     t = re.split(r"(?<=[.!?])\s", t)[0].strip(" .!?:;,-")
+    full = t
     for _ in range(3):
         t = _FILLER.sub("", t).strip()
+    if len(t.split()) < 2:                     # "hi there" stays "Hi there", not "There"
+        t = full
     t = re.sub(r"\s+", " ", t)
     if not t:
         return "New thread"
@@ -283,7 +286,6 @@ class Session:
             raise ValueError("Type a message first.")
         self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
-            self.emit({"type": "status", "text": "Interrupted. Working on your new message instead."})
             self._interrupting = True
             with self.lock:                          # messages waiting in the queue go with the new one, not lost
                 queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
@@ -434,11 +436,11 @@ class Session:
             return f"{n} file{'' if n == 1 else 's'} {word}"
         parts = [s for s in (_n("restored", "restored") if r.get("restored") else "",
                              _n("deleted", "removed") if r.get("deleted") else "") if s]
-        msg = f"Undid turn {turn} and everything after it: " + (", ".join(parts) if parts else
-                                                                 "the agent changed no files in those turns")
+        msg = "Undone. " + ("Files are back to how they were: " + ", ".join(parts) if parts else
+                            "No files had changed")
         if r.get("kept"):
             names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
-            msg += f". Left as they are, because they changed after the agent: {names}"
+            msg += f". Kept as they are, because you changed them afterwards: {names}"
         self.emit({"type": "status", "text": msg + "."})
         return r
 

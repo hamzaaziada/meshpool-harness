@@ -13,6 +13,19 @@ function ago(t) {
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
 // Paths as people read them: ~/Documents/report instead of /Users/name/Documents/report.
+// Paths inside the project become buttons that open the file in its app.
+function linkFiles(html) {
+  const root = String(curRoot() || "").replace(/[\\/]+$/, ""); if (!root) return html;
+  const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|xlsx|pptx|pdf|csv|md|html|txt|png|jpe?g|py|js|ts|json))", "g");
+  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Open ${rel}">${ICON.files}${rel}</button>`);
+}
+function connMsg(d) {
+  d = String(d || "");
+  if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
+  if (/HTTP 0|timed out|connection|refused|resolve|getaddrinfo/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
+  if (/404/.test(d)) return "That address answered, but it isn't a model endpoint. Check the base URL (it usually ends in /v1).";
+  return "The connection test didn't work: " + d.slice(0, 160);
+}
 function shortPath(p) {
   p = String(p || ""); const h = S.settings?.user_home;
   if (h && (p === h || p.startsWith(h + "/") || p.startsWith(h + "\\"))) p = "~" + p.slice(h.length);
@@ -130,11 +143,11 @@ function shell() {
           <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
         </div>
         <div class="modesw" role="tablist" aria-label="Mode">
-          <button role="tab" data-mode="cowork" aria-selected="${S.appMode === "cowork"}">${ICON.chat}<span>Cowork</span></button>
+          <button role="tab" data-mode="cowork" aria-selected="${S.appMode === "cowork"}">${ICON.chat}<span>Work</span></button>
           <button role="tab" data-mode="code" aria-selected="${S.appMode === "code"}">${ICON.term}<span>Code</span></button>
         </div>
         <button class="newbtn" id="newThread">${ICON.plus}<span>New thread</span><kbd>${MOD}N</kbd></button>
-        <label class="search">${ICON.search}<input id="q" placeholder="Search threads" aria-label="Search threads"><span class="kbd">${MOD}K</span></label>
+        <label class="search">${ICON.search}<input id="q" placeholder="Search threads" aria-label="Search threads"><span class="kbd">${MOD}K</span><button class="qx" id="qx" aria-label="Clear search" hidden>${ICON.x}</button></label>
       </div>
       <div class="side-list" id="sideList"></div>
       <button class="updbar" id="updBar" hidden></button>
@@ -163,7 +176,10 @@ function shell() {
   $("#openSettings").onclick = () => openSettings();
   $("#updBar").onclick = () => openSettings("about");
   $("#hideSide").onclick = toggleSide;
-  $("#q").oninput = () => { clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
+  const clearQ = () => { $("#q").value = ""; $("#qx").hidden = true; renderSide(); };
+  $("#q").oninput = () => { $("#qx").hidden = !$("#q").value; clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
+  $("#q").onkeydown = e => { if (e.key === "Escape" && $("#q").value) { e.stopPropagation(); e.preventDefault(); clearQ(); } };
+  $("#qx").onclick = () => { clearQ(); $("#q").focus(); };
   setupComposer();
   setupPanelResize();
   document.addEventListener("keydown", globalKeys);
@@ -231,7 +247,11 @@ async function loadModels(refresh) {
   if (!S.draft.model) S.draft.model = S.models.default;
 }
 async function loadProjects() { const r = await api("/api/projects"); S.projects = r.projects; S.defaultProject = r.default; }
-async function loadThreads() { S.threads = (await api("/api/agent")).sessions; renderSide(); }
+async function loadThreads() {
+  S.threads = (await api("/api/agent")).sessions; renderSide();
+  const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
+  if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
+}
 async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = r.harnesses; S.defaults = r.defaults; S.hInfo = r; }
 async function loadSkills() { try { S.skills = (await api("/api/skills")).skills; } catch (e) { S.skills = []; } }
 const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "Meshpool Code", models: "meshpool"};
@@ -249,7 +269,7 @@ function renderSide() {
   for (const p of S.projects) byProj.set(p.path, []);
   for (const t of threads) { if (t.pinned) continue; if (!byProj.has(t.workdir)) byProj.set(t.workdir, []); byProj.get(t.workdir).push(t); }
   let html = "";
-  if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(thHTML).join("")}</ul>`;
+  if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(t => thHTML(t, true)).join("")}</ul>`;
   html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
   if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
   // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
@@ -287,16 +307,18 @@ function renderSide() {
   $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
   $$(".proj-h", el).forEach(h => h.addEventListener("click", e => {
     if (e.target.closest("button")) return;
-    const p = h.parentElement.dataset.p; S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p);
-    store("closed", [...S.closedProjects]); renderSide();
+    const p = h.parentElement.dataset.p;
+    if (e.target.closest(".chev")) { S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p); store("closed", [...S.closedProjects]); renderSide(); return; }
+    S.closedProjects.delete(p); store("closed", [...S.closedProjects]);
+    S.draft.project = p; store("project", p); newThread(); toast(`New thread in ${projName(p)}`);
   }));
   $$("[data-newin]", el).forEach(b => b.onclick = () => { S.draft.project = b.dataset.newin; store("project", S.draft.project); newThread(); });
   $$("[data-pmenu]", el).forEach(b => b.onclick = e => projMenu(e, b.dataset.pmenu));
   bindThreads(el);
 }
-function thHTML(t) {
+function thHTML(t, withFolder) {
   const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : "";
-  return `<li class="th ${S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" title="${esc(t.title)}"><span class="dot ${st}"></span><span class="tt">${esc(t.title)}</span><span class="tm">${ago(t.updated)}</span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Thread options">${ICON.more}</button></li>`;
+  return `<li class="th ${S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" title="${esc(t.title)}"><span class="dot ${st}"></span><span class="tt">${esc(t.title)}${withFolder ? `<small class="tf">${esc(projName(t.workdir))}</small>` : ""}</span><span class="tm">${ago(t.updated)}</span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Thread options">${ICON.more}</button></li>`;
 }
 function bindThreads(el) {
   $$(".th", el).forEach(li => li.addEventListener("click", e => { if (e.target.closest("[data-tmenu]")) return; openThread(li.dataset.id); }));
@@ -361,9 +383,13 @@ async function pickProject() {
   try {
     let r = await post("/api/projects", {action: "pick"});
     if (r.no_picker) {                 // no folder dialog on this computer: type or paste the path instead
-      const p = await ask({title: "Add a folder", text: "Type or paste the full path of the folder.", value: "", ok: "Add folder"});
-      if (!p) return;
-      r = await post("/api/projects", {action: "add", path: p.trim()});   // a wrong path shows "Folder not found"
+      let p = "", err = "";
+      for (;;) {
+        p = await ask({title: "Add a folder", text: err || "Type or paste the full path of the folder.", value: p, ok: "Add folder"});
+        if (!p) return;
+        try { r = await post("/api/projects", {action: "add", path: p.trim()}); break; }
+        catch (e) { err = e.message + " Check the path and try again."; }
+      }
     }
     S.projects = r.projects;
     if (r.picked) { S.draft.project = r.picked; store("project", r.picked); S.closedProjects.delete(r.picked); newThread(); }
@@ -458,6 +484,7 @@ function cfg() { // the settings that apply to the next message: the open thread
 }
 function renderBar() {
   const c = cfg(); const h = harness(c.harness);
+  $("#app").classList.toggle("planning", !!c.plan);
   const modelLabel = h.models === "meshpool" ? (c.model || "Model") : (c.model || "Harness default");
   $("#cbar").innerHTML = `
     <button class="pill" id="hPill" title="Harness: the agent that does the work">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
@@ -466,7 +493,7 @@ function renderBar() {
     <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
     <button class="pill" id="attBtn" title="Attach images or files">${ICON.clip}</button>
     <span class="sp"></span>
-    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spin"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current work and do this instead (${MOD}Enter)" ${S.stopping ? "disabled" : ""}>Interrupt</button>` : ""}
+    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spin"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current work and do this instead (${MOD}Enter)" ${S.stopping ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
   $("#hPill").onclick = e => harnessPop(e.currentTarget);
   $("#mPill").onclick = e => modelPop(e.currentTarget);
@@ -477,11 +504,11 @@ function renderBar() {
   $("#stopBtn")?.addEventListener("click", stopNow);
   $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
   const root = curRoot();
-  $("#hintline").innerHTML = c.busy ? `Enter adds to this task · ${MOD}Enter does it now instead · Esc stops`
-    : root ? `Working in <b>${esc(projName(root))}</b>${S.cur ? "" : ` · <button class="linkbtn" id="chgProj" style="font-size:11.5px;padding:0">change folder</button>`}` : "";
+  $("#hintline").innerHTML = c.busy ? `Enter adds to the task · Esc stops`
+    : root ? `Working in <b>${esc(projName(root))}</b>` : "";
   $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
   const inp = $("#input");
-  inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis. / for commands, $ for skills" : "Ask Meshpool to build, fix or explain something. / for commands, $ for skills";
+  inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
 }
 async function setPlan(on) {
   if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/plan`, {on, since: 1e9})); } catch (e) { return toast(e.message); } }
@@ -545,7 +572,7 @@ async function sendNow(interrupt) {
     if (interrupt) { S.stopping = true; renderBar(); }
     const r = await post(`/api/agent/${S.cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
-    if (busy && !interrupt) toast(r.sent?.queued ? `Queued. ${harness(cfg().harness).name} gets it when this step finishes.` : "Added to this task");
+    if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
     S.cur.view.state = "working"; renderBar();
     clearTimeout(S.cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) { inp.value = text; toast(e.message, 4000); }
@@ -711,7 +738,7 @@ function renderHero() {
     ["Build a revenue model in Excel", "Build a 3-year revenue model for a SaaS company with 3 pricing tiers, as an Excel file with formulas."],
     ["Make a short PowerPoint deck", "Make a 6-slide PowerPoint deck on why engineering teams should track AI spend per team."],
     ["Read a scanned PDF", "Read the scanned PDF in this folder and turn it into a clean Word document with the same headings and tables."],
-    ["Review a Power BI file", "$power-bi-review Review the Power BI file in this folder."],
+    ["Research a question", "Research this and give me a short answer with sources: "],
   ] : [
     ["Explain this codebase", "Give me a tour of this codebase: what it does, how it is structured, and where to start."],
     ["Find and fix a bug", "Run the tests, find what fails, and fix it."],
@@ -722,7 +749,7 @@ function renderHero() {
   ];
   $("#col").innerHTML = `<div class="hero">
     <h1>${cw ? "What should we get done?" : "What are we building?"}</h1>
-    <p class="sub">${cw ? `${esc(h.name)} works in <b>${esc(projName(curRoot()))}</b>: research, documents, spreadsheets, decks, the browser and your desktop apps.` : `${esc(h.name)} reads, edits and runs code in <b>${esc(projName(curRoot()))}</b>.`} <button class="linkbtn" id="heroProj">Change folder</button></p>
+    <p class="sub">${cw ? "Research, documents, spreadsheets, decks and data, done for you in" : "Reads, edits and runs your code in"} <button class="linkbtn" id="heroProj" title="Change folder">${esc(projName(curRoot()))}</button>.</p>
     <div class="starters">${starters.map(([a, b]) => `<button data-s="${esc(b)}">${esc(a)}</button>`).join("")}</div></div>`;
   $("#heroProj").onclick = e => projectPop(e.currentTarget);
   $$(".starters button").forEach(b => b.onclick = () => { const inp = $("#input"); inp.value = b.dataset.s; inp.focus(); inp.dispatchEvent(new Event("input")); });
@@ -802,6 +829,16 @@ function diffLines(d) { return String(d || "").split("\n").map(l => { const c = 
 
 /* ---------- events ---------- */
 const TOOL_ICON = n => /bash|run|exec|command|terminal/.test(n) ? ICON.run : /edit|write|patch/.test(n) ? ICON.edit : /read|grep|glob|search|fetch|snapshot|list/.test(n) ? ICON.read : /skill/.test(n) ? ICON.skill : ICON.tool;
+const TOOL_RUN = {bash: "Running", bash_many: "Running", read_file: "Reading", write_file: "Writing", edit: "Editing", grep: "Searching", glob: "Listing", fetch_url: "Reading a page", web_search: "Searching the web", web_research: "Researching", mcp__meshpool_web__web_search: "Searching the web", mcp__meshpool_web__web_fetch: "Reading a page", mcp__meshpool_web__web_research: "Researching", todo_write: "Updating the plan", use_skill: "Loading a skill", office_task: "Working on the file", make_document: "Making a Word document", make_pdf: "Making a PDF", make_spreadsheet: "Building a spreadsheet", make_deck: "Making a deck", analyze_data: "Analysing data", convert_document: "Converting", read_document: "Reading a document"};
+const TOOL_BASE = {bash: "Run", bash_many: "Run", write_file: "Write", edit: "Edit", make_document: "Make a Word document", make_pdf: "Make a PDF", make_spreadsheet: "Build a spreadsheet", make_deck: "Make a deck"};
+const TOOL_DONE = {make_document: "Made a Word document", make_pdf: "Made a PDF", make_spreadsheet: "Built a spreadsheet", make_deck: "Made a deck", analyze_data: "Analysed data", convert_document: "Converted", read_document: "Read a document", fetch_url: "Read a page", mcp__meshpool_web__web_fetch: "Read a page"};
+// What a step is about, in words: a file name, a query or a command; never raw JSON.
+function stepSummary(name, ev) {
+  const s = String(ev.summary || "");
+  if (!ev.mcp || !s.trim().startsWith("{")) return s;
+  try { const a = JSON.parse(s); return String(a.filename || a.path || a.query || a.question || a.url || a.title || a.request || a.expression || "").split("\n")[0].slice(0, 120); }
+  catch (e) { return ""; }
+}
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
 function workGroup() {
   const cur = S.cur;
@@ -834,17 +871,17 @@ function applyEv(ev) {
       cur.liveText += ev.text; cur.live.textContent = cur.liveText; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; } break;
     case "assistant":
-      if (cur.live) { if (ev.text) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = md(ev.text); } else cur.live.remove(); cur.live = null; }
-      else if (ev.text) { closeGroup(); add(md(ev.text), "msg-ai"); }
+      if (cur.live) { if (ev.text) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = linkFiles(md(ev.text)); } else cur.live.remove(); cur.live = null; }
+      else if (ev.text) { closeGroup(); add(linkFiles(md(ev.text)), "msg-ai"); }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
-      const label = TOOL_LABEL[name] || name.replace(/_/g, " ");
-      const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id;
-      d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn">${esc(label)}</span><span class="ts">${esc(ev.summary || "")}</span><span class="st run">running</span></summary>${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
+      const label = TOOL_RUN[name] || TOOL_LABEL[name] || name.replace(/_/g, " ");
+      const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name;
+      d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn">${esc(label)}</span><span class="ts">${esc(stepSummary(name, ev))}</span><span class="st run"></span></summary>${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       cur.activity = `${label}${ev.summary ? " " + ev.summary : ""}`; break; }
     case "tool_end": {
@@ -853,11 +890,14 @@ function applyEv(ev) {
       const out = String(ev.output || ""), stopped = !ev.ok && /not run: stopped by the user|^\[exit 130\]|stopped by the user/i.test(out);
       const planned = !ev.ok && /plan mode/i.test(out);
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
-      st.textContent = ev.denied ? "denied" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
+      st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
+      const nm = d.dataset.name || "";
+      $(".tn", d).textContent = ev.ok ? (TOOL_DONE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " ")) : (TOOL_BASE[nm] || TOOL_LABEL[nm] || nm.replace(/_/g, " "));
       if (ev.output && !$("pre", d)) d.insertAdjacentHTML("beforeend", `<pre>${esc(ev.output)}</pre>`);
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
+      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) st.textContent = "waiting for your OK"; }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this thread", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
@@ -866,12 +906,13 @@ function applyEv(ev) {
       const d = add(`<b>${esc(title)}</b>${ev.detail ? `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>` : ""}<div class="acts">${opts}</div>`, "appr");
       d.id = "appr-" + ev.id;
       $$("button", d).forEach(b => b.onclick = async () => {
+        d.dataset.note = $("input", d)?.value || "";
         $$("button", d).forEach(x => x.disabled = true);
         try { await post(`/api/agent/${cur.id}/answer`, {id: ev.id, decision: b.dataset.d, note: $("input", d)?.value || ""}); clearTimeout(cur.pollT); poll(); }
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? "Denied." : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
+    case "approval_done": { const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); if (a) a.outerHTML = `<div class="note">${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this thread." : "Allowed."}</div>`; } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
@@ -905,7 +946,12 @@ function applyEv(ev) {
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
-  for (const d of Object.values(S.cur?.tools || {})) { const st = $(".st.run", d); if (st) { st.className = "st"; st.textContent = label; } }
+  for (const d of Object.values(S.cur?.tools || {})) {
+    const st = $(".st.run", d); if (!st) continue;
+    const nm = d.dataset.name || "";
+    st.className = "st"; st.textContent = label === "stopped" ? "not run" : "";
+    $(".tn", d).textContent = label === "stopped" ? (TOOL_BASE[nm] || TOOL_LABEL[nm] || nm) : (TOOL_DONE[nm] || TOOL_LABEL[nm] || nm);
+  }
 }
 function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel("diff", true); });
@@ -913,7 +959,8 @@ function bindFoot(foot) {
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); clearTimeout(S.cur.pollT); S.cur.total = 0; S.cur.next = 0; S.cur.log = []; S.cur.epoch = -2; $("#col").innerHTML = ""; S.cur.turn = 0; S.cur.group = null; S.cur.live = null; S.cur.tools = {}; poll(); if (S.panel === "diff") renderPanel(); }
+  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); S.cur.total = 0; S.cur.next = 0; S.cur.log = []; S.cur.epoch = -2; $("#col").innerHTML = ""; S.cur.turn = 0; S.cur.group = null; S.cur.live = null; S.cur.tools = {}; poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
@@ -968,7 +1015,7 @@ function outputFiles() {
   for (const e of threadLog()) if (e.type === "tool_end" && e.output) for (const m of String(e.output).matchAll(OUT_RX)) { const r = rel(m[1]); if (!r.startsWith("/") && !/^[A-Za-z]:/.test(r)) seen.set(r, {path: r}); }
   return [...seen.values()];
 }
-function fileIcon(p) { return /\.(docx|pdf|md|txt)$/i.test(p) ? "📄" : /\.(xlsx|csv)$/i.test(p) ? "📊" : /\.pptx$/i.test(p) ? "📽" : /\.(png|jpe?g|gif|webp)$/i.test(p) ? "🖼" : "📁"; }
+function fileIcon(p) { return ICON.files; }
 function panelProgress(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
   const v = S.cur.view || {}; const pr = progressSteps(); const outs = outputFiles();
@@ -987,7 +1034,7 @@ function panelProgress(body) {
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
-  $$("[data-open]", body).forEach(b => b.onclick = () => post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(e => toast(e.message)));
+  $$("[data-open]", body).forEach(b => b.onclick = () => { toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(e => toast(e.message)); });
   $("#cwOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
   $("#cwConnMgr").onclick = () => openSettings("connectors");
   (S.connCache ? Promise.resolve(S.connCache) : api("/api/connectors").then(r => (S.connCache = r.connectors))).then(cs => {
@@ -1007,7 +1054,7 @@ async function panelDiff(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">Changes show up here once a thread edits files. Each turn is recorded, so you can see and undo what it changed.</div>`; return; }
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
-  body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this thread</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Turn ${t.n}: ${esc(t.title)}</option>`).join("")}</select>
+  body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this thread</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
     <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
@@ -1017,7 +1064,7 @@ async function panelDiff(body) {
     if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || "No changes.")}</div>`; return; }
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
-      <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(f.path)}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
+      <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
       <pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
   } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
@@ -1196,10 +1243,16 @@ async function renderSection(sec) {
       await post("/api/settings", {values}); if ($("#sModel").value) await post("/api/models/default", {id: $("#sModel").value});
       await loadSettings(); await loadModels(true); fill();
     };
-    $("#sSave").onclick = async () => { try { await save(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved."; renderBar(); } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; } };
+    $("#sSave").onclick = async () => {
+      try {
+        await save(); RES("sRes").className = "res"; RES("sRes").textContent = "Saved. Checking the connection…"; renderBar();
+        const r = await post("/api/test"); $("#kdot").className = "kdot" + (r.ok ? " ok" : " bad");
+        RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? "Saved. The connection works." : "Saved, but " + connMsg(r.detail).replace(/^./, c => c.toLowerCase());
+      } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
+    };
     $("#sTest").onclick = async () => {
       RES("sRes").className = "res"; RES("sRes").textContent = "Testing...";
-      try { await save(); const r = await post("/api/test"); RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : `Connection failed: ${r.detail}`; renderBar(); }
+      try { await save(); const r = await post("/api/test"); RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : connMsg(r.detail); renderBar(); }
       catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
     };
   } else if (sec === "models") {
@@ -1403,7 +1456,7 @@ async function renderSection(sec) {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Harnesses</h3><p class="lead">A harness is the agent behind a thread. Meshpool Auto picks the best one for each task from benchmark results. Meshpool Code, Meshpool Work, Pi and Hermes run on your Meshpool key. Claude and ChatGPT run on your own subscription after you sign in. Any agent that speaks the Agent Client Protocol (ACP) can plug in too.</p>
-      <div class="dflt">${[["cowork", "Cowork"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m ? " (built for " + (h.mode === "code" ? "Code" : "Cowork") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code is tuned and benchmarked for coding. Pi is a lighter alternative." : "Hermes is the strongest general agent: research, memory, browser and Office files. Meshpool Work is lighter and faster."}</small></label>`).join("")}</div>
+      <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m ? " (made for " + (h.mode === "code" ? "Code" : "Work") + ")" : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.subscription ? "Subscription" : h.mode === "cowork" ? "Cowork" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : ""}<small>${esc(h.description || "")}</small>${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.subscription && h.available === false ? `<small>Needs Node.js (npx). The desktop app includes it.</small>` : ""}</span>${h.subscription ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}">Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop a harness .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
@@ -1452,7 +1505,7 @@ async function renderSection(sec) {
     await draw(); return;
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Tokens used by Meshpool's own harnesses on this computer, from your thread history.</p>
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">How much Meshpool's own agents used on this computer. What it cost is on your <a href="https://meshpool.ai" target="_blank" rel="noopener">Meshpool account</a>.</p>
       <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div></div>
       <h3 style="font-size:15px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Threads</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td>${esc(m)}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
   } else if (sec === "terminal") {
@@ -1492,6 +1545,8 @@ function showOnboarding() {
   $("#oKey").focus();
   $("#oShow").onclick = () => { const i = $("#oKey"); i.type = i.type === "password" ? "text" : "password"; $("#oShow").textContent = i.type === "password" ? "Show" : "Hide"; };
   $("#oKey").onkeydown = e => { if (e.key === "Enter") $("#oGo").click(); };
+  $("#oKey").oninput = () => { RES("oRes").textContent = ""; };
+  $("#oKey").closest(".field").after($("#oRes"));
   $("#oGo").onclick = async () => {
     const key = $("#oKey").value.trim(); const res = RES("oRes");
     if (!key) { res.className = "res bad"; res.textContent = "Paste your API key first."; $("#oKey").focus(); return; }
@@ -1569,7 +1624,7 @@ function permStep(host) {
     $$("[data-scope]", card).forEach(y => y.setAttribute("aria-checked", y === x));
     const res = $("#oScope", card);
     try {
-      if (x.dataset.scope === "pick") { await pickProject(); res.className = "res ok"; res.textContent = S.projects.length ? `${S.projects.length} folder${S.projects.length > 1 ? "s" : ""} added. Add more any time from the sidebar.` : "No folder added yet."; }
+      if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `${S.projects.length} folder${S.projects.length > 1 ? "s" : ""} added. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; S.draft.project = r.picked; store("project", r.picked); renderSide(); newThread(); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
       else { res.className = "res"; res.textContent = "Fine. You choose a folder when you start a task."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
@@ -1578,6 +1633,7 @@ function permStep(host) {
   $("#oAll", card).onclick = async () => { $("#oAll", card).disabled = true; await draw({id: "all"}); $("#oAll", card).disabled = false; $("#oAll", card).textContent = "Ask again"; };
   document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#onbPerm")) draw(); });
   $("#oDone", card).onclick = () => setupStep(o, card);
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "You'll choose a folder for each task. You can add folders any time."; }
   draw();
 }
 
@@ -1596,7 +1652,8 @@ function setupStep(o, prev) {
     const tick = async () => { if (!$("#oSubs")) return; await loadHarnesses(); if (harness(id).signed_in) { x.outerHTML = `<span class="badge added">Signed in</span>`; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
   });
-  importPanel($("#oImport", card));
+  importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
+  store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1);        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
@@ -1643,6 +1700,8 @@ async function restartApp() {
 /* ================================== boot ================================== */
 (async () => {
   shell();
+  document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
+    toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(err => toast(err.message)); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
@@ -1654,7 +1713,13 @@ async function restartApp() {
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.has_key) showOnboarding();
-  else { loadModels().then(renderBar); if (!store("onbDone") && !store("permsAsked") && !S.threads.length) permStep(); }   // set up but onboarding left halfway
+  else {
+    loadModels().then(renderBar);
+    if (!store("onbDone") && !S.threads.length) { if (store("onbStep") === 3) { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } else if (!store("permsAsked")) permStep(); }
+    // 21. a thread waiting for the user's OK opens straight away after a restart
+    const waiting = S.threads.find(t => t.state === "waiting" && (t.kind || "code") === S.appMode);
+    if (waiting) openThread(waiting.id);
+  }   // set up but onboarding left halfway
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000);
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
