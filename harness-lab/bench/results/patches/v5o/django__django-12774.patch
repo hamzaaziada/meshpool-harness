@@ -1,0 +1,71 @@
+diff --git a/django/db/models/query.py b/django/db/models/query.py
+index d9c9b0db04..c491da78b8 100644
+--- a/django/db/models/query.py
++++ b/django/db/models/query.py
+@@ -690,7 +690,13 @@ class QuerySet:
+         assert not self.query.is_sliced, \
+             "Cannot use 'limit' or 'offset' with in_bulk"
+         if field_name != 'pk' and not self.model._meta.get_field(field_name).unique:
+-            raise ValueError("in_bulk()'s field_name must be a unique field but %r isn't." % field_name)
++            fields = self.model._meta.unique_together
++            fields = tuple(fields) + tuple(
++                constraint.fields
++                for constraint in self.model._meta.total_unique_constraints
++            )
++            if (field_name,) not in fields:
++                raise ValueError("in_bulk()'s field_name must be a unique field but %r isn't." % field_name)
+         if id_list is not None:
+             if not id_list:
+                 return {}
+diff --git a/tests/lookup/models.py b/tests/lookup/models.py
+index fbc9fa606f..0cebcd20d1 100644
+--- a/tests/lookup/models.py
++++ b/tests/lookup/models.py
+@@ -45,6 +45,18 @@ class Tag(models.Model):
+         ordering = ('name',)
+ 
+ 
++class UniqueConstraintArticle(models.Model):
++    headline = models.CharField(max_length=100)
++
++    class Meta:
++        constraints = [
++            models.UniqueConstraint(fields=['headline'], name='unique_headline'),
++        ]
++
++    def __str__(self):
++        return self.headline
++
++
+ class NulledTextField(models.TextField):
+     def get_prep_value(self, value):
+         return None if value == '' else value
+diff --git a/tests/lookup/tests.py b/tests/lookup/tests.py
+index baefdf9701..bae95cc340 100644
+--- a/tests/lookup/tests.py
++++ b/tests/lookup/tests.py
+@@ -12,6 +12,7 @@ from django.utils.deprecation import RemovedInDjango40Warning
+ 
+ from .models import (
+     Article, Author, Freebie, Game, IsNullWithNoneAsRHS, Player, Season, Tag,
++    UniqueConstraintArticle,
+ )
+ 
+ 
+@@ -189,6 +190,16 @@ class LookupTests(TestCase):
+             }
+         )
+ 
++    def test_in_bulk_with_field_unique_constraint(self):
++        a1 = UniqueConstraintArticle.objects.create(headline='Hello')
++        a2 = UniqueConstraintArticle.objects.create(headline='World')
++        self.assertEqual(
++            UniqueConstraintArticle.objects.in_bulk(
++                [a1.headline, a2.headline], field_name='headline',
++            ),
++            {a1.headline: a1, a2.headline: a2},
++        )
++
+     def test_in_bulk_non_unique_field(self):
+         msg = "in_bulk()'s field_name must be a unique field but 'author' isn't."
+         with self.assertRaisesMessage(ValueError, msg):

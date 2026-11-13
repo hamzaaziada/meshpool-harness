@@ -165,3 +165,15 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
 
 - Not run, for lack of budget: the remaining 8 test tasks, the observability A/B (probe, trace, symbol, edit check)
   and Terminal-Bench beyond 4 dev tasks.
+
+## 2026-11-13: new key; code tools A/B and the full Verified test set
+
+- New key, $4 allowed. Spent $2.18 for both runs below.
+- Code tools A/B, 10 Verified dev tasks: app 10/10 $0.0069 98 s; app + all tools 9/10 $0.0089 125 s; v5 6/10
+  $0.0294 235 s; v5 + observe 9/10 $0.0180 158 s; v5 + all tools 7/10 $0.0278 244 s.
+  - Pre-registered rule: keep a flag if it gains solves without costing more per solve. MH_OBSERVE passes it on the
+    engine loop. It fails it on the app agent (ceiling: 10/10 without it). MH_NAV and MH_LINT_EDIT fail it.
+  - Decision: all three stay off by default. MH_OBSERVE for the engine loop goes to a test-set confirmation next.
+- Verified test set completed to 20 tasks (12 new, same time): Pi 19/20 $0.0069 95 s; app 18/20 $0.0079 133 s;
+  Codex 17/20 $0.0101 121 s; v5 17/20 $0.0093 184 s. pylint-4970 failed for every agent.
+- Result: the app agent beats Codex on solves and cost; Pi still leads on solves, cost and time.
