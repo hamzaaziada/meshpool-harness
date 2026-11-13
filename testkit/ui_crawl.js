@@ -74,7 +74,9 @@ async function watch(p) {
       if (!(await p.$(".scrim"))) { await p.click("#openSettings"); await p.click(`.mnav [data-s=${sec}]`); await p.waitForTimeout(500); }
     }
     await p.screenshot({path: `${out}/s-${sec}.png`});
-    check(`settings: ${sec} (${clicked} buttons) without errors`, errs.length === before, errs.slice(before).join(" | "));
+    // 400s are validation messages (e.g. "No GitHub login found on this computer"), as in the whole-app check below.
+    const pageErrs = errs.slice(before).filter(e => !/status of 400/.test(e));
+    check(`settings: ${sec} (${clicked} buttons) without errors`, !pageErrs.length, pageErrs.join(" | "));
   }
   // specific settings flows
   await p.click(`.mnav [data-s=personal]`); await p.waitForTimeout(600);
