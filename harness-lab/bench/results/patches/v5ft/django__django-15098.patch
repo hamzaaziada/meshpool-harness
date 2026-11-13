@@ -1,0 +1,69 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index 6ea18dd22f..d0001a2a40 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -23,7 +23,7 @@ from django.utils.datastructures import MultiValueDict
+ from django.utils.functional import cached_property
+ from django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes
+ from django.utils.regex_helper import _lazy_re_compile, normalize
+-from django.utils.translation import get_language
++from django.utils.translation import get_language, get_supported_language_variant
+ 
+ from .converters import get_converter
+ from .exceptions import NoReverseMatch, Resolver404
+@@ -310,7 +310,7 @@ class LocalePrefixPattern:
+     @property
+     def regex(self):
+         # This is only used by reverse() and cached in _reverse_dict.
+-        return re.compile(self.language_prefix)
++        return re.compile(re.escape(self.language_prefix))
+ 
+     @property
+     def language_prefix(self):
+@@ -324,7 +324,21 @@ class LocalePrefixPattern:
+         language_prefix = self.language_prefix
+         if path.startswith(language_prefix):
+             return path[len(language_prefix):], (), {}
+-        return None
++
++        # Locale prefixes may be case-insensitive (e.g. 'en-Latn-US') and may
++        # be a more generic variant of a supported language (e.g. 'en-us' when
++        # only 'en-latn-us' is supported), so resolve the leading prefix as a
++        # language code when the exact match failed.
++        from django.utils.translation import trans_real
++        match = trans_real.language_code_prefix_re.match('/' + path)
++        if not match:
++            return None
++        lang_code = match[1]
++        try:
++            get_supported_language_variant(lang_code)
++        except LookupError:
++            return None
++        return path[len(lang_code) + 1:], (), {}
+ 
+     def check(self):
+         return []
+diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
+index 7dcc77b46c..d6444d11d5 100644
+--- a/django/utils/translation/trans_real.py
++++ b/django/utils/translation/trans_real.py
+@@ -43,7 +43,7 @@ language_code_re = _lazy_re_compile(
+     re.IGNORECASE
+ )
+ 
+-language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
++language_code_prefix_re = _lazy_re_compile(r'^/(\w+(?:[@-]\w+)*)(/|$)')
+ 
+ 
+ @receiver(setting_changed)
+@@ -477,6 +477,10 @@ def get_supported_language_variant(lang_code, strict=False):
+         # If 'zh-hant-tw' is not supported, try special fallback or subsequent
+         # language codes i.e. 'zh-hant' and 'zh'.
+         possible_lang_codes = [lang_code]
++        try:
++            possible_lang_codes.append(lang_code.lower())
++        except AttributeError:
++            pass
+         try:
+             possible_lang_codes.extend(LANG_INFO[lang_code]['fallback'])
+         except KeyError:

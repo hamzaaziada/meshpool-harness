@@ -61,8 +61,8 @@ def from_responses(p: dict) -> dict:
 
 def log_usage_line(tag: str, model: str, usage: dict) -> None:
     """The spend guard cannot read Responses usage; write the per-call token line it would have written."""
-    path = os.environ.get("MH_USAGE_LOG", "/home/user/guard/usage.csv")
-    if not os.path.exists(path):
+    path = os.environ.get("MH_USAGE_LOG", "")       # opt-in; never a fixed machine path
+    if not path or not os.path.exists(path):
         return
     with open(path, "a") as f:
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())},{tag},{model},{usage.get('prompt_tokens', 0)},"

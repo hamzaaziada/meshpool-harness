@@ -6,12 +6,12 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 
 | Folder | What it is | Where it comes from |
 |---|---|---|
-| `rt-mac/python` | Python 3.12 for Apple silicon, with the packages in `packaging/requirements-runtime.txt` and `app/requirements.txt` | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) `aarch64-apple-darwin` install_only, then `pip install` |
+| `rt-mac/python` | Python 3.12 for Apple silicon, with the packages in `packaging/requirements-cli.txt` (the same list `install.sh` uses: office formats and PDF readers) | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) `aarch64-apple-darwin` install_only, then `pip install` |
 | `rt-macx64/python` | The same for Intel Macs | `x86_64-apple-darwin` build |
 | `rt-win/python` | The same for Windows | `x86_64-pc-windows-msvc` build |
 | `node-mac-arm64`, `node-mac-x64`, `node-win` | Node.js 24 | [nodejs.org/dist](https://nodejs.org/dist/) |
 | `pi/node_modules` | The Pi coding agent | `npm install @earendil-works/pi-coding-agent` |
-| `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
+| `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied; the runtime also needs Hermes' dependencies with its `acp` and `mcp` extras (without `mcp`, Hermes connects to no MCP servers) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
 | `ocr-models` | PP-OCRv5 recognition models for RapidOCR | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) model releases |
 | `git-win` | MinGit for Windows (Git and Bash) | [git-for-windows](https://github.com/git-for-windows/git/releases) |
 | `win/Meshpool` | `Meshpool.exe` and `meshpool.cmd` | Build `packaging/win/launcher` with Go (`GOOS=windows go build`) |

@@ -1,0 +1,54 @@
+diff --git a/xarray/core/combine.py b/xarray/core/combine.py
+index 37ae903b..5718698f 100644
+--- a/xarray/core/combine.py
++++ b/xarray/core/combine.py
+@@ -501,14 +501,13 @@ def combine_by_coords(datasets, compat='no_conflicts', data_vars='all',
+                                    fill_value=fill_value)
+ 
+         # Check the overall coordinates are monotonically increasing
+-        for dim in concatenated.dims:
+-            if dim in concatenated:
+-                indexes = concatenated.indexes.get(dim)
+-                if not (indexes.is_monotonic_increasing
+-                        or indexes.is_monotonic_decreasing):
+-                    raise ValueError("Resulting object does not have monotonic"
+-                                     " global indexes along dimension {}"
+-                                     .format(dim))
++        for dim in concat_dims:
++            indexes = concatenated.indexes.get(dim)
++            if not (indexes.is_monotonic_increasing
++                    or indexes.is_monotonic_decreasing):
++                raise ValueError("Resulting object does not have monotonic"
++                                 " global indexes along dimension {}"
++                                 .format(dim))
+         concatenated_grouped_by_data_vars.append(concatenated)
+ 
+     return merge(concatenated_grouped_by_data_vars, compat=compat,
+diff --git a/xarray/tests/test_combine.py b/xarray/tests/test_combine.py
+index 77e2993b..bf1a7860 100644
+--- a/xarray/tests/test_combine.py
++++ b/xarray/tests/test_combine.py
+@@ -611,6 +611,23 @@ class TestCombineAuto:
+         expected = Dataset({'x': 0, 'y': 1, 'z': 2})
+         assert_identical(expected, actual)
+ 
++    def test_combine_by_coords_non_monotonic_bystander(self):
++        # https://github.com/pydata/xarray/issues/3151
++        # A coordinate dimension which does not vary between datasets should
++        # not be required to be monotonic.
++        y_coord = ['a', 'c', 'b']
++        ds1 = Dataset({'data': (('x', 'y'), np.random.rand(3, 3))},
++                      coords={'x': [1, 2, 3], 'y': y_coord})
++        ds2 = Dataset({'data': (('x', 'y'), np.random.rand(4, 3))},
++                      coords={'x': [4, 5, 6, 7], 'y': y_coord})
++        expected = Dataset({'data': (('x', 'y'),
++                                      np.concatenate([ds1['data'].values,
++                                                      ds2['data'].values]))},
++                           coords={'x': [1, 2, 3, 4, 5, 6, 7],
++                                   'y': y_coord})
++        actual = combine_by_coords([ds1, ds2])
++        assert_identical(expected, actual)
++
+     def test_check_for_impossible_ordering(self):
+         ds0 = Dataset({'x': [0, 1, 5]})
+         ds1 = Dataset({'x': [2, 3]})

@@ -27,12 +27,54 @@ def plan(messages, tools):
         if step == 0 and calc:
             return ("tool", calc, {"expression": "(1200*0.15)/12"})
         return ("text", f"The MCP calculator says: {done[-1]['content'] if done else 'no tool'}")
+    if "think slowly" in u and "stopped your previous request" not in u:   # a model that takes 30 s to answer
+        return ("text", "SLOW: done thinking.")
+    if "fetch the slow page" in u:                         # a tool call that blocks for 30 s
+        import re as _re
+        url = (_re.search(r"https?://\S+", utext) or [None])[0]
+        if step == 0 and url and "fetch_url" in names:
+            return ("tool", "fetch_url", {"url": url})
+        return ("text", "Fetched the slow page.")
     if "long task" in u and "stopped your previous request" not in u:
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "sleep 25; echo slept"})
         if step == 0 and "terminal" in names:
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
         return ("text", "Long task finished.")
+    if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
+        return ("text", "Bonjour! (the claude-skill instructions were applied)")
+    if "$claude-skill" in u:                             # built-in agents load a mentioned skill with use_skill
+        if step == 0 and "use_skill" in names:
+            return ("tool", "use_skill", {"name": "claude-skill"})
+        if done and "french" in done[-1]["content"].lower():
+            return ("text", "Bonjour! (the claude-skill instructions were applied)")
+        return ("text", "The skill did not load: " + (done[-1]["content"][:120] if done else "no tool"))
+    if "open the test page" in u:                        # browser use through the browser MCP server
+        import re as _re
+        url = (_re.search(r"https?://\S+", utext) or [None])[0]
+        op = next((n for n in names if n.endswith("browser_open")), None)
+        ty = next((n for n in names if n.endswith("browser_type")), None)
+        if step == 0 and op and url:
+            return ("tool", op, {"url": url.rstrip(".")})
+        if step == 1 and ty:
+            ref = (_re.search(r"\[(e\d+)\][^\n]*Date", done[-1]["content"]) or [None, "e1"])[1]
+            return ("tool", ty, {"ref": ref, "text": "10/23/2016"})
+        return ("text", "Browser: " + " || ".join(m["content"][:300].replace("\n", " ") for m in done))
+    if "check the code" in u:                            # MH_OBSERVE / MH_NAV / MH_LINT_EDIT tools in the app agent
+        if step == 0 and "probe" in names:
+            return ("tool", "probe", {"command": "python3 -m pytest -q"})
+        if step == 1 and "symbol" in names:
+            return ("tool", "symbol", {"name": "add"})
+        if step == 2 and "edit" in names:
+            return ("tool", "read_file", {"path": "calc.py"})
+        if step == 3:
+            return ("tool", "edit", {"path": "calc.py", "old": "return a + b", "new": "return a + bb"})
+        return ("text", "Code tools: " + " || ".join(m["content"][:400].replace("\n", " ") for m in done))
+    if "take a screenshot of my screen" in u:            # computer use
+        sc = next((n for n in names if n.endswith("screenshot") and "browser" not in n), None)
+        if step == 0 and sc:
+            return ("tool", sc, {})
+        return ("text", "Computer use: " + (done[-1]["content"][:300] if done else "no computer tool"))
     if "read the pdf" in u:
         if step == 0:
             return ("tool", "read_file" if "read_file" in names else "read", {"path": "report.pdf"})
@@ -45,7 +87,8 @@ def plan(messages, tools):
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": "hello.py", "content": "print('hello from meshpool')\n"})
         if step == 1:
-            return ("tool", "bash", {"command": "python3 hello.py || python hello.py"})
+            sh = "bash" if "bash" in names else "terminal" if "terminal" in names else "bash"   # Hermes: terminal
+            return ("tool", sh, {"command": "python3 hello.py || python hello.py"})
         return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
     if "finish" in u or "harness" in u:                 # one-shot harness engines: call finish
         if step == 0 and "bash" in names:
@@ -78,6 +121,8 @@ class H(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer test-key-1234":
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"bad key"}'); return
         p = plan(body["messages"], body.get("tools"))
+        if p[0] == "text" and str(p[1]).startswith("SLOW:"):
+            time.sleep(30)
         if p[0] == "tool":
             msg = {"role": "assistant", "content": None, "tool_calls": [{"id": f"call_{time.time_ns()}", "type": "function",
                    "function": {"name": p[1], "arguments": json.dumps(p[2])}}]}

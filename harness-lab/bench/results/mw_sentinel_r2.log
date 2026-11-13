@@ -1,0 +1,10 @@
+v5:OK 58.3s $0.0028 | codex:OK 66.8s $0.0053 | pi:OK 56.4s $0.0038 | codex5:OK 22.7s $0.0025 | pi5:OK 59.8s $0.0043 <- book-flight#2
+v5:OK 6.7s $0.0004 | codex:OK 10.3s $0.0017 | pi:OK 10.8s $0.0004 | codex5:OK 7.7s $0.0016 | pi5:OK 9.1s $0.0007 <- find-word#2
+v5:OK 6.0s $0.0004 | codex:OK 7.7s $0.0016 | pi:OK 8.3s $0.0004 | codex5:OK 10.3s $0.0016 | pi5:OK 10.7s $0.0004 <- enter-date#2
+v5:OK 3.5s $0.0003 | codex:OK 7.0s $0.0005 | pi:OK 8.5s $0.0004 | codex5:OK 8.2s $0.0017 | pi5:OK 8.5s $0.0004 <- click-widget#2
+v5:OK 11.4s $0.0004 | codex:OK 7.1s $0.0017 | pi:OK 4.9s $0.0005 | codex5:OK 11.0s $0.0017 | pi5:OK 8.0s $0.0005 <- click-checkboxes-soft#2
+v5:OK 14.9s $0.0007 | codex:OK 42.7s $0.0041 | pi:OK 48.7s $0.0040 | codex5:OK 18.0s $0.0021 | pi5:OK 14.3s $0.0006 <- terminal#2
+v5:x 8.3s $0.0007 | codex:x 9.4s $0.0021 | pi:x 7.5s $0.0006 | codex5:x 7.2s $0.0019 | pi5:x 8.7s $0.0006 <- social-media#2
+v5:OK 32.4s $0.0007 | codex:OK 19.7s $0.0021 | pi:OK 20.1s $0.0009 | codex5:OK 21.8s $0.0021 | pi5:OK 22.1s $0.0009 <- search-engine#2
+v5:OK 9.0s $0.0005 | codex:OK 26.2s $0.0018 | pi:OK 20.2s $0.0005 | codex5:OK 13.1s $0.0006 | pi5:OK 16.6s $0.0009 <- click-collapsible#2
+v5:OK 17.6s $0.0007 | codex:OK 13.0s $0.0020 | pi:OK 16.9s $0.0007 | codex5:OK 17.9s $0.0007 | pi5:OK 21.2s $0.0014 <- guess-number#2

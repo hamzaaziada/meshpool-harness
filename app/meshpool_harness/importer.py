@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -68,7 +69,9 @@ def find_skills() -> list[dict]:
             sid = SK.slug(meta.get("name") or d.name)
             out.append({"key": "skill:" + str(d), "kind": "skill", "source": source, "name": meta.get("name") or d.name,
                         "description": meta.get("description", "")[:200], "path": str(d), "id": sid,
-                        "exists": sid in have})
+                        "exists": sid in have,
+                        # plugin skills come in bundles of dozens: listed, but not ticked by default
+                        "suggested": source != "Claude Code plugin"})
     return out
 
 
@@ -170,7 +173,8 @@ def find_mcp() -> list[dict]:
             if sig in seen:
                 continue
             seen.add(sig)
-            what = spec.get("url") or " ".join([spec["command"]] + spec.get("args", []))[:140]
+            what = ("Connects to " + urllib.parse.urlparse(spec["url"]).netloc) if spec.get("url") else \
+                f"Runs on this computer ({Path(str(spec['command'])).name})"
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
                         "has_secrets": bool(spec.get("env") or spec.get("headers"))})

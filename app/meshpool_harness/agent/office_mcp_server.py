@@ -47,7 +47,7 @@ def _run_job(jid: str):
     env.pop("MH_EVENT_LOG", None)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     try:
-        r = subprocess.run(j["cmd"], cwd=str(APP), env=env, capture_output=True, text=True, encoding="utf-8",
+        r = subprocess.run(j["cmd"], cwd=str(j["out"]), env=env, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=float(os.environ.get("OFFICE_JOB_TIMEOUT_S", "1800")), **kw)
         out = r.stdout
         res = json.loads(out[out.find("{"):]) if "{" in out else {}

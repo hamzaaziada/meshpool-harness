@@ -1,0 +1,83 @@
+diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
+index 7dcc77b46c..208c301c96 100644
+--- a/django/utils/translation/trans_real.py
++++ b/django/utils/translation/trans_real.py
+@@ -43,7 +43,7 @@ language_code_re = _lazy_re_compile(
+     re.IGNORECASE
+ )
+ 
+-language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
++language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+){0,2})(/|$)')
+ 
+ 
+ @receiver(setting_changed)
+@@ -474,27 +474,35 @@ def get_supported_language_variant(lang_code, strict=False):
+     <https://www.djangoproject.com/weblog/2007/oct/26/security-fix/>.
+     """
+     if lang_code:
+-        # If 'zh-hant-tw' is not supported, try special fallback or subsequent
+-        # language codes i.e. 'zh-hant' and 'zh'.
++        lang_code = lang_code.lower()
++        # If 'fr-ca' is not supported, try special fallback or language-only
++        # code i.e. 'fr'.
+         possible_lang_codes = [lang_code]
+         try:
+             possible_lang_codes.extend(LANG_INFO[lang_code]['fallback'])
+         except KeyError:
+             pass
+-        i = None
+-        while (i := lang_code.rfind('-', 0, i)) > -1:
+-            possible_lang_codes.append(lang_code[:i])
+-        generic_lang_code = possible_lang_codes[-1]
++        language_code, _, _ = lang_code.partition('-')
++        possible_lang_codes.append(language_code)
+         supported_lang_codes = get_languages()
+-
++        import sys as _sys
++        print('DEBUG possible', possible_lang_codes, file=_sys.stderr)
+         for code in possible_lang_codes:
++            print('DEBUG check', code, code in supported_lang_codes, check_for_language(code), file=_sys.stderr)
+             if code in supported_lang_codes and check_for_language(code):
+                 return code
+         if not strict:
+-            # if fr-fr is not supported, try fr-ca.
++            # if fr-fr is not supported try fr-ca.
+             for supported_code in supported_lang_codes:
+-                if supported_code.startswith(generic_lang_code + '-'):
+-                    return supported_code
++                if supported_code.startswith(language_code + '-'):
++                    # Only variants of the requested language whose subtags
++                    # are a prefix of the request language code (e.g.
++                    # 'en-latn' for 'en-latn-us') should be selected,
++                    # otherwise a more generic language (e.g. 'en') could be
++                    # preferred over a closer variant.
++                    variant = supported_code.split('-')[:-1]
++                    if lang_code.split('-')[:len(variant)] == variant:
++                        return supported_code
+     raise LookupError(lang_code)
+ 
+ 
+diff --git a/tests/i18n/tests.py b/tests/i18n/tests.py
+index bb6ea15f85..4b80985709 100644
+--- a/tests/i18n/tests.py
++++ b/tests/i18n/tests.py
+@@ -1610,6 +1610,19 @@ class MiscTests(SimpleTestCase):
+         self.assertEqual(g('/de-ch/'), 'de')
+         self.assertIsNone(g('/de-simple-page/'))
+ 
++    @override_settings(
++        LANGUAGES=[
++            ('en', 'English'),
++            ('en-latn', 'Latin English'),
++        ],
++    )
++    def test_get_language_from_path_with_script_and_region(self):
++        g = trans_real.get_language_from_path
++        for path in ['/en-latn-us/', '/en-Latn-US/', '/en-LATN-us/']:
++            with self.subTest(path=path):
++                self.assertEqual(g(path), 'en-latn')
++        self.assertIsNone(g('/de-simple-page/'))
++
+     def test_get_language_from_path_null(self):
+         g = trans_null.get_language_from_path
+         self.assertIsNone(g('/pl/'))

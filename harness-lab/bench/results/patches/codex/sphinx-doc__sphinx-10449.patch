@@ -1,0 +1,58 @@
+diff --git a/CHANGES b/CHANGES
+index bc32362ae..cf3c6a1c8 100644
+--- a/CHANGES
++++ b/CHANGES
+@@ -16,6 +16,9 @@ Features added
+ Bugs fixed
+ ----------
+ 
++* #10449: Fix ``autodoc_typehints = "description"`` adding a return type to
++  classes documented with ``autoclass``.
++
+ Testing
+ --------
+ 
+diff --git a/sphinx/ext/autodoc/typehints.py b/sphinx/ext/autodoc/typehints.py
+index 06768168e..c522c7fbb 100644
+--- a/sphinx/ext/autodoc/typehints.py
++++ b/sphinx/ext/autodoc/typehints.py
+@@ -28,7 +28,7 @@ def record_typehints(app: Sphinx, objtype: str, name: str, obj: Any,
+             for param in sig.parameters.values():
+                 if param.annotation is not param.empty:
+                     annotation[param.name] = typing.stringify(param.annotation, mode)
+-            if sig.return_annotation is not sig.empty:
++            if objtype != 'class' and sig.return_annotation is not sig.empty:
+                 annotation['return'] = typing.stringify(sig.return_annotation, mode)
+     except (TypeError, ValueError):
+         pass
+diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py
+index fdb82b1b9..d4bd3175d 100644
+--- a/tests/test_ext_autodoc_configs.py
++++ b/tests/test_ext_autodoc_configs.py
+@@ -1055,6 +1055,26 @@ def test_autodoc_typehints_description_with_documented_init(app):
+             '         None\n' == context)
+ 
+ 
++@pytest.mark.sphinx('text', testroot='ext-autodoc',
++                    confoverrides={'autodoc_typehints': "description",
++                                   'autodoc_typehints_description_target': 'documented'})
++def test_autodoc_typehints_description_no_rtype_for_class(app):
++    # A class's "return type" is derived from __init__, so it must not be
++    # rendered as the class' return type (see #9575).
++    (app.srcdir / 'index.rst').write_text(
++        '.. autoclass:: target.typehints._ClassWithDocumentedInit\n',
++        encoding='utf8'
++    )
++    app.build()
++    context = (app.outdir / 'index.txt').read_text(encoding='utf8')
++    assert ('class target.typehints._ClassWithDocumentedInit(x)\n'
++            '\n'
++            '   Class docstring.\n'
++            '\n'
++            '   Parameters:\n'
++            '      **x** (*int*) --\n' == context)
++
++
+ @pytest.mark.sphinx('text', testroot='ext-autodoc',
+                     confoverrides={'autodoc_typehints': "description",
+                                    'autodoc_typehints_description_target': 'documented'})

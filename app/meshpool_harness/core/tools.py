@@ -18,6 +18,50 @@ def _bash():
 
 MAX_TOOL_CHARS = 8000
 HEAD, TAIL = 3000, 3000
+_CAP_LOCK = threading.Lock()
+
+_RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg", "wc", "file", "stat", "which",
+             "type", "echo", "printf", "pwd", "env", "printenv", "uname", "du", "df", "tree", "nl", "sort", "uniq",
+             "cut", "tr", "diff", "cmp", "md5sum", "sha256sum", "sha1sum", "xxd", "od", "hexdump", "strings", "jq",
+             "readlink", "realpath", "basename", "dirname", "id", "whoami", "date", "ps", "true", "column", "less",
+             "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
+             "rustc", "ldd", "nproc", "free", "hostname", "lsb_release", "getconf", "test", "["}
+_RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-parse", "branch", "remote", "describe",
+           "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
+
+
+def read_only(cmd: str) -> bool:
+    """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
+    import re
+    import shlex
+    s = re.sub(r"\d?>\s*/dev/null|2>&1|>&2", " ", cmd)
+    if re.search(r"[>`]|\$\(|<<|\bxargs\b|-exec\b|-delete\b|\bsudo\b", s):
+        return False
+    for seg in re.split(r"\|\|?|&&|;|\n", s):
+        try:
+            w = shlex.split(seg)
+        except ValueError:
+            return False
+        while w and re.match(r"^[A-Za-z_]\w*=", w[0]):             # FOO=bar cmd
+            w = w[1:]
+        if not w:
+            continue
+        prog, rest = w[0].rsplit("/", 1)[-1], w[1:]
+        if prog not in _RO_PROGS:
+            return False
+        if prog == "sed" and any(a.startswith("-i") or a == "--in-place" for a in rest):
+            return False
+        if prog == "awk" and "system" in seg:
+            return False
+        if prog == "git" and not (rest and rest[0] in _RO_GIT):
+            return False
+        if prog in ("pip", "pip3") and not (rest and rest[0] in ("show", "list", "freeze", "--version", "-V")):
+            return False
+        if prog in ("python", "python3", "node", "npm", "cargo", "go", "java", "gcc", "rustc") and not (
+                rest and (rest[0] in ("--version", "-V", "version", "-version")
+                          or rest[:3] in (["-m", "pip", "show"], ["-m", "pip", "list"]))):
+            return False
+    return True
 
 
 def _fn(name, desc, props, req):
@@ -48,6 +92,19 @@ SCHEMAS = {
                                   "ranges, grep several patterns, check versions). Each runs on its own, even if an "
                                   "earlier one fails; you get every output, labelled.",
                      {"commands": {"type": "array", "items": S}, "timeout_s": I}, ["commands"]),
+    "probe": _fn("probe", "Run a test or a script and get a diagnosis instead of raw output: the failing tests, the "
+                          "exception, and the failing frames in this project's code with their local variable values "
+                          "(library frames dropped). Use it to see the bug before you edit, and after an edit to see "
+                          "what still fails. Counts as a check for finish.",
+                 {"command": S, "timeout_s": I}, ["command"]),
+    "symbol": _fn("symbol", "Find where a Python function, class or variable is defined (file, line, signature) and "
+                            "every place it is used in this project, in one call. Optional `path`: the file that "
+                            "defines it, when the name is common.",
+                  {"name": S, "path": S}, ["name"]),
+    "trace": _fn("trace", "Run a Python test or script (python file.py, python -m mod, pytest ...) and list the "
+                          "project's own functions that ran, in first-call order with call counts, then the output "
+                          "tail. Use it to find where to edit before you change anything.",
+                 {"command": S, "timeout_s": I}, ["command"]),
     "run_tests": _fn("run_tests", "Run a test or check command. Its exit code counts as evidence for finish.",
                      {"command": S, "timeout_s": I}, ["command"]),
     "finish": _fn("finish", "Finish the task. `evidence` must name checks you actually ran in this session "
@@ -147,9 +204,15 @@ class Workspace:
         text = clean(text)
         if len(text) <= MAX_TOOL_CHARS:
             return text
-        self._n += 1
-        f = self.run_dir / f"out_{self._n:03d}_{label}.txt"
-        f.write_text(text)
+        with _CAP_LOCK:                          # bash_many may run commands in threads (MH_PARALLEL_MANY)
+            self._n += 1
+            n = self._n
+        f = self.run_dir / f"out_{n:03d}_{label}.txt"
+        try:                                     # the task may delete .run (e.g. git clean): recreate it
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text)
+        except OSError:
+            return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
         return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
                 + text[-TAIL:])
 
@@ -266,12 +329,12 @@ class Workspace:
             n = text.count(old)
             if n != 1:
                 raise ToolError(f"`old` text {'not found' if n == 0 else f'occurs {n} times'} in {path}; copy it exactly / add context")
-            text = text.replace(old, new, 1)
+            before, text = text, text.replace(old, new, 1)
             self._cwrite(path, text)
             self.seen[key] = self._hash(text)
             self.edits += 1
             self.written.add(key)
-            return f"edited {path}"
+            return f"edited {path}" + self._edit_feedback(Path(key), before, text)
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
@@ -293,11 +356,11 @@ class Workspace:
             raise ToolError(f"edit rejected: it would make {path} invalid Python ({bad}). The file is unchanged. "
                             f"Fix indentation/brackets in `new` and retry.")
         p.write_text(new_text)
-        text = new_text
+        before, text = text, new_text
         self.seen[key] = self._hash(text)
         self.edits += 1
         self.written.add(key)
-        return f"edited {path}"
+        return f"edited {path}" + self._edit_feedback(p, before, text)
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:
@@ -312,15 +375,40 @@ class Workspace:
         if not p.exists():
             self.created.add(str(p))
         p.parent.mkdir(parents=True, exist_ok=True)
+        before = p.read_text(errors="replace") if p.exists() else None
         if append and p.exists():
             with p.open("a") as f:
                 f.write(content)
         else:
             p.write_text(content)
-        self.seen[str(p)] = self._hash(p.read_text(errors="replace"))
+        after = p.read_text(errors="replace")
+        self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
-        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})"
+        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + self._edit_feedback(
+            p, before, after)
+
+    def _edit_feedback(self, p: Path, before, after) -> str:
+        """MH_LINT_EDIT: problems this change introduced (core/diagnose.py) and the files changed so far."""
+        if os.environ.get("MH_LINT_EDIT") != "1":
+            return ""
+        from .diagnose import new_problems
+        msg = new_problems(p, before, after)
+        names = []
+        for w in sorted(self.written):
+            try:
+                names.append(str(Path(w).relative_to(self.root)))
+            except ValueError:
+                names.append(w)
+        changed = f"\nFiles changed so far: {', '.join(names[:12])}" + (" ..." if len(names) > 12 else "")
+        return ("\n" + msg if msg else "\nNo new errors in this file.") + changed
+
+    def symbol(self, name, path=None):
+        """MH_NAV: definitions and uses of a Python name (core/diagnose.py, Jedi)."""
+        if self.container and not self.mounted:
+            raise ToolError("symbol needs the project files on this machine; use grep inside the container")
+        from .diagnose import symbol
+        return self._cap(symbol(str(self.root), str(name), path), "symbol")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
 
@@ -363,7 +451,7 @@ class Workspace:
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True):
+    def _run(self, command, timeout_s, kind, record=True, raw=False):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -386,6 +474,10 @@ class Workspace:
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8")
                 elif bash:
                     r = self._proc([bash, "-c", command], env, timeout_s)
+                elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
+                    r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                    "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
+                                   env, timeout_s, encoding="utf-8")
                 else:
                     r = self._proc(command, env, timeout_s, shell=True)
             code, out = r.returncode, (r.stdout + ("\n" + r.stderr if r.stderr else ""))
@@ -396,26 +488,59 @@ class Workspace:
             return self._cap(out or "no matches", kind), code
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
                               "secs": round(time.time() - t0, 1), "tail": out[-600:]})
-        with (self.run_dir / "commands.log").open("a") as f:   # full outputs: evidence for number tracing
-            f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+        try:                                     # full outputs: evidence for number tracing; the task may have
+            self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
+            with (self.run_dir / "commands.log").open("a") as f:
+                f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+        except OSError:
+            pass
+        if raw:                                  # probe/trace post-process the full text themselves
+            return f"[exit {code}]\n{out}", code
         return self._cap(f"[exit {code}]\n{out}", kind), code
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
 
     def bash_many(self, commands, timeout_s=None):
-        """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style)."""
-        parts = []
-        for cmd in [c for c in commands if isinstance(c, str) and c.strip()][:8]:
+        """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style).
+        MH_PARALLEL_MANY=1: when every command is read-only (see read_only), run them at the same time; the turn then
+        takes as long as the slowest command instead of the sum. Output order and format are unchanged."""
+        cmds = [c for c in commands if isinstance(c, str) and c.strip()][:8]
+
+        def one(cmd):
             if self.should_stop and self.should_stop():
-                parts.append(f"$ {cmd}\n[not run: stopped by the user]")
-                continue
+                return f"$ {cmd}\n[not run: stopped by the user]"
             out, code = self._run(cmd, timeout_s, "bash")
             body = out.split("\n", 1)[1] if out.startswith("[exit ") else out
             if len(body) > 2500:
                 body = body[:1200] + f"\n... [{len(body) - 2400} chars cut; run it alone for the full output] ...\n" + body[-1200:]
-            parts.append(f"$ {cmd}\n[exit {code}]\n{body}")
+            return f"$ {cmd}\n[exit {code}]\n{body}"
+        if os.environ.get("MH_PARALLEL_MANY") == "1" and len(cmds) > 1 and all(read_only(c) for c in cmds):
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(4, len(cmds))) as ex:
+                parts = list(ex.map(one, cmds))
+        else:
+            parts = [one(c) for c in cmds]
         return "\n\n".join(parts) or "no commands given"
+
+    def probe(self, command, timeout_s=None):
+        """MH_OBSERVE: run a check and return a failure digest (core/observe.py). Recorded as a check."""
+        from .observe import digest, probe_command
+        out, _ = self._run(probe_command(command), timeout_s, "check", raw=True)
+        return digest(out)
+
+    def trace(self, command, timeout_s=None):
+        """MH_OBSERVE: run a Python command under a project-only profiler (core/observe.py)."""
+        from .observe import trace_command
+        wrapped = trace_command(command)
+        if wrapped is None:
+            raise ToolError("trace runs one Python command: python file.py ..., python -m module ..., or pytest ... "
+                            "(optionally after `cd dir &&`), without pipes or redirects")
+        out, _ = self._run(wrapped, timeout_s, "bash", raw=True)
+        i = out.rfind("=== trace:")
+        if i < 0:
+            return self._cap(out, "trace")
+        return self._cap((out[:i][-1500:] + "\n" + out[i:])[-7000:], "trace")
 
     def run_tests(self, command, timeout_s=None):
         return self._run(command, timeout_s, "check")[0]

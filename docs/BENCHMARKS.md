@@ -1,6 +1,67 @@
 # Benchmarks
 
-Meshpool Code and Meshpool Work run **Meshpool Harness v3**. Meshpool Auto uses the results on this page to choose a harness for each task (see [ROUTING.md](ROUTING.md)).
+Meshpool Auto uses the results on this page to choose a harness for each task (see [ROUTING.md](ROUTING.md)).
+
+**Which harness the numbers describe.** Run C below measured the Meshpool Harness v3 *benchmark loop* (the one-shot
+engine). Meshpool Code and Meshpool Work in the app run the app's own chat agent, which shares that loop's tools but
+not its loop. Since 12 November 2026 the app agent is measured directly (next section).
+
+## App agent, measured directly (12 November 2026, dev tasks)
+
+Every agent ran at the same time on DeepSeek V4.1 Flash through the Meshpool gateway, with the same task text, caps
+and graders. These are dev tasks and one run each, so a result can move by about two tasks; the frozen test tasks
+confirm before any claim. Raw rows: `harness-lab/bench/results/`.
+
+SWE-bench Verified, 9 dev tasks:
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Pi | 8/9 | $0.0072 | 108 s |
+| Codex CLI | 7/9 | $0.0065 | 84 s |
+| Meshpool Code (app agent) | 7/9 | $0.0084 | 107 s |
+| Meshpool Harness v5 (engine loop) | 7/9 | $0.0104 | 137 s |
+
+Computer use, MiniWoB++, 10 dev tasks (second round; the browser tool with the fixes the app now uses):
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Meshpool Harness v5 | 9/10 | $0.0009 | 18.7 s |
+| Pi | 9/10 | $0.0014 | 22.5 s |
+| Codex CLI | 9/10 | $0.0025 | 23.3 s |
+
+Terminal-Bench 2.0, 4 dev tasks: v5 3/4, Meshpool Code 2/4, Codex 1/4, Pi 1/4. Codex and Pi crashed on two tasks
+when the gateway's content filter rejected hex output. Four tasks is too few to rank on; the rest was cut for budget.
+
+## App agent on the frozen test tasks (13 November 2026)
+
+SWE-bench Verified, 20 frozen test tasks, all agents at the same time, one run each:
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Pi | 19/20 | $0.0069 | 95 s |
+| Meshpool Code (app agent) | 18/20 | $0.0079 | 133 s |
+| Codex CLI | 17/20 | $0.0101 | 121 s |
+| Meshpool Harness v5 (engine loop) | 17/20 | $0.0093 | 184 s |
+
+Codex reported no usage on 2 of 20 runs; its cost is scaled from the other 18. Meshpool Code beats Codex on solves
+and cost but not time. Pi leads on all three. The gap to Pi (one task, $0.001 per solved) is inside run-to-run noise
+but it is in Pi's favour, so we do not claim a lead.
+
+## Code tools A/B (13 November 2026, 10 Verified dev tasks)
+
+`MH_OBSERVE` adds `probe` and `trace`; "x" arms add `MH_NAV` and `MH_LINT_EDIT` too.
+
+| Arm | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Meshpool Code (app agent) | 10/10 | $0.0069 | 98 s |
+| app + all three tools | 9/10 | $0.0089 | 125 s |
+| v5 (engine loop) | 6/10 | $0.0294 | 235 s |
+| v5 + observe | 9/10 | $0.0180 | 158 s |
+| v5 + all three tools | 7/10 | $0.0278 | 244 s |
+
+Observe helped the engine loop (+3 tasks, 39% cheaper per solve). It did not help the app agent, which already
+solved all 10. Navigation and the edit check added calls without adding solves. All three stay off until observe is
+confirmed on test tasks.
 
 ## How the agents were measured
 
