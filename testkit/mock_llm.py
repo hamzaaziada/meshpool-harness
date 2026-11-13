@@ -27,6 +27,14 @@ def plan(messages, tools):
         if step == 0 and calc:
             return ("tool", calc, {"expression": "(1200*0.15)/12"})
         return ("text", f"The MCP calculator says: {done[-1]['content'] if done else 'no tool'}")
+    if "think slowly" in u and "stopped your previous request" not in u:   # a model that takes 30 s to answer
+        return ("text", "SLOW: done thinking.")
+    if "fetch the slow page" in u:                         # a tool call that blocks for 30 s
+        import re as _re
+        url = (_re.search(r"https?://\S+", utext) or [None])[0]
+        if step == 0 and url and "fetch_url" in names:
+            return ("tool", "fetch_url", {"url": url})
+        return ("text", "Fetched the slow page.")
     if "long task" in u and "stopped your previous request" not in u:
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "sleep 25; echo slept"})
@@ -113,6 +121,8 @@ class H(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer test-key-1234":
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"bad key"}'); return
         p = plan(body["messages"], body.get("tools"))
+        if p[0] == "text" and str(p[1]).startswith("SLOW:"):
+            time.sleep(30)
         if p[0] == "tool":
             msg = {"role": "assistant", "content": None, "tool_calls": [{"id": f"call_{time.time_ns()}", "type": "function",
                    "function": {"name": p[1], "arguments": json.dumps(p[2])}}]}

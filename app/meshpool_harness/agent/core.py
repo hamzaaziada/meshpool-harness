@@ -331,7 +331,28 @@ class Agent:
 
     # ---------- public -----------------------------------------------------------------------------------------
     def stop(self):
+        self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
+
+    def _wait(self, fn, *a, **kw):
+        """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
+        second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
+        box: dict = {}
+
+        def run():
+            try:
+                box["v"] = fn(*a, **kw)
+            except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
+                box["e"] = e
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        while t.is_alive():
+            t.join(0.15)
+            if self._stop:
+                raise Interrupted()
+        if "e" in box:
+            raise box["e"]
+        return box["v"]
 
     def steer(self, text: str, images: list | None = None):
         """Add to the request while the agent works. It reads this before its next step."""
@@ -543,7 +564,7 @@ class Agent:
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
-                    resp, streamed = self._post(base, key, body, stream)
+                    resp, streamed = self._wait(self._post, base, key, body, stream)
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -622,6 +643,7 @@ class Agent:
                                               "X-Harness-Task-Id": self.id, "session_id": self.id})
         timeout = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         got_text = False
+        gen = getattr(self, "_gen", 0)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 if not stream:
@@ -630,7 +652,8 @@ class Agent:
                 def tee(lines):
                     nonlocal got_text
                     for raw in lines:
-                        self._check_stop()
+                        if self._stop or getattr(self, "_gen", 0) != gen:
+                            raise Interrupted()
                         line = raw.decode("utf-8", "replace").strip()
                         if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]"):
                             try:
@@ -728,21 +751,23 @@ class Agent:
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
             elif is_mcp:
-                out, err = self.mcp.call(name, args)
+                out, err = self._wait(self.mcp.call, name, args)
                 ok = not err
             elif name == "fetch_url":
-                out = self._fetch(args["url"], args.get("start", 0), args.get("max_chars", 15000), bool(args.get("links")))
+                out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
+                                 bool(args.get("links")))
             elif name == "web_research":
                 from meshpool_harness import web as WEB
                 try:
-                    out = WEB.research(args.get("question", ""), args.get("queries"), args.get("max_sources", 6),
+                    out = self._wait(WEB.research, args.get("question", ""), args.get("queries"), args.get("max_sources", 6),
                                        args.get("recency", ""), args.get("site", ""))
                 except WEB.WebError as e:
                     raise ToolError(str(e))
             elif name == "office_task":
                 out, ok = self._office(args)
             elif name == "web_search":
-                out = self._search(args["query"], args.get("max_results", 8), args.get("recency", ""), args.get("site", ""))
+                out = self._wait(self._search, args["query"], args.get("max_results", 8), args.get("recency", ""),
+                                 args.get("site", ""))
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))
