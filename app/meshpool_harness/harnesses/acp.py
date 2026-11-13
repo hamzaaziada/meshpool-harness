@@ -418,6 +418,7 @@ class ACPAgent:
             if c.get("type") == "text" and c.get("text"):
                 self._emit({"type": "thought", "text": c["text"]})
         elif kind == "tool_call":
+            self._turn_tools = getattr(self, "_turn_tools", 0) + 1
             self._flush_text(has_tools=True)
             tid = u.get("toolCallId") or uuid.uuid4().hex
             self._tools[tid] = u
@@ -578,6 +579,7 @@ class ACPAgent:
         self.usage["calls"] += 1
         try:
             self._emit({"type": "model_start"})
+            self._turn_tools = 0
             self._ensure_session()
             prompt = [{"type": "text", "text": body}]
             if images:
@@ -594,6 +596,16 @@ class ACPAgent:
                 r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
             self._reloaded = False
             final = "".join(self._text)
+            if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
+                    and getattr(self, "_turn_tools", 0) == 0):
+                # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
+                self._text = []
+                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": [
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}]})
+                final = "".join(self._text)
+                if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
+                    self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
+                                                          "answer. Try sending your message again."})
             self._flush_text()
             stop = r.get("stopReason", "end_turn")
             if _auth_failure(final):
