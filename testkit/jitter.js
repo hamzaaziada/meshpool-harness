@@ -32,7 +32,7 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
   // instrument rebuilds after the run has started
   await p.evaluate(() => {
     window.__mut = {side: 0, top: 0, bar: 0, col: 0, panel: 0};
-    const watch = (sel, k) => { const el = document.querySelector(sel); if (!el) return; new MutationObserver(m => { for (const r of m) if (r.type === "childList" && (r.removedNodes.length || r.addedNodes.length)) window.__mut[k]++; }).observe(el, {childList: true, subtree: true}); };
+    const watch = (sel, k) => { const el = document.querySelector(sel); if (!el) return; new MutationObserver(m => { for (const r of m) if (r.type === "childList" && [...r.removedNodes, ...r.addedNodes].some(n => n.nodeType === 1)) window.__mut[k]++; /* elements replaced, not a time label updated */ }).observe(el, {childList: true, subtree: true}); };
     watch("#sideList", "side"); watch("#top", "top"); watch("#bar", "bar"); watch("#col", "col"); watch("#panel", "panel");
     window.__shift = 0; window.__shifts = [];
   });

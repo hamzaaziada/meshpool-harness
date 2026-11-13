@@ -1647,7 +1647,7 @@ async function restartApp() {
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.has_key) showOnboarding();
-  else { loadModels().then(renderBar); if (!store("onbDone") && !store("permsAsked")) permStep(); }
+  else { loadModels().then(renderBar); if (!store("onbDone") && !store("permsAsked") && !S.threads.length) permStep(); }   // set up but onboarding left halfway
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000);
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
