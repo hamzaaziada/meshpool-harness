@@ -517,3 +517,4 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .flink{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);background:var(--surface);color:var(--pool);border-radius:6px;padding:0 6px;font:inherit;font-size:.95em;cursor:pointer;vertical-align:baseline}
 .flink svg{width:13px;height:13px}
 .kdot.bad{background:var(--warn,#C2410C)}
+#tshell{border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);font-size:12px;padding:3px 4px}

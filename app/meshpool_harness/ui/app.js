@@ -19,6 +19,12 @@ function linkFiles(html) {
   const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|xlsx|pptx|pdf|csv|md|html|txt|png|jpe?g|py|js|ts|json))", "g");
   return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Open ${rel}">${ICON.files}${rel}</button>`);
 }
+// Windows: PowerShell, Command Prompt or Git Bash for commands you type; Mac and Linux: your login shell.
+function termShellPicker() {
+  const sh = S.settings?.shells; if (!sh || Object.keys(sh.shells || {}).length < 2) return `<span style="color:var(--ink-3);font-family:var(--mono)">$</span>`;
+  const cur = store("term_shell") || sh.default;
+  return `<select id="tshell" aria-label="Shell" onchange="store('term_shell', this.value)">${Object.entries(sh.shells).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
+}
 function connMsg(d) {
   d = String(d || "");
   if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
@@ -1117,7 +1123,7 @@ async function openFile(root, rel, node) {
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
   S.term = S.term && S.term.root === root ? S.term : {root, html: "", hist: [], hi: 0, id: null};
-  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in"><span style="color:var(--ink-3);font-family:var(--mono)">$</span><input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
+  body.innerHTML = `<pre class="term-out" id="tout">${S.term.html || `<span class="rc">Commands run in ${esc(shortPath(root))}</span>\n`}</pre><div class="term-in">${termShellPicker()}<input id="tin" placeholder="Run a command" spellcheck="false" autocomplete="off"><button class="btn" id="tstop" hidden>Stop</button></div>`;
   const out = $("#tout"), inp = $("#tin"); out.scrollTop = out.scrollHeight; inp.focus();
   const save = () => { S.term.html = out.innerHTML; };
   inp.onkeydown = async e => {
@@ -1129,7 +1135,7 @@ function panelTerm(body) {
     S.term.hist.push(cmd); S.term.hi = S.term.hist.length; inp.value = "";
     out.insertAdjacentHTML("beforeend", `<span class="cmd">$ ${esc(cmd)}</span>\n`);
     try {
-      const t = await post("/api/term", {root, command: cmd}); S.term.id = t.id; $("#tstop").hidden = false;
+      const t = await post("/api/term", {root, command: cmd, shell: store("term_shell") || S.settings?.shells?.default || ""}); S.term.id = t.id; $("#tstop").hidden = false;
       let since = 0;
       const tick = async () => {
         const r = await api(`/api/term/${t.id}?since=${since}`); since = r.next;

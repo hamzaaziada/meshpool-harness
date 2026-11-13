@@ -15,6 +15,7 @@ Meshpool UI events:
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -211,6 +212,9 @@ class ACPAgent:
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
             prepare_hermes()
+        elif m.get("prepare") == "codex":
+            from meshpool_harness.harnesses import prepare_codex
+            prepare_codex()
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -385,6 +389,8 @@ class ACPAgent:
         if kind == "agent_message_chunk":
             c = u.get("content") or {}
             if c.get("type") == "text" and c.get("text"):
+                if re.match(r"\s*Warning: Model metadata for .* not found", c["text"]):
+                    return                         # Codex's own start-up notice about a custom model, not a reply
                 self._text.append(c["text"])
                 self._emit({"type": "text_delta", "text": c["text"]})
         elif kind == "agent_thought_chunk":
@@ -437,9 +443,10 @@ class ACPAgent:
         if self.loaded_from and self.capabilities.get("loadSession"):
             try:
                 self._replaying = True
-                self._request("session/load", {"sessionId": self.loaded_from, "cwd": str(self.root),
-                                               "mcpServers": mcp}, timeout=180)
+                rl = self._request("session/load", {"sessionId": self.loaded_from, "cwd": str(self.root),
+                                                    "mcpServers": mcp}, timeout=180)
                 self.acp_session = self.loaded_from
+                self._ask_mode((rl or {}).get("modes") or {})
                 self._reloaded = True
                 return
             except ACPError:
@@ -454,11 +461,33 @@ class ACPAgent:
                                + (self.manifest.get("setup") or "Run its setup command in a terminal."))
             raise
         self.acp_session = r["sessionId"]
+        self._ask_mode(r.get("modes") or {})
         ms = r.get("models") or {}
         if ms.get("availableModels"):
             self.available_models = [{"id": m.get("modelId"), "name": m.get("name") or m.get("modelId")}
                                      for m in ms["availableModels"] if m.get("modelId")]
         self._apply_model()
+
+    def _ask_mode(self, modes: dict):
+        """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
+        applies the user's permission setting (Supervised, Auto-accept edits, Full access) the same way for every
+        harness. Without this Codex, for one, edits files on its own."""
+        ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
+        self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
+        want = (self.manifest.get("modes") or {}).get(self.mode)        # e.g. Codex: a mode per Meshpool setting
+        pick = want if want in ids else next((i for w in ("default", "ask", "untrusted") for i in ids
+                                              if i.lower() == w), None)
+        if pick and pick != modes.get("currentModeId"):
+            try:
+                self._request("session/set_mode", {"sessionId": self.acp_session, "modeId": pick}, timeout=30)
+                self.mode_now = pick
+            except ACPError:
+                pass
+
+    def apply_mode(self):
+        """The user changed Supervised / Auto-accept edits / Full access: tell a harness that has its own modes."""
+        if self.acp_session and self._p and self._p.poll() is None and getattr(self, "modes_seen", None):
+            self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 
     def _apply_model(self):
         if not (self.model and self.acp_session):

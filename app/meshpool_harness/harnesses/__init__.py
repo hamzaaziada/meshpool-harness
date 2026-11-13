@@ -45,9 +45,20 @@ SUBSCRIPTIONS = [
      "description": ("Best for: terminal and command-line work, on your own ChatGPT Plus, Pro or Business plan (usage "
                     "comes from that plan). Uses your Meshpool connectors, skills and MCP servers.")},
 ]
+# Codex CLI on the Meshpool key: the same official Codex agent (through the same ACP adapter), pointed at the Meshpool
+# endpoint and model by its own config in the Meshpool data folder. No ChatGPT account needed.
+CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "prepare": "codex", "models": "meshpool",
+         # Codex's read-only mode refuses to edit rather than asking; in Workspace access it edits the project and
+         # asks before anything outside it. Meshpool's Undo covers every change.
+         "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
+         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+         "install": "It needs Node.js, which the Meshpool app includes; from the command line, install Node.js first.",
+         "description": ("Best for: terminal and command-line work. OpenAI's open-source Codex agent, running on your "
+                         "Meshpool key and model. It edits files in your project without asking and asks before anything "
+                         "outside it; Undo reverses its changes. On Meshpool's coding test it solved 17 of 20.")}
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
-            "chatgpt-subscription"}
+            "chatgpt-subscription", "codex"}
 HERMES_NOTE = ("Best for: ongoing work where memory matters. Hermes by Nous Research remembers what it learns, "
                "builds its own skills, uses the web, files and terminal, and makes Word, Excel and PowerPoint files. "
                "Bundled with Meshpool; runs on your Meshpool key and model.")
@@ -76,6 +87,27 @@ def _bundled_hermes() -> dict | None:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     return {"id": "hermes", "name": "Hermes", "mode": "cowork", "type": "acp", "default": True, "prepare": "hermes",
             "models": "meshpool", "command": sys.executable, "args": ["-m", "acp_adapter"], "env": env, "description": HERMES_NOTE}
+
+
+def codex_home() -> Path:
+    return C.home() / "codex"
+
+
+def prepare_codex() -> None:
+    """Point Codex at the Meshpool endpoint and model (its own config.toml in the Meshpool data folder). The key is
+    read from MESHPOOL_API_KEY in the environment, never written to the file."""
+    home = codex_home()
+    home.mkdir(parents=True, exist_ok=True)
+    base = os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1"
+    model = os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    if not os.environ.get("MESHPOOL_API_KEY") and os.environ.get("OPENAI_API_KEY"):
+        os.environ["MESHPOOL_API_KEY"] = os.environ["OPENAI_API_KEY"]
+    q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    (home / "config.toml").write_text(
+        f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
+        "\n"
+        f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
+        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
 
 
 def prepare_hermes() -> None:
@@ -184,6 +216,7 @@ def load_all() -> list[dict]:
     if bh:
         out.append(dict(bh, available=True, builtin=True))
     out += [dict(b, available=True, builtin=True) for b in BUILTIN[1:]]
+    out.append(dict(CODEX, env={"CODEX_HOME": str(codex_home())}, available=_available(CODEX), builtin=True))
     for sub in SUBSCRIPTIONS:
         out.append(dict(sub, available=_available(sub), builtin=True, subscription=True,
                         signed_in=signed_in(sub["login"])))
