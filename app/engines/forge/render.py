@@ -1757,15 +1757,37 @@ def a_table_focus(ctx, s, sl, n):
                ctx, n)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
         return
+    # Full width (wide or long table): the bullets go in a measured band under the table, in one or two columns;
+    # what does not fit the band goes to the notes, never silently away.
+    cols, band = [], 0.0
+    if bullets:
+        bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 4, "prov": b.get("prov")}
+              for b in bullets]
+        cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
+        cw = (RIGHT - LEFT - GUT * (len(cols) - 1)) / len(cols)
+        cap = 0.32 * (bottom - y)
+        dropped = []
+        for i, c in enumerate(cols):
+            cols[i], d = _trim_to_fit(c, cw, cap, 11)
+            dropped += d
+        _cut_note(s, dropped)
+        band = max(_need(c, cw) for c in cols) + 0.04
+        bottom -= band + 0.18
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)
     if ctx.carry_rows:
-        ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]),
+        ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]), bullets=[],
                          title=_cont_title(s["title"]), _cont=True)
+    below = min(bottom + 0.04, y + gf.rendered_h + 0.14)
     if tk.get("text"):
-        _write(_box(sl, LEFT, min(bottom + 0.04, y + gf.rendered_h + 0.14), RIGHT - LEFT, 0.3,
-                    "role_subtitle_Takeaway"),
+        _write(_box(sl, LEFT, below, RIGHT - LEFT, 0.3, "role_subtitle_Takeaway"),
                [{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "align": PP_ALIGN.CENTER,
                  "prov": tk.get("prov")}], ctx, n)
+        below += tk_h
+    if cols:
+        _rule(sl, LEFT, below + 0.02, RIGHT - LEFT, TC.TEXT_1, 0.75, "TakeawayRule")
+        cw = (RIGHT - LEFT - GUT * (len(cols) - 1)) / len(cols)
+        for i, c in enumerate(cols):
+            _write(_box(sl, LEFT + i * (cw + GUT), below + 0.1, cw, band, f"Takeaways{i + 1}"), c, ctx, n)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 

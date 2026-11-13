@@ -765,11 +765,23 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         failures.append(F("P4", "font_families", f"{len(faces)} font families ({', '.join(sorted(faces))}); use at most "
                           f"{R['fonts']['max_families']}.", fix_scope="renderer", measured=len(faces),
                           limit=R["fonts"]["max_families"]))
-    for role, hist in m["font_size_hist"].items():
-        if len(hist) > R["fonts"]["max_sizes_per_role"]:
-            failures.append(F("P4", "font_sizes", f"{role} text uses {len(hist)} sizes ({', '.join(hist)}pt); use at most "
-                              f"{R['fonts']['max_sizes_per_role']}.", fix_scope="renderer", measured=len(hist),
-                              limit=R["fonts"]["max_sizes_per_role"]))
+    # sizes per role are counted per density mode: a forge slide tagged "density:<mode>" (or the call's override) is
+    # held to that mode's cap; untagged slides (reference / hand-made decks) share the base cap
+    tag_re = re.compile(R["density"].get("mode_regex") or r"density:([a-z]+)")
+    by_mode: dict = {}
+    for s in slides:
+        mode = s["density"] if (density or tag_re.search(s.get("name") or "")) else None
+        for role, c in (s.get("font_sizes") or {}).items():
+            by_mode.setdefault(mode, {}).setdefault(role, set()).update(c)
+    mode_caps = R["fonts"].get("max_sizes_per_role_by_density") or {}
+    for mode, roles in by_mode.items():
+        for role, sizes in roles.items():
+            cap = (mode_caps.get(mode) or {}).get(role, R["fonts"]["max_sizes_per_role"])
+            if len(sizes) > cap:
+                hist = [str(z) for z in sorted(sizes)]
+                where = f" on {mode}-density slides" if mode else ""
+                failures.append(F("P4", "font_sizes", f"{role} text uses {len(hist)} sizes{where} ({', '.join(hist)}pt); "
+                                  f"use at most {cap}.", fix_scope="renderer", measured=len(hist), limit=cap))
     if R["fonts"]["require_embedding"] and not m["embedded_fonts"]:
         failures.append(F("P4", "fonts_not_embedded", "Fonts are not embedded.", fix_scope="template"))
 
