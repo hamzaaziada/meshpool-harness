@@ -1,0 +1,40 @@
+diff --git a/astropy/units/quantity.py b/astropy/units/quantity.py
+index ded609cbe..6652818f6 100644
+--- a/astropy/units/quantity.py
++++ b/astropy/units/quantity.py
+@@ -297,6 +297,7 @@ class Quantity(np.ndarray, metaclass=InheritDocstrings):
+                     return value
+ 
+                 if not (np.can_cast(np.float32, value.dtype) or
++                        value.dtype == np.float16 or
+                         value.dtype.fields):
+                     dtype = float
+ 
+@@ -378,6 +379,7 @@ class Quantity(np.ndarray, metaclass=InheritDocstrings):
+ 
+         # by default, cast any integer, boolean, etc., to float
+         if dtype is None and (not (np.can_cast(np.float32, value.dtype)
++                                   or value.dtype == np.float16
+                                    or value.dtype.fields)
+                               or value.dtype.kind == 'O'):
+             value = value.astype(float)
+diff --git a/astropy/units/tests/test_quantity.py b/astropy/units/tests/test_quantity.py
+index be18e65c5..0b11147b1 100644
+--- a/astropy/units/tests/test_quantity.py
++++ b/astropy/units/tests/test_quantity.py
+@@ -150,6 +150,15 @@ class TestQuantityCreation:
+         q5 = u.Quantity(decimal.Decimal('10.25'), u.m, dtype=object)
+         assert q5.dtype == object
+ 
++        # ensure we do not upcast a float16 to float64 (or float32/complex
++        # to float64); see gh-8873.
++        for value in (np.float16(1.), np.array([1., 2.], dtype=np.float16)):
++            q6 = u.Quantity(value, u.m)
++            assert q6.dtype == np.float16
++            # also when the value is already a Quantity.
++            assert u.Quantity(q6).dtype == np.float16
++            assert u.Quantity(q6, copy=False).dtype == np.float16
++
+     def test_copy(self):
+ 
+         # By default, a new quantity is constructed, but not if copy=False

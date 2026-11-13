@@ -1,0 +1,37 @@
+diff --git a/xarray/core/dataarray.py b/xarray/core/dataarray.py
+index b0df8749..dd41296e 100755
+--- a/xarray/core/dataarray.py
++++ b/xarray/core/dataarray.py
+@@ -1963,6 +1963,12 @@ class DataArray(AbstractArray, DataWithCoords):
+         for k in variables:
+             data_dict[k] = self.sel({variable_dim: k}).squeeze(drop=True)
+ 
++        # drop the stacked coordinate, which is retained as a scalar
++        # coordinate when the MultiIndex has a single level (#4094)
++        data_dict = {
++            k: v.drop_vars(dim, errors="ignore") for k, v in data_dict.items()
++        }
++
+         # unstacked dataset
+         return Dataset(data_dict)
+ 
+diff --git a/xarray/tests/test_dataset.py b/xarray/tests/test_dataset.py
+index 9c8d4072..75eef438 100755
+--- a/xarray/tests/test_dataset.py
++++ b/xarray/tests/test_dataset.py
+@@ -3055,6 +3055,15 @@ class TestDataset:
+         x = y.to_unstacked_dataset("features")
+         assert_identical(D, x)
+ 
++    def test_to_stacked_array_to_unstacked_dataset_single_dimension(self):
++        # test when variables only have a single dimension
++        arr = xr.DataArray(np.arange(3), coords=[("x", [0, 1, 2])])
++        D = xr.Dataset({"a": arr, "b": arr})
++
++        y = D.to_stacked_array("y", sample_dims=["x"])
++        x = y.to_unstacked_dataset("y")
++        assert_identical(D, x)
++
+     def test_update(self):
+         data = create_test_data(seed=0)
+         expected = data.copy()

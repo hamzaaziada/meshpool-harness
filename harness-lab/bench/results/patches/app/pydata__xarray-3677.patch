@@ -1,18 +1,21 @@
 diff --git a/xarray/core/merge.py b/xarray/core/merge.py
-index 10c7804d..d96ee121 100644
+index 10c7804d..4058ff36 100644
 --- a/xarray/core/merge.py
 +++ b/xarray/core/merge.py
-@@ -387,6 +387,8 @@ def coerce_pandas_values(objects: Iterable["CoercibleMapping"]) -> List["Dataset
-     for obj in objects:
-         if isinstance(obj, Dataset):
-             variables: "DatasetLike" = obj
-+        elif isinstance(obj, DataArray):
-+            variables = {obj.name: obj}
-         else:
-             variables = {}
-             if isinstance(obj, PANDAS_TYPES):
+@@ -809,6 +809,11 @@ def dataset_merge_method(
+     # method due for backwards compatibility
+     # TODO: consider deprecating it?
+ 
++    from .dataarray import DataArray
++
++    if isinstance(other, DataArray):
++        other = other.to_dataset()
++
+     if isinstance(overwrite_vars, Iterable) and not isinstance(overwrite_vars, str):
+         overwrite_vars = set(overwrite_vars)
+     else:
 diff --git a/xarray/tests/test_merge.py b/xarray/tests/test_merge.py
-index c1e6c7a5..afb27ac0 100644
+index c1e6c7a5..de7deef8 100644
 --- a/xarray/tests/test_merge.py
 +++ b/xarray/tests/test_merge.py
 @@ -159,6 +159,13 @@ class TestMergeMethod:
@@ -22,8 +25,8 @@ index c1e6c7a5..afb27ac0 100644
 +    def test_merge_dataarray(self):
 +        ds = xr.Dataset({"a": 0})
 +        da = xr.DataArray(1, name="b")
++        expected = xr.merge([ds, da])
 +        actual = ds.merge(da)
-+        expected = xr.Dataset({"a": 0, "b": 1})
 +        assert expected.identical(actual)
 +
      def test_merge_broadcast_equals(self):

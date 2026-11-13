@@ -29,7 +29,39 @@ Computer use, MiniWoB++, 10 dev tasks (second round; the browser tool with the f
 | Pi | 9/10 | $0.0014 | 22.5 s |
 | Codex CLI | 9/10 | $0.0025 | 23.3 s |
 
-Terminal-Bench 2.0 is running; results will be added here.
+Terminal-Bench 2.0, 4 dev tasks: v5 3/4, Meshpool Code 2/4, Codex 1/4, Pi 1/4. Codex and Pi crashed on two tasks
+when the gateway's content filter rejected hex output. Four tasks is too few to rank on; the rest was cut for budget.
+
+## App agent on the frozen test tasks (13 November 2026)
+
+SWE-bench Verified, 20 frozen test tasks, all agents at the same time, one run each:
+
+| Agent | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Pi | 19/20 | $0.0069 | 95 s |
+| Meshpool Code (app agent) | 18/20 | $0.0079 | 133 s |
+| Codex CLI | 17/20 | $0.0101 | 121 s |
+| Meshpool Harness v5 (engine loop) | 17/20 | $0.0093 | 184 s |
+
+Codex reported no usage on 2 of 20 runs; its cost is scaled from the other 18. Meshpool Code beats Codex on solves
+and cost but not time. Pi leads on all three. The gap to Pi (one task, $0.001 per solved) is inside run-to-run noise
+but it is in Pi's favour, so we do not claim a lead.
+
+## Code tools A/B (13 November 2026, 10 Verified dev tasks)
+
+`MH_OBSERVE` adds `probe` and `trace`; "x" arms add `MH_NAV` and `MH_LINT_EDIT` too.
+
+| Arm | Solved | $ per solved | Time per solved |
+|---|---|---|---|
+| Meshpool Code (app agent) | 10/10 | $0.0069 | 98 s |
+| app + all three tools | 9/10 | $0.0089 | 125 s |
+| v5 (engine loop) | 6/10 | $0.0294 | 235 s |
+| v5 + observe | 9/10 | $0.0180 | 158 s |
+| v5 + all three tools | 7/10 | $0.0278 | 244 s |
+
+Observe helped the engine loop (+3 tasks, 39% cheaper per solve). It did not help the app agent, which already
+solved all 10. Navigation and the edit check added calls without adding solves. All three stay off until observe is
+confirmed on test tasks.
 
 ## How the agents were measured
 

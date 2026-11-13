@@ -1,66 +1,48 @@
 diff --git a/django/db/models/query.py b/django/db/models/query.py
-index d9c9b0db04..32ba12f308 100644
+index d9c9b0db04..34bffe0593 100644
 --- a/django/db/models/query.py
 +++ b/django/db/models/query.py
-@@ -690,7 +690,14 @@ class QuerySet:
+@@ -690,7 +690,10 @@ class QuerySet:
          assert not self.query.is_sliced, \
              "Cannot use 'limit' or 'offset' with in_bulk"
          if field_name != 'pk' and not self.model._meta.get_field(field_name).unique:
 -            raise ValueError("in_bulk()'s field_name must be a unique field but %r isn't." % field_name)
-+            unique_together = self.model._meta.unique_together
-+            unique_constraints = self.model._meta.total_unique_constraints
-+            if not any(field_name in fields for fields in unique_together) and not any(
-+                field_name in constraint.fields for constraint in unique_constraints
-+            ):
-+                raise ValueError(
-+                    "in_bulk()'s field_name must be a unique field but %r isn't." % field_name
-+                )
++            fields = self.model._meta.unique_together
++            fields += tuple(constraint.fields for constraint in self.model._meta.total_unique_constraints)
++            if (field_name,) not in fields:
++                raise ValueError("in_bulk()'s field_name must be a unique field but %r isn't." % field_name)
          if id_list is not None:
              if not id_list:
                  return {}
 diff --git a/tests/lookup/models.py b/tests/lookup/models.py
-index fbc9fa606f..c446c7141d 100644
+index fbc9fa606f..58ac9dbf99 100644
 --- a/tests/lookup/models.py
 +++ b/tests/lookup/models.py
-@@ -45,6 +45,16 @@ class Tag(models.Model):
-         ordering = ('name',)
+@@ -67,6 +67,12 @@ class Season(models.Model):
+     gt = models.IntegerField(null=True, blank=True)
+     nulled_text_field = NulledTextField(null=True)
  
- 
-+class UniqueConstraintArticle(models.Model):
-+    headline = models.CharField(max_length=100)
-+    slug = models.SlugField(blank=True, null=True)
-+
 +    class Meta:
 +        constraints = [
-+            models.UniqueConstraint(fields=['slug'], name='lookup_unique_slug'),
++            models.UniqueConstraint(fields=['year'], name='season_year_unique'),
++            models.UniqueConstraint(fields=['year', 'gt'], name='season_year_gt_unique'),
 +        ]
 +
-+
- class NulledTextField(models.TextField):
-     def get_prep_value(self, value):
-         return None if value == '' else value
+     def __str__(self):
+         return str(self.year)
+ 
 diff --git a/tests/lookup/tests.py b/tests/lookup/tests.py
-index baefdf9701..7314f54dc4 100644
+index baefdf9701..215c0e407b 100644
 --- a/tests/lookup/tests.py
 +++ b/tests/lookup/tests.py
-@@ -12,6 +12,7 @@ from django.utils.deprecation import RemovedInDjango40Warning
- 
- from .models import (
-     Article, Author, Freebie, Game, IsNullWithNoneAsRHS, Player, Season, Tag,
-+    UniqueConstraintArticle,
- )
- 
- 
-@@ -194,6 +195,13 @@ class LookupTests(TestCase):
+@@ -194,6 +194,11 @@ class LookupTests(TestCase):
          with self.assertRaisesMessage(ValueError, msg):
              Article.objects.in_bulk([self.au1], field_name='author')
  
-+    def test_in_bulk_with_unique_constraint_field(self):
-+        article = UniqueConstraintArticle.objects.create(headline='Hello', slug='hello')
-+        self.assertEqual(
-+            UniqueConstraintArticle.objects.in_bulk(['hello'], field_name='slug'),
-+            {'hello': article},
-+        )
++    def test_in_bulk_with_unique_constraint(self):
++        season = Season.objects.create(year=2020)
++        self.assertEqual(Season.objects.in_bulk([2020], field_name='year'), {2020: season})
++        self.assertEqual(Season.objects.in_bulk(field_name='year'), {2020: season})
 +
      def test_values(self):
          # values() returns a list of dictionaries instead of object instances --

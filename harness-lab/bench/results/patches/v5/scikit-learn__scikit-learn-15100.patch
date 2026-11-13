@@ -1,50 +1,31 @@
-diff --git a/doc/whats_new/v0.22.rst b/doc/whats_new/v0.22.rst
-index a2d4a8dac..65a343387 100644
---- a/doc/whats_new/v0.22.rst
-+++ b/doc/whats_new/v0.22.rst
-@@ -255,6 +255,11 @@ Changelog
-   removed in v0.24. :pr:`14520` by
-   :user:`Guillem G. Subies <guillemgsubies>`.
- 
-+- |Fix| :func:`feature_extraction.text.strip_accents_unicode` now strips
-+  accents from strings that are already in NFKD (decomposed) form, instead of
-+  returning them unchanged.
-+  :pr:`15100` by :user:`Daniel Grady <dgrady3>`.
-+
- :mod:`sklearn.feature_selection`
- ................................
- 
 diff --git a/sklearn/feature_extraction/tests/test_text.py b/sklearn/feature_extraction/tests/test_text.py
-index 7b7697ff4..f60cf41d2 100644
+index 7b7697ff4..63672e53d 100644
 --- a/sklearn/feature_extraction/tests/test_text.py
 +++ b/sklearn/feature_extraction/tests/test_text.py
-@@ -97,6 +97,21 @@ def test_strip_accents():
-     expected = 'this is a test'
+@@ -98,6 +98,18 @@ def test_strip_accents():
      assert strip_accents_unicode(a) == expected
  
-+    # strings that are already decomposed
-+    a = "o\u0308"  # o + combining diaeresis
-+    expected = "o"
-+    assert strip_accents_unicode(a) == expected
-+
-+    # combining marks by themselves
-+    a = "\u0300\u0301"  # combining grave and combining acute
-+    expected = ""
-+    assert strip_accents_unicode(a) == expected
-+
-+    # decomposition of the ffi ligature
-+    a = "\ufb03"
-+    expected = "ffi"
-+    assert strip_accents_unicode(a) == expected
-+
  
++def test_strip_accents_unicode_normalization():
++    # Non-regression test for accents already in NFKD form, see gh-15100.
++    # "LATIN SMALL LETTER N" followed by "COMBINING TILDE", visually "n~"
++    decomposed = chr(110) + chr(771)
++    # "LATIN SMALL LETTER N WITH TILDE", visually "n~"
++    precomposed = chr(241)
++    assert strip_accents_unicode(decomposed) == 'n'
++    assert strip_accents_unicode(precomposed) == 'n'
++    assert (strip_accents_unicode(decomposed) ==
++            strip_accents_unicode(precomposed))
++
++
  def test_to_ascii():
      # check some classical latin accentuated symbols
+     a = 'àáâãäåçèéêë'
 diff --git a/sklearn/feature_extraction/text.py b/sklearn/feature_extraction/text.py
-index bb5a9d646..11236d958 100644
+index bb5a9d646..ffd1e2b64 100644
 --- a/sklearn/feature_extraction/text.py
 +++ b/sklearn/feature_extraction/text.py
-@@ -130,10 +130,7 @@ def strip_accents_unicode(s):
+@@ -130,10 +130,8 @@ def strip_accents_unicode(s):
          ASCII equivalent.
      """
      normalized = unicodedata.normalize('NFKD', s)
@@ -52,7 +33,8 @@ index bb5a9d646..11236d958 100644
 -        return s
 -    else:
 -        return ''.join([c for c in normalized if not unicodedata.combining(c)])
-+    return ''.join([c for c in normalized if not unicodedata.combining(c)])
++    return ''.join([c for c in normalized if
++                    not unicodedata.combining(c)])
  
  
  def strip_accents_ascii(s):

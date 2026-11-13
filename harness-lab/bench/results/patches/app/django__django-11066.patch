@@ -11,3 +11,42 @@ index 2b5f688136..563cba2fdf 100644
              except IntegrityError:
                  # Gracefully fallback if a stale content type causes a
                  # conflict as remove_stale_contenttypes will take care of
+diff --git a/tests/contenttypes_tests/test_operations.py b/tests/contenttypes_tests/test_operations.py
+index bdf492fe2a..f915c167c3 100644
+--- a/tests/contenttypes_tests/test_operations.py
++++ b/tests/contenttypes_tests/test_operations.py
+@@ -7,6 +7,11 @@ from django.db import migrations, models
+ from django.test import TransactionTestCase, override_settings
+ 
+ 
++class TestRouter:
++    def db_for_write(self, model, **hints):
++        return 'default'
++
++
+ @override_settings(
+     MIGRATION_MODULES=dict(
+         settings.MIGRATION_MODULES,
+@@ -14,6 +19,7 @@ from django.test import TransactionTestCase, override_settings
+     ),
+ )
+ class ContentTypeOperationsTests(TransactionTestCase):
++    databases = {'default', 'other'}
+     available_apps = [
+         'contenttypes_tests',
+         'django.contrib.contenttypes',
+@@ -64,3 +70,14 @@ class ContentTypeOperationsTests(TransactionTestCase):
+         call_command('migrate', 'contenttypes_tests', 'zero', database='default', interactive=False, verbosity=0)
+         self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='foo').exists())
+         self.assertTrue(ContentType.objects.filter(app_label='contenttypes_tests', model='renamedfoo').exists())
++
++    @override_settings(DATABASE_ROUTERS=[TestRouter()])
++    def test_existing_content_type_rename_other_database(self):
++        ContentType.objects.using('other').create(app_label='contenttypes_tests', model='foo')
++        other_content_types = ContentType.objects.using('other').filter(app_label='contenttypes_tests')
++        call_command('migrate', 'contenttypes_tests', database='other', interactive=False, verbosity=0)
++        self.assertFalse(other_content_types.filter(model='foo').exists())
++        self.assertTrue(other_content_types.filter(model='renamedfoo').exists())
++        call_command('migrate', 'contenttypes_tests', 'zero', database='other', interactive=False, verbosity=0)
++        self.assertTrue(other_content_types.filter(model='foo').exists())
++        self.assertFalse(other_content_types.filter(model='renamedfoo').exists())
