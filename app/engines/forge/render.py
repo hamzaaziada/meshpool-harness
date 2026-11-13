@@ -1131,7 +1131,7 @@ def normalize(s: dict) -> dict:
 
 REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
-            "waterfall_bridge": ["chart"], "stacked_composition": ["chart"]}
+            "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "grid": ["parts"]}
 
 
 def chart_problems(c: dict) -> list[str]:
@@ -1239,6 +1239,9 @@ def schema_errors(s: dict) -> list[str]:
     """Precise, fixable messages for the repair loop."""
     a = s.get("archetype")
     errs = [f"'{k}' is missing or empty (required for {a})" for k in REQUIRED.get(a, []) if not s.get(k)]
+    if a == "grid":                                   # parts library: each part is checked on its own
+        from .parts import grid_errors
+        return errs + grid_errors(s)
     t = s.get("table")
     if a in ("table_focus", "table_highlight") and isinstance(t, dict):
         if len(t.get("rows") or []) < 3:
@@ -1269,6 +1272,9 @@ def schema_errors(s: dict) -> list[str]:
 def fallback(s: dict) -> dict:
     """When a slide cannot satisfy its archetype, render the evidence it has in the simplest faithful layout."""
     s = dict(s)
+    if s.get("archetype") == "grid":
+        from .parts import grid_fallback
+        return grid_fallback(s)
     c = s.get("chart") or {}
     if c and chart_problems(c):                        # a misleading chart becomes a stat stack, layout kept
         st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
@@ -1779,11 +1785,19 @@ def a_waterfall_bridge(ctx, s, sl, n):
     a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="waterfall")), sl, n)
 
 
+def a_grid(ctx, s, sl, n):
+    """A slide assembled from parts (chart, table, stats, text, callout, process, timeline, matrix2x2, harvey, quote)
+    on a grid layout; see parts.py. Imported here, not at the top, because parts.py imports this module."""
+    from .parts import a_grid as _a_grid
+    return _a_grid(ctx, s, sl, n)
+
+
 ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divider": a_cover, "challenge_matrix": a_challenge_matrix,
               "text_matrix": a_challenge_matrix, "exhibit_argument": a_exhibit_argument, "table_focus": a_table_focus,
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
-              "waterfall_bridge": a_waterfall_bridge, "closing": a_closing, "next_steps": a_closing, "end": a_cover}
+              "waterfall_bridge": a_waterfall_bridge, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
+              "grid": a_grid}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 

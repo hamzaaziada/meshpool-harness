@@ -181,7 +181,8 @@ def find_mcp() -> list[dict]:
     return out
 
 
-def import_mcp(name: str, spec: dict) -> str:
+def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
+    """Add a server to Meshpool's mcp.json under a free name (an identical entry keeps its name); returns the name."""
     from meshpool_harness.agent import mcp as M
     p = M.config_file()
     try:
@@ -193,7 +194,7 @@ def import_mcp(name: str, spec: dict) -> str:
     n, i = base, 2
     while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
         n, i = f"{base}-{i}", i + 1
-    servers[n] = dict(spec, description=f"Imported from another app ({name}).")
+    servers[n] = dict(spec, description=description or f"Imported from another app ({name}).")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return n
