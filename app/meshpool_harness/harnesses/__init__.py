@@ -57,7 +57,7 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "prepare
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-subscription",
             "chatgpt-subscription", "codex"}
-HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across threads, uses "
+HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
 
 

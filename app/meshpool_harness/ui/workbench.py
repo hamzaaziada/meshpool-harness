@@ -495,7 +495,7 @@ def usage() -> dict:
         for k in ("in", "cached", "out", "calls"):
             bm[k] += int(u.get(k) or 0)
         bm["threads"] += 1
-        rows.append({"id": d.get("id"), "title": d.get("title") or "New thread", "model": m,
+        rows.append({"id": d.get("id"), "title": d.get("title") or "New chat", "model": m,
                      "updated": d.get("updated", 0), **{k: int(u.get(k) or 0) for k in total}})
     rows.sort(key=lambda r: -r["updated"])
     return {"total": total, "by_model": by_model, "threads": rows[:200]}

@@ -130,8 +130,8 @@ def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
     or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
     t = str(text or "").split("\u200b")[0].strip()
-    if not t or t in ("New thread", "Session"):
-        return t or "New thread"
+    if not t or t in ("New thread", "New chat", "Session"):
+        return "New chat" if t in ("", "New thread") else t
     t = t.splitlines()[0]
     t = re.sub(r"https?://\S+", "", t)
     t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
@@ -143,7 +143,7 @@ def nice_title(text: str) -> str:
         t = full
     t = re.sub(r"\s+", " ", t)
     if not t:
-        return "New thread"
+        return "New chat"
     if len(t) > 48:
         cut = t[:48].rsplit(" ", 1)[0]
         t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
@@ -506,7 +506,7 @@ class Session:
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
-            raise ValueError("No checkpoints for this thread.")
+            raise ValueError("No checkpoints for this chat.")
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
@@ -683,12 +683,12 @@ def listing() -> list:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            rows[d["id"]] = {"id": d["id"], "title": nice_title(d.get("title") or "New thread"), "workdir": d.get("workdir"),
+            rows[d["id"]] = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
                              "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
                              "harness": d.get("harness") or "meshpool-code", "model": d.get("model")}
     with LOCK:
         for sid, s in LIVE.items():
-            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New thread"), "workdir": s.workdir,
+            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New chat"), "workdir": s.workdir,
                          "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
@@ -729,7 +729,7 @@ def thread_action(sid: str, body: dict) -> dict:
         if d.is_dir() and d.parent == SESSIONS:
             shutil.rmtree(d, ignore_errors=True)
     else:
-        raise ValueError("Unknown thread action.")
+        raise ValueError("Unknown chat action.")
     return {"ok": True}
 
 
@@ -753,7 +753,7 @@ def search(q: str) -> list:
             continue
         if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
-        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New thread")
+        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New chat")
         # Search what the user reads (titles, messages, replies), not the saved JSON around it.
         texts = [title]
         for m in d.get("messages") or []:
