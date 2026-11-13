@@ -286,8 +286,10 @@ def _find_root(d: Path) -> Path:
     subs = [x for x in d.iterdir() if x.is_dir() and x.name not in SKIP_DIRS]
     if len(subs) == 1 and (_is_plugin(subs[0]) or _marketplace_file(subs[0])):
         return subs[0]
-    for cp in sorted(d.rglob(".claude-plugin"), key=lambda p: len(p.parts)):
-        return cp.parent
+    for depth in ("*/.claude-plugin", "*/*/.claude-plugin", "*/*/*/.claude-plugin"):   # bounded: never a whole disk
+        hits = sorted(p for p in d.glob(depth) if p.is_dir() and not any(x in SKIP_DIRS for x in p.parts))
+        if hits:
+            return hits[0].parent
     raise ValueError("No plugin found: expected .claude-plugin/plugin.json, a skills folder or a .mcp.json.")
 
 
@@ -402,13 +404,28 @@ def _prefixed(plugin: str, name: str) -> str:
     return n if n == plugin or n.startswith(plugin + "-") else SK.slug(f"{plugin}-{n}")
 
 
+def _front_blocks(text: str) -> list[tuple[str, list[str]]]:
+    """Front-matter lines grouped by key: (key, [the key line and its indented continuation lines])."""
+    end = text.find("\n---", 3) if text.startswith("---") else -1
+    blocks: list[tuple[str, list[str]]] = []
+    for ln in (text[3:end].splitlines() if end != -1 else []):
+        if ln.strip() and not ln.startswith((" ", "\t")) and ":" in ln:
+            blocks.append((ln.split(":", 1)[0].strip(), [ln]))
+        elif ln.strip() and blocks:
+            blocks[-1][1].append(ln)
+    return blocks
+
+
 def _set_front(text: str, **kv) -> str:
-    """Replace or add front-matter keys (name, description) in a SKILL.md."""
-    meta, body = SK.parse(text)
-    keep = []
-    if text.startswith("---") and text.find("\n---", 3) != -1:
-        keep = [ln for ln in text[3:text.find("\n---", 3)].splitlines()
-                if ln.strip() and ln.split(":", 1)[0].strip() not in kv]
+    """Replace or add front-matter keys (name, description) in a SKILL.md; a folded or block value (description: >)
+    becomes one line."""
+    _, body = SK.parse(text)
+    blocks = _front_blocks(text)
+    for k, v in list(kv.items()):
+        old = next((lines for key, lines in blocks if key == k), None)
+        if old and str(v).strip() in (">", "|", ">-", "|-", ">+", "|+"):
+            kv[k] = " ".join(x.strip() for x in old[1:]) or k
+    keep = [ln for key, lines in blocks if key not in kv for ln in lines]
     lines = [f"{k}: {v}" for k, v in kv.items() if v] + keep
     return "---\n" + "\n".join(lines) + "\n---\n\n" + body
 
