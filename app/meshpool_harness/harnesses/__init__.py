@@ -137,6 +137,9 @@ def prepare_hermes() -> None:
     sec = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
     sec["allow_lazy_installs"] = False          # no pip downloads at runtime; never write into the signed app
     cfg["security"] = sec
+    ap = cfg.get("approvals") if isinstance(cfg.get("approvals"), dict) else {}
+    ap["mode"] = "manual"                       # every command comes to Meshpool, which applies the user's setting;
+    cfg["approvals"] = ap                       # Hermes's own "smart" mode auto-approved deletes
     try:
         from meshpool_harness import skills as SK
         SK.sync_to(home / "skills" / "meshpool")           # the user's Meshpool skills, for Hermes too
