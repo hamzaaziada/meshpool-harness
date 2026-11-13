@@ -94,8 +94,8 @@ def _image_text(images: list) -> str:
         return ""
 
 
-_FILLER = re.compile(r"^(?:hi|hello|hey)[,!. ]+|^(?:please|pls|can you|could you|would you|i want you to|i need you to|"
-                     r"i'd like you to|help me)\s+", re.I)
+_FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|i need you to|i'd like you to)\s+",
+                     re.I)
 
 
 def nice_title(text: str) -> str:

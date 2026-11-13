@@ -26,6 +26,7 @@ FIELDS = [
     ("MH_WIRE", "Connection type", "chat", "How Meshpool talks to the endpoint. Leave it on Standard unless "
                                            "your provider says otherwise."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
+    ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your subscriptions", "0",
      "On: Meshpool Auto may pick Claude or ChatGPT on your own plan (it uses that plan's limits). "
      "Off: Auto only uses your Meshpool key."),

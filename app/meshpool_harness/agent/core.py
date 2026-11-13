@@ -507,7 +507,15 @@ class Agent:
                 else "Send a message to continue.")})
         except Exception as e:
             self._repair()
-            self.emit({"type": "error", "text": f"{e}"})
+            msg = str(e)
+            if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
+                msg = ("Couldn't reach the model. Check your internet connection, or the endpoint in Settings, then "
+                       "send your message again.")
+            elif re.search(r"HTTP 429", msg):
+                msg = "The model is busy right now. Wait a minute, then send your message again."
+            elif re.search(r"HTTP 5\d\d", msg):
+                msg = "The model service had a problem. Send your message again in a moment."
+            self.emit({"type": "error", "text": msg})
         finally:
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
             self.save()
@@ -748,7 +756,9 @@ class Agent:
                     "analyze_data": "Analyse data"}.get(tool) or ("Use " + tool.replace("_", " ") + " ("
                                                               + name.split('__')[1].replace("_", " ") + ")")
             kind, title = "mcp", f"{nice}{' ' + target if target else ''}?"
-            detail = json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+            body = args.get("markdown") or args.get("request") or args.get("content")
+            detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
+                      else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
         decision, note = self.approve(kind, title, detail)
         if decision == "always":
             self.always.add(group)

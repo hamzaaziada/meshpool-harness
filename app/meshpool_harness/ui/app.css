@@ -92,7 +92,10 @@ code,pre,kbd{font-family:var(--mono)}
 .th:hover .more,.th.on .more{display:inline-grid}
 .th:hover .tm{display:none}
 .dot{width:7px;height:7px;border-radius:50%;flex:none;background:transparent}
-.dot.run{background:var(--pool);animation:pulse 1.2s infinite}
+.dot.run{background:var(--ink-3);animation:mp-breathe 1.6s ease-in-out infinite}
+.dot.done{background:var(--pool);box-shadow:0 0 0 3px var(--pool-soft);animation:mp-lightup .5s ease-out both}
+@keyframes mp-breathe{0%,100%{opacity:.25}50%{opacity:1}}
+@keyframes mp-lightup{0%{opacity:0;transform:scale(.4)}60%{opacity:1;transform:scale(1.25)}100%{transform:scale(1)}}
 .dot.wait{background:var(--warn)}
 @keyframes pulse{50%{opacity:.35}}
 .empty-side{color:var(--ink-3);font-size:12.5px;padding:8px}
@@ -274,7 +277,7 @@ button.chip:hover{border-color:var(--ink-3);color:var(--ink)}
 .term-out{flex:1;margin:0;padding:10px 12px;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-all;background:var(--bg);overflow:auto}
 .term-out .cmd{color:var(--pool)}
 .term-out .rc{color:var(--ink-3)}
-.term-in{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line-2);align-items:center}
+.term-in{display:flex;gap:8px;padding:8px 10px;border-top:1px solid var(--line-2);align-items:center}
 .term-in input{flex:1;border:1px solid var(--line);border-radius:var(--r-s);padding:6px 9px;font:12.5px var(--mono);background:var(--surface)}
 .preview{flex:1;border:0;width:100%;background:#fff}
 .gitbox{padding:12px;display:flex;flex-direction:column;gap:12px}
@@ -344,14 +347,15 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .bigbtn{background:var(--ink);color:var(--bg);border:0;border-radius:999px;padding:10px 22px;font-weight:500}
 .bigbtn:hover{background:var(--pool);color:var(--pool-ink)}
 .bigbtn:disabled{opacity:.45}
-.toasts{position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:70;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
+.toasts{position:fixed;bottom:96px;right:20px;left:auto;transform:none!important;align-items:flex-end;transform:translateX(-50%);z-index:70;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none}
 .toast{background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:999px;font-size:13px;z-index:70;box-shadow:var(--shadow)}
 .ctx{position:fixed;z-index:55;background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);box-shadow:var(--shadow);padding:4px;min-width:170px}
 .ctx button{display:block;width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:6px 10px;font-size:13px;color:var(--ink)}
 .ctx button:hover{background:var(--hover)}
 .ctx button.danger{color:var(--del)}
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide (QA: 250px at 1024) */
-@media (max-width:1439px) and (min-width:981px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;width:min(var(--pw,460px),45vw);box-shadow:var(--shadow)}}
+.app.autoside{--sw:0px}.app.autoside .side{display:none}
+@media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),42vw)}}
 @media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow)}}
 @media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:268px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 10px 10px}}
 
@@ -518,3 +522,11 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .flink svg{width:13px;height:13px}
 .kdot.bad{background:var(--warn,#C2410C)}
 #tshell{border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-2);font-size:12px;padding:3px 4px}
+
+.modesw [data-mode].busy::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--pool);margin-left:6px;display:inline-block;animation:pulse 1.2s ease-in-out infinite}
+.jumpdown{position:absolute;right:24px;bottom:12px;z-index:5;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;padding:5px 12px;font-size:12.5px;box-shadow:var(--shadow);cursor:pointer}
+.jumpdown[hidden]{display:none}
+.conv{position:relative}
+.onb .bigbtn{background:var(--pool);color:var(--pool-ink)}
+.pop .opt .od{white-space:normal}
+.statgrid+table th,.utable th{text-align:left}
