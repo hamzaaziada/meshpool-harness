@@ -31,6 +31,23 @@ def _brief(task: str, workdir: str, files: list[str] | None) -> str:
     return "\n".join(parts)
 
 
+def theme_from(task: str):
+    """'ocean theme', 'palette: forest', 'sans fonts', 'accent #7C3AED' in the request -> a theme spec (or None)."""
+    from engines.forge.template import FONT_PAIRS, PALETTES
+    t = task.lower()
+    spec = {}
+    m = re.search(r"\b(" + "|".join(PALETTES) + r")\b\s*(?:theme|palette|colou?rs?|look)|(?:theme|palette|colou?rs?)\s*[:=]?\s*(" + "|".join(PALETTES) + r")\b", t)
+    if m:
+        spec["palette"] = m.group(1) or m.group(2)
+    f = re.search(r"\b(" + "|".join(FONT_PAIRS) + r")\s*fonts?\b|fonts?\s*[:=]?\s*(" + "|".join(FONT_PAIRS) + r")\b", t)
+    if f:
+        spec["fonts"] = f.group(1) or f.group(2)
+    a = re.search(r"accent\s*(?:colou?r)?\s*[:=]?\s*#?([0-9a-f]{6})\b", t)
+    if a:
+        spec["accent1"] = a.group(1)
+    return spec or None
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, **_) -> dict:
     from engines.forge.build import build
@@ -38,7 +55,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         os.environ.setdefault("FORGE_MODEL", model)
     m = re.search(r"\b(\d{1,2})[- ]slide", task)
     slides = int(m.group(1)) if m else 10
-    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id)
+    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id, theme=theme_from(task))
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
