@@ -1,1 +1,6 @@
 key spend at start: $2.82e-05
+v5:OK 246.2s $0.0298 | v5o:OK 296.8s $0.0391 | v5x:OK 289.6s $0.0326 | app:OK 168.6s $0.0113 | appx:OK 181.2s $0.0135 <- sphinx-doc__sphinx-10449
+v5:OK 82.8s $0.0103 | v5o:OK 140.2s $0.0114 | v5x:OK 118.3s $0.0124 | app:OK 136.2s $0.0077 | appx:OK 253.2s $0.0117 <- pytest-dev__pytest-7490
+v5:x 313.1s $0.0303 | v5o:OK 315.1s $0.0245 | v5x:x 358.1s $0.0392 | app:OK 250.0s $0.0162 | appx:OK 225.4s $0.0165 <- django__django-15098
+key spend at start: $0.6655255440000002
+key spend at start: $0.6655255440000002

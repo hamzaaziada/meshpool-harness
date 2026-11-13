@@ -1,0 +1,99 @@
+diff --git a/django/urls/resolvers.py b/django/urls/resolvers.py
+index 6ea18dd22f..df70a009bc 100644
+--- a/django/urls/resolvers.py
++++ b/django/urls/resolvers.py
+@@ -24,6 +24,7 @@ from django.utils.functional import cached_property
+ from django.utils.http import RFC3986_SUBDELIMS, escape_leading_slashes
+ from django.utils.regex_helper import _lazy_re_compile, normalize
+ from django.utils.translation import get_language
++from django.utils.translation.trans_real import language_code_prefix_re
+ 
+ from .converters import get_converter
+ from .exceptions import NoReverseMatch, Resolver404
+@@ -321,9 +322,14 @@ class LocalePrefixPattern:
+             return '%s/' % language_code
+ 
+     def match(self, path):
+-        language_prefix = self.language_prefix
+-        if path.startswith(language_prefix):
+-            return path[len(language_prefix):], (), {}
++        if path.startswith(self.language_prefix):
++            return path[len(self.language_prefix):], (), {}
++        # The language prefix may contain a script and/or a region subtag
++        # (e.g. "en-latn-us"), so check the path against the full language
++        # code format before giving up (#33330).
++        regex_match = language_code_prefix_re.match(path)
++        if regex_match:
++            return path[len(regex_match[1]) + 1:], (), {}
+         return None
+ 
+     def check(self):
+diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py
+index 7dcc77b46c..2d2eb8ad26 100644
+--- a/django/utils/translation/trans_real.py
++++ b/django/utils/translation/trans_real.py
+@@ -43,7 +43,7 @@ language_code_re = _lazy_re_compile(
+     re.IGNORECASE
+ )
+ 
+-language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+)?)(/|$)')
++language_code_prefix_re = _lazy_re_compile(r'^/(\w+([@-]\w+){0,2})(/|$)')
+ 
+ 
+ @receiver(setting_changed)
+@@ -512,6 +512,13 @@ def get_language_from_path(path, strict=False):
+     try:
+         return get_supported_language_variant(lang_code, strict=strict)
+     except LookupError:
++        # The language code in the URL may not be lowercase (e.g. "en-Latn-US"
++        # as allowed by RFC 5646), so retry with a lowercased language code.
++        if lang_code != lang_code.lower():
++            try:
++                return get_supported_language_variant(lang_code.lower(), strict=strict)
++            except LookupError:
++                pass
+         return None
+ 
+ 
+diff --git a/test_prefix_tmp.py b/test_prefix_tmp.py
+new file mode 100644
+index 0000000000..f18c8c43ad
+--- /dev/null
++++ b/test_prefix_tmp.py
+@@ -0,0 +1,36 @@
++from django.test import SimpleTestCase, override_settings
++from django.urls import path
++
++
++def bangiah(request):
++    from django.http import HttpResponse
++    return HttpResponse('U!')
++
++
++urlpatterns = []
++
++
++@override_settings(
++    ROOT_URLCONF=__name__,
++    LANGUAGES=[('en-us', 'English'), ('en-latn-us', 'Latin English'), ('en-Latn-US', 'BCP 47')],
++    LANGUAGE_CODE='en-us',
++    USE_I18N=True,
++)
++class LocalePrefixWithScriptTest(SimpleTestCase):
++    def test_language_from_path(self):
++        from django.utils import translation
++        self.assertEqual(translation.get_language_from_path('/en-us/'), 'en-us')
++        self.assertEqual(translation.get_language_from_path('/en-latn-us/'), 'en-latn-us')
++        self.assertEqual(translation.get_language_from_path('/en-Latn-US/'), 'en-Latn-US')
++
++    def test_resolution(self):
++        from django.conf.urls.i18n import i18n_patterns
++        import sys
++        mod = sys.modules[__name__]
++        mod.urlpatterns = i18n_patterns(path('', bangiah))
++        try:
++            for lang in ('en-us', 'en-latn-us', 'en-Latn-US'):
++                response = self.client.get('/%s/' % lang)
++                self.assertEqual(response.status_code, 200, lang)
++        finally:
++            mod.urlpatterns = []
