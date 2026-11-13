@@ -201,12 +201,12 @@ def build_first(turn: int, max_turns: int, ws) -> str | None:
             "workbook now, then run python -m engines.sheets.check on it. Refine only after the file exists.")
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 30, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", files=None) -> dict:
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
-            caps=Caps(max_turns=max_turns), temperature=0.0, finish_check=finish_check, turn_hook=build_first)
+            caps=Caps(max_turns=max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))), temperature=0.0, finish_check=finish_check, turn_hook=build_first)
     return {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
             "reason": r.reason, "usage": r.usage}

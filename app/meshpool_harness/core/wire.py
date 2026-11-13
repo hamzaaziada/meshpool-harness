@@ -149,14 +149,14 @@ class SimpleLedger:
             body["prompt_cache_key"] = root
             body["user"] = root
         wire = os.environ.get("MH_WIRE", "chat")
-        stream = os.environ.get("MH_STREAM") == "1" and wire == "chat"
+        # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
+        # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
+        stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
-            timeout = int(os.environ.get("MH_STREAM_IDLE_S", "20"))
-            idle = timeout
-            if os.environ.get("MH_STREAM_FIRST_S"):    # longer wait for the first token, then the idle cutoff
-                timeout = int(os.environ["MH_STREAM_FIRST_S"])
+            idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
+            timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
         if wire == "responses":
             body = to_responses(body)
         req = urllib.request.Request(f"{self.base_url}/{'responses' if wire == 'responses' else 'chat/completions'}",
