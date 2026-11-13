@@ -152,10 +152,11 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | P13 | hallucinated numbers | every number has provenance; gap markers flagged; source line on data slides, bottom band |
 | P14 | text vs chart disagree | quoted numbers match series values (0.6% tolerance) or derived values (differences, % changes, CAGR, shares of ≥3-item compositions) |
 | P15 | generic AI look | archetype declared; ≤3 consecutive same archetype |
-| P16 | too many slides | main section count = brief |
+| P16 | too many slides; missing opening or closing | main section count = brief; when the brief asks for an opening (title/cover/agenda) or closing (closing slide, next steps, conclusion, "end with …") slide, slide 1 is a cover and the last slide is a `closing` (or `end`) slide |
 | P17 | not editable | group depth ≤1; no forbidden locks |
 | P18 | inaccessible | alt text on pictures/charts (a file name doesn't count); reading order |
 | P19 | inconsistent fonts and placement | title box, title size and face, body face, content margin, source line, chart label size identical across content slides |
+| P20 | big empty areas ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`); chart plot areas count as content. Calibrated on references: McKinsey content pages median 6%, p90 12%; Bain 13–15% |
 
 **Excel (validate_xlsx.py)**: recalculates headless in LibreOffice first.
 

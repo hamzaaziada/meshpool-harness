@@ -20,7 +20,7 @@ brief + sources ─► 1 intake ─► facts.json ─► 2 storyline ─► stor
 | 3 Content | one storyline node + its facts | one slide JSON (`schemas/slide.schema.json`) | any | JSON Schema valid; every number has provenance (P13); archetype limits (P10) |
 | 4 Design mock (off by default) | slide JSON + theme tokens | `mock/<id>.png`, then `layout_spec.json`: grid columns per element, hierarchy, chart type, emphasis | image model, then vision model | layout snapped to template grid and archetypes; anything not expressible is reported, never hacked in; numbers and text in the mock are ignored |
 | 5 Native build | slide JSON, layout spec, template, rules | `deck.pptx`, `provenance.json`, `brief.json`, `storyline.json` | none | renderer contract (engine-spec §4) |
-| 6 Render + QA | `deck.pptx` | `qa.json` (`validate_pptx`), `png/*.png`, contact sheet, vision diff vs mock | vision model (review only) | P0–P19 |
+| 6 Render + QA | `deck.pptx` | `qa.json` (`validate_pptx`), `png/*.png`, contact sheet, vision diff vs mock | vision model (review only) | P0–P20 |
 | 7 Repair | `qa.json` failures with `fix_scope = content` | revised slide JSON for failing slides only | same as stage 3 | ≤3 rounds, then remaining failures go into the notes as `[QA]` lines and the report |
 
 Workbooks follow the same shape: intake → model block (`schemas/workbook_block.schema.json`) → builder → LibreOffice
@@ -33,7 +33,7 @@ recalc → `validate_xlsx` (X0–X13) → repair, with X7 fed by the builder's o
 | `read_document` (OCR, PDF, Office, Power BI) | 1 intake | shipped |
 | `engines/forge/build.py`: storyline call, per-slide content calls, schema gate, render, render check, repair (<= 3 rounds) | 2, 3, 5, 6, 7 | **new**; default deck engine (`--engine slides` or `forge`) |
 | `engines/forge/render.py`: the design grammar | 5 | **new** |
-| `validate_pptx` (P0-P19, render check), `validate_xlsx` (X0-X13) | 6 | **new** |
+| `validate_pptx` (P0-P20, render check), `validate_xlsx` (X0-X13) | 6 | **new** |
 | `ooxml_check.py`: opens in Office without repair (P0/X0; also `check_document` for .docx) | 6 | **new** |
 | `rebuild_eval.py`: one-shot rebuild of a reference deck | eval | **new** |
 | design-mock loop with `gpt-image-2` and a separate vision reviewer | 4 | blocked: the Meshpool gateway does not expose `/v1/images/generations` yet |

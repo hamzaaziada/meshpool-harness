@@ -20,7 +20,7 @@ from pathlib import Path
 
 from pptx import Presentation
 from pptx.chart.data import BubbleChartData, CategoryChartData
-from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION, XL_LEGEND_POSITION, XL_TICK_LABEL_POSITION
 from pptx.enum.dml import MSO_THEME_COLOR as TC
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
@@ -748,6 +748,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         ca.format.line.color.theme_color = TC.TEXT_1
         if kind in ("bar", "stacked_bar"):
             ca.reverse_order = True
+        ca.tick_label_position = XL_TICK_LABEL_POSITION.LOW     # labels stay clear of negative bars
     except Exception:
         pass
     hl = {str(v) for v in c.get("highlight_categories") or []}
@@ -805,49 +806,66 @@ def _borders(cell, bottom=None, top=None, left=None, right=None):
         tcPr.insert(i, ln)
 
 
+def _plain(t) -> str:
+    """Text as it renders: markup removed (a ^1 marker is a small superscript, not two characters)."""
+    return re.sub(r"\*\*|\^\w+", "", str(t))
+
+
 def _table(ctx, sl, n, t, x, y, w, h):
     groups = t.get("groups")
     cols, rows = t["columns"], t["rows"]
     hdr = 2 if groups else 1
     nrows = hdr + len(rows)
     size_ = t.get("size", 12)
+    from .common import font_file, wrap_lines
+    f_reg, _ = font_file("Arial", False, False, (("Arial", "Liberation Sans"),))
+    f_bold, _ = font_file("Arial", True, False, (("Arial", "Liberation Sans"),))
     row_min = lambda sz: sz * 1.15 / 72 + 0.045                   # LibreOffice/PowerPoint minimum, measured
-    head_h = lambda sz: (sz + 2) * 1.25 / 72 + 0.08 + ((2 if groups and any(len(g.get("label", "")) > 14 * g.get("span", 1)
-                                                                      for g in groups) else 1) * (sz + 2) * 1.25 / 72 + 0.08
-                                                      if groups else 0)
     widths = t.get("col_widths")
     colw = ([w * cw / sum(widths) for cw in widths] if widths else
             [w * 0.32] + [(w * 0.68) / max(1, len(cols) - 1)] * (len(cols) - 1))
 
+    def col_head_h(sz):
+        """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
+        lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
+                    or [1])
+        return lines * (sz + 2) * 1.25 / 72 + 0.08
+    head_h = lambda sz: col_head_h(sz) + ((2 if any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
+                                            else 1) * (sz + 2) * 1.25 / 72 + 0.08 if groups else 0)
+    bold_rows = set(t.get("highlight_rows") or []) | ({len(rows) - 1} if t.get("total_row") else set())
+
     def row_heights(sz, base):
-        """Each row as tall as its most-wrapped cell (measured with the body font)."""
-        from .common import font_file, wrap_lines
-        f, _ = font_file("Arial", False, False, (("Arial", "Liberation Sans"),))
+        """Each row as tall as its most-wrapped cell (bold rows measured bold)."""
         out = []
-        for r in rows:
-            lines = max([wrap_lines(str(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
+        for i, r in enumerate(rows):
+            f = f_bold if i in bold_rows else f_reg
+            lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
                         or [1])
             out.append(max(base, lines * sz * 1.15 / 72 + 0.045))
         return out
     while size_ > 10 and sum(row_heights(size_, row_min(size_))) + head_h(size_) > h:
         size_ -= 1
     t["size"] = size_
-    base = max(row_min(size_), min(t.get("row_h", 0.3), (h - head_h(size_)) / max(1, len(rows))))
-    hs = row_heights(size_, base)
+    hs = row_heights(size_, row_min(size_))
     if sum(hs) + head_h(size_) > h + 0.01 and len(rows) > 3:     # still too tall: carry rows to a continuation
-        acc, keep = head_h(size_), 0
+        acc, fit = head_h(size_), 0
         for hv in hs:
             if acc + hv > h - (0.25 if t.get("total_row") else 0):
                 break
             acc += hv
-            keep += 1
-        keep = max(3, keep)
+            fit += 1
+        fit = max(3, fit)
+        parts = -(-len(rows) // fit)                              # split evenly: never a stub continuation
+        keep = max(3, -(-len(rows) // parts))
         ctx.carry_rows = rows[keep:]
         rows = rows[:keep]
-        hs = hs[:keep]
         nrows = hdr + len(rows)
         t["total_row"] = False                                    # the total row travels with the last part
-    rh = base
+    hs = row_heights(size_, row_min(size_))
+    room = h - head_h(size_) - sum(hs)                            # rows stretch to fill the space they have,
+    if room > 0:                                                  # sharing it evenly, up to 0.42in a row
+        cap = t.get("row_h", 0.42 if len(hs) > 6 else 0.9)       # a short table opens up instead of stopping halfway
+        hs = [min(max(hv, cap), hv + room / len(hs)) for hv in hs]
     gf = sl.shapes.add_table(nrows, len(cols), Inches(x), Inches(y), Inches(w), Inches(sum(hs) + head_h(size_)))
     gf.name = "Table"
     tbl = gf.table
@@ -867,7 +885,7 @@ def _table(ctx, sl, n, t, x, y, w, h):
         two = any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
         gh = (2 if two else 1) * (size_ + 2) * 1.25 / 72 + 0.08
         tbl.rows[0].height = Inches(gh)
-    hh = (size_ + 2) * 1.25 / 72 + 0.08
+    hh = col_head_h(size_)
     tbl.rows[hdr - 1].height = Inches(hh)
     hl, it = set(t.get("highlight_rows") or []), set(t.get("italic_rows") or [])
     heat = {int(k): v for k, v in (t.get("heat") or {}).items()}
@@ -944,6 +962,15 @@ def _txt(v):
     return "" if v is None else str(v)
 
 
+def _cell(v):
+    """A table cell the model wrote as {lead, bullets}: keep the detail, not just the lead."""
+    if isinstance(v, dict) and v.get("bullets"):
+        detail = "; ".join(_txt(b) if isinstance(b, dict) else str(b) for b in v["bullets"])
+        lead = _txt(v)
+        return f"{lead}: {detail}" if lead else detail
+    return _txt(v)
+
+
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
@@ -951,7 +978,7 @@ def normalize(s: dict) -> dict:
     if isinstance(t, dict):
         t = dict(t)
         t["columns"] = [_txt(c) for c in t.get("columns") or []]
-        t["rows"] = [[_txt(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
+        t["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
         gap = re.compile(r"\[GAP[^\]]*\]")
         if any(gap.search(c) for r in t["rows"] for c in r):           # visible, footnoted gaps, not raw markers
             t["rows"] = [[gap.sub("n/a", c) for c in r] for r in t["rows"]]
@@ -973,7 +1000,7 @@ def normalize(s: dict) -> dict:
     return s
 
 
-REQUIRED = {"challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
+REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
             "waterfall_bridge": ["chart"], "stacked_composition": ["chart"]}
 
@@ -1022,16 +1049,21 @@ def stat_stack(c: dict) -> dict:
 
 
 def _stats(ctx, sl, n, c, x, y, w, h):
+    """Big figures with labels, spread over the whole exhibit area with hairlines between them."""
     items = c.get("items") or []
     k = max(1, len(items))
-    rh = min(1.1, h / k)
+    rh = min(1.7, h / k)
+    y += (h - rh * k) / 2                                   # a short stack sits centred, not stranded at the top
+    big = rh >= 1.25
+    vsize, lsize = (40, 16) if big else (28, 14)
+    vw = 2.6 if big else 1.9
     for i, it in enumerate(items):
         yy = y + i * rh
-        _write(_box(sl, x, yy + 0.02, 1.9, rh - 0.1, f"role_subtitle_Stat{i + 1}", MSO_ANCHOR.MIDDLE),
-               [{"text": it["value"], "size": 28, "bold": True, "heading": True, "numbers": False,
+        _write(_box(sl, x, yy + 0.02, vw, rh - 0.1, f"role_subtitle_Stat{i + 1}", MSO_ANCHOR.MIDDLE),
+               [{"text": it["value"], "size": vsize, "bold": True, "heading": True, "numbers": False,
                  "color": TC.ACCENT_1}])
-        _write(_box(sl, x + 2.0, yy + 0.02, w - 2.0, rh - 0.1, f"StatLabel{i + 1}", MSO_ANCHOR.MIDDLE),
-               [{"text": it["label"], "size": 14, "numbers": False}])
+        _write(_box(sl, x + vw + 0.1, yy + 0.02, w - vw - 0.1, rh - 0.1, f"StatLabel{i + 1}", MSO_ANCHOR.MIDDLE),
+               [{"text": it["label"], "size": lsize, "numbers": False}])
         if i < k - 1:
             _rule(sl, x, yy + rh, w, TC.ACCENT_5, 0.5, f"StatRule{i + 1}")
 
@@ -1130,10 +1162,103 @@ def a_argument_only(ctx, s, sl, n):
 
 # ------------------------------------------------------------------ archetypes
 def a_cover(ctx, s, sl, n):
-    sl.shapes.title.text = re.sub(r"\*\*|\^\w+", "", s["title"])
-    for ph in sl.placeholders:
+    """Opening (and end) slide: short accent bar, large serif title, subtitle, hairline, date line, firm label.
+    The title stays in the layout's title placeholder so outline view and accessibility tools see it."""
+    clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
+    x, w = LEFT, colx24(17) - LEFT
+    from .common import font_file, wrap_lines
+    f, _ = font_file("Georgia", True, False, (("Georgia", "Gelasio"),))
+    size = next((z for z in (36, 32, 28) if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
+    lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
+    th = lines * _pitch(size, 1.05) / 72 + 0.3
+    ty = 3.35 - th                                         # title block ends on a fixed line, whatever its length
+    _fill(sl, x, ty - 0.32, 0.9, 0.06, TC.ACCENT_1, "CoverBar")
+    t = sl.shapes.title
+    t.left, t.top, t.width, t.height = Inches(x), Inches(ty), Inches(w + 0.5), Inches(th)   # slack past the wrap width
+    tf = t.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.BOTTOM
+    tf.margin_left = tf.margin_right = Inches(0)
+    tf.text = clean(s["title"])
+    for p in tf.paragraphs:
+        p.alignment = PP_ALIGN.LEFT
+        p.line_spacing = Pt(_pitch(size, 1.05))
+        for r in p.runs:
+            _set_font(r, size, TC.TEXT_1, True, heading=True)
+    for ph in list(sl.placeholders):
         if ph.placeholder_format.idx == 1:
-            ph.text = re.sub(r"\*\*|\^\w+", "", s.get("subtitle", ""))
+            if s.get("subtitle"):
+                ph.left, ph.top, ph.width, ph.height = Inches(x), Inches(3.5), Inches(w), Inches(1.0)
+                ph.text_frame.word_wrap = True
+                ph.text_frame.vertical_anchor = MSO_ANCHOR.TOP
+                ph.text_frame.margin_left = Inches(0)
+                ph.text = clean(s["subtitle"])
+                for p in ph.text_frame.paragraphs:
+                    p.alignment = PP_ALIGN.LEFT
+                    for r in p.runs:
+                        _set_font(r, 16, TC.TEXT_2)
+            else:
+                ph._element.getparent().remove(ph._element)
+    _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_5, 0.5, "CoverRule")
+    if s.get("date"):
+        _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
+                                                         "color": TC.TEXT_2}])
+    _write(_box(sl, colx(9), 6.65, RIGHT - colx(9), 0.3, "Firm"),
+           [{"text": s.get("firm", FIRM), "size": 11, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+
+
+def a_closing(ctx, s, sl, n):
+    """Closing slide: the next steps as numbered rows (action, detail, owner/timing) spread over the body."""
+    _header(ctx, s, sl, n)
+    steps = [st if isinstance(st, dict) else {"action": str(st)} for st in (s.get("steps") or [])][:6]
+    has_when = any(st.get("owner") or st.get("timing") for st in steps)
+    nx = LEFT
+    ax, aw = span24(1, 7)
+    dx, dw = (span24(8, 18) if has_when else span24(8, 23))
+    wx, ww = span24(19, 23)
+    y0 = TITLE_RULE_Y + 0.06
+    heads = [(ax, aw, s.get("columns", ["Action"])[0] if s.get("columns") else "Next step"),
+             (dx, dw, "What it involves")] + ([(wx, ww, "Owner and timing")] if has_when else [])
+    for x, w, t in heads:
+        _write(_box(sl, x, y0, w, 0.3, f"role_subtitle_Head{len(t)}", MSO_ANCHOR.BOTTOM),
+               [{"text": t, "size": T["head"], "bold": True, "numbers": False}])
+    _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.TEXT_1, 0.75, "HeadRule")
+    top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
+    if s.get("footnotes"):
+        bottom -= 0.25
+
+    def cells(st, size):
+        a = [{"text": st.get("action", ""), "size": size + (4 if size > T["body"] else 2), "bold": True, "numbers": False}]
+        d = [{"text": st.get("detail", ""), "size": size, "prov": st.get("prov")}] if st.get("detail") else []
+        d += [{"text": m if isinstance(m, str) else _txt(m), "size": size - 1, "bullet": True, "space_before": 3,
+               "prov": st.get("prov")} for m in (st.get("milestones") or [])[:3]]
+        wh = [{"text": " · ".join(v for v in (st.get("owner"), st.get("timing")) if v), "size": size,
+               "numbers": False, "color": TC.TEXT_2}] if has_when else []
+        return a, d, wh
+    size = T["body"] + (2 if len(steps) <= 3 else 0)          # few steps: larger type before larger gaps
+    while True:
+        laid = [cells(st, size) for st in steps]
+        need = [max(_need(a, aw), _need(d, dw) if d else 0, _need(wh, ww) if wh else 0, 0.4) + 0.12 for a, d, wh in laid]
+        if sum(need) <= bottom - top or size <= 10:
+            break
+        size -= 1
+    if sum(need) > bottom - top:
+        ctx.miss(n, "the next steps", int((sum(need) - (bottom - top)) * 30))
+    gap = min(0.8, max(0.0, (bottom - top - sum(need)) / max(1, len(steps))))   # thin steps stay flagged (P20)
+    y = top
+    for i, ((a, d, wh), h) in enumerate(zip(laid, need)):
+        rh = h + gap
+        _write(_box(sl, nx, y, 0.5, 0.5, f"role_numeral_{i + 1}"),
+               [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
+                 "color": TC.ACCENT_1}])
+        _write(_box(sl, ax, y + 0.04, aw, rh - 0.1, f"Action{i + 1}"), a, ctx, n)
+        if d:
+            _write(_box(sl, dx, y + 0.04, dw, rh - 0.1, f"Detail{i + 1}"), d, ctx, n)
+        if wh:
+            _write(_box(sl, wx, y + 0.04, ww, rh - 0.1, f"When{i + 1}"), wh, ctx, n)
+        y += rh
+        if i < len(steps) - 1:
+            _rule(sl, ax, y - 0.02, RIGHT - ax, TC.ACCENT_5, 0.5, f"StepRule{i + 1}")
 
 
 def a_challenge_matrix(ctx, s, sl, n):
@@ -1182,13 +1307,18 @@ def a_challenge_matrix(ctx, s, sl, n):
     while sum(x[2] for x in laid) > avail and size > s.get("min_size", 10):
         size -= 1
         laid = fit_rows(rows, size)
+    while size < T["cell"]:                                # short content: larger type before larger gaps
+        bigger = fit_rows(rows, size + 1)
+        if sum(x[2] for x in bigger) > avail * 0.9:
+            break
+        size, laid = size + 1, bigger
     keep = len(rows)
     while keep > 1 and sum(x[2] for x in laid[:keep]) > avail:
         keep -= 1                                          # carry the rest to a continuation slide
     if keep < len(rows):
         ctx.carry = dict(s, rows=rows[keep:], title=_cont_title(s["title"]), number_from=s.get("number_from", 1) + keep,
                          _cont=True)
-    gap = min(0.18, max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))
+    gap = min(0.5, max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))   # rows fill the body
     y = top
     first = s.get("number_from", 1)
     for i, (r, (ba, bb, need)) in enumerate(zip(rows[:keep], laid[:keep])):
@@ -1293,19 +1423,35 @@ def a_table_focus(ctx, s, sl, n):
 
 
 def a_chart_takeaway(ctx, s, sl, n):
+    """Chart with its takeaway. The text goes beside the chart when it fills that column; when it is short, the chart
+    takes the full width and the takeaway sits in a band under it, so neither leaves a dead block."""
     _header(ctx, s, sl, n)
-    x, w = span(0, 7)
-    _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, BODY_B - BODY_Y)
+    tk = s.get("takeaway") or {}
+    bullets = [b if isinstance(b, dict) else {"text": b} for b in s.get("bullets") or []]
+    lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+            if tk.get("text") else [])
+    bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
+          for b in bullets]
+    body_h = BODY_B - BODY_Y
     bx, bw = span(8, 11)
-    blocks = []
-    if (s.get("takeaway") or {}).get("text"):
-        blocks.append({"text": s["takeaway"]["text"], "size": T["head"], "bold": True, "numbers": False,
-                       "prov": s["takeaway"].get("prov")})
-    for b in s.get("bullets") or []:
-        b = b if isinstance(b, dict) else {"text": b}
-        blocks.append({"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")})
-    _rule(sl, bx, BODY_Y, bw, TC.TEXT_1, 0.75, "TakeawayRule")
-    _write(_box(sl, bx, BODY_Y + 0.1, bw, BODY_B - BODY_Y - 0.1, "Takeaways"), blocks, ctx, n)
+    if _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl):
+        x, w = span(0, 7)
+        _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
+        _rule(sl, bx, BODY_Y, bw, TC.TEXT_1, 0.75, "TakeawayRule")
+        _write(_box(sl, bx, BODY_Y + 0.1, bw, body_h - 0.1, "Takeaways"), lead + bl, ctx, n)
+        return
+    lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
+    cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
+    cw = (RIGHT - colx(4) - GUT * (len(cols) - 1)) / len(cols)
+    band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.12
+    band = min(band, 0.45 * body_h)
+    cy = BODY_B - band
+    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.18)
+    _rule(sl, LEFT, cy - 0.08, RIGHT - LEFT, TC.TEXT_1, 0.75, "TakeawayRule")
+    if lead:
+        _write(_box(sl, lx, cy, lw, band, "Takeaway"), _fit(lead, lw, band, 12)[0], ctx, n)
+    for i, c in enumerate(cols):
+        _write(_box(sl, colx(4) + i * (cw + GUT), cy, cw, band, f"Takeaways{i + 1}"), _fit(c, cw, band, 10)[0], ctx, n)
 
 
 def a_waterfall_bridge(ctx, s, sl, n):
@@ -1316,7 +1462,7 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "text_matrix": a_challenge_matrix, "exhibit_argument": a_exhibit_argument, "table_focus": a_table_focus,
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
-              "waterfall_bridge": a_waterfall_bridge}
+              "waterfall_bridge": a_waterfall_bridge, "closing": a_closing, "next_steps": a_closing, "end": a_cover}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 

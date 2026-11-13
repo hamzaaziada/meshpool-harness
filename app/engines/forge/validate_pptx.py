@@ -30,7 +30,7 @@ from .common import failure as F
 from .ooxml_check import check as ooxml_check
 from .measure_pptx import measure, public
 
-RULES = [f"P{i}" for i in range(0, 20)]
+RULES = [f"P{i}" for i in range(0, 21)]
 
 # a small verb lexicon + inflection rules: enough to tell "Revenue grew 12% on pricing" from "Revenue overview"
 _VERBS = set("""
@@ -276,6 +276,34 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
             if off:
                 failures.append(F("P1", "render_off_slide", f"Slide {s['n']}: text renders off the slide: "
                                   f"{'; '.join(off[:3])}.", slide=s["n"], measured=len(off)))
+        _dead_space(str(pdf), m, R, failures, stats)
+
+
+def _dead_space(pdf_path: str, m: dict, R: dict, failures: list, stats: dict):
+    """P20: no large empty block in a content slide's body (measured on the render)."""
+    from .whitespace import page_empty, where
+    import pypdfium2 as pdfium
+    Wd = R["whitespace"]
+    W, H = m["slide_size_in"]
+    doc = pdfium.PdfDocument(pdf_path)
+    worst = []
+    exempt = set(Wd["exempt_archetypes"])
+    for i, s in enumerate(m["slides"]):
+        if i >= len(doc) or s.get("archetype") in exempt or s["n"] in stats.get("inferred_divider_slides", []):
+            continue
+        if not s.get("archetype") and _looks_divider(s):
+            continue
+        charts = [(sh["x"], sh["y"], sh["w"], sh["h"]) for sh in s["shapes"] if sh["role"] == "chart" and sh["x"] is not None]
+        e = page_empty(doc[i], W, H, Wd["body_top"], Wd["body_bottom"], filled=charts)
+        worst.append(round(e["share"], 2))
+        if e["share"] > Wd["max_empty_share"]:
+            failures.append(F("P20", "dead_space", f"Slide {s['n']}: {e['share']:.0%} of the body is one empty block "
+                              f"({e['w_in']:.1f} x {e['h_in']:.1f} in, {where(e, W, H)}). Fill it with substance the "
+                              "slide is missing (more evidence, a breakdown, a comparison, the implication), or merge "
+                              "this slide with its neighbour. Never pad with filler.", slide=s["n"],
+                              measured=round(e["share"], 2), limit=Wd["max_empty_share"]))
+    stats["empty_share_by_slide"] = worst
+    doc.close()
 
 
 def _opens_cleanly(path, failures):
@@ -676,6 +704,14 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     elif len(main) != want:
         failures.append(F("P16", "slide_count", f"The main section has {len(main)} slides; the brief asks for {want}. "
                           "Move backup material to the appendix section.", measured=len(main), limit=want))
+    B = R["bookends"]
+    if (brief or {}).get("opening") and slides and slides[0].get("archetype") not in B["opening_archetypes"]:
+        failures.append(F("P16", "opening_slide", "The brief asks for an opening (title) slide and slide 1 is not one. "
+                          "Add a cover slide first: title, subtitle, date.", slide=1))
+    if (brief or {}).get("closing") and slides and slides[-1].get("archetype") not in B["closing_archetypes"]:
+        failures.append(F("P16", "closing_slide", "The brief asks for a closing slide and the last slide is not one. "
+                          "End with a 'closing' slide: the next steps (action, detail, owner/timing) or the close the "
+                          "brief names.", slide=len(slides)))
 
     # ---------------- P19 cross-slide consistency
     K = R["consistency"]

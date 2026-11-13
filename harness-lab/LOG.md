@@ -206,3 +206,9 @@ One entry per cycle: change, flag, offline evidence, expected effect, how a paid
   with the forms Office itself writes accepted. It found negative chart axis ids in every python-pptx chart (forge
   and the v1 engine); fixed. Also fixed: a plain-string `source` crashed the renderer; the title-verb check missed
   chart verbs ("jumped"). Unit tests 155 passed, 8 skipped.
+- Dead space (P20): the largest empty block in each content slide's body, measured on the render, must stay under
+  20% (McKinsey content pages: median 6%, p90 12%). Renderer fixes: short takeaways go under a full-width chart,
+  short tables open up, stat stacks and matrix rows spread over the body, overflowing tables split evenly, table
+  cells keep the model's detail. DC sample: 4 failing slides -> 1 (thin content, left to the repair loop); Bain
+  sample: 5 -> 0. Opening/closing slides the brief asks for are planned, enforced and checked (P16); new cover
+  design and a `closing` (next steps) archetype. Unit tests 158 passed, 8 skipped.
