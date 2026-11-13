@@ -4,7 +4,7 @@ Merged at 7.2/10 at the owner's request; the target is 9/10. Earlier audits: 6.3
 audits found was fixed. These are the findings still open, most important first. The audit used the mock model;
 screenshots were in the session scratchpad and are not kept.
 
-## Fixed on 13 Nov (after merge): items 1-9 (all P0 and P1). Remaining: P2 below.
+## All fixed on 13 Nov (after merge): P0 and P1 first, then the P2 polish items.
 
 ## P0: history and data (fixed)
 1. **Restart loses messages.** A thread running when the app restarts comes back blank ("New thread", message
@@ -26,7 +26,7 @@ screenshots were in the session scratchpad and are not kept.
 8. Plan mode: a blocked write shows raw JSON and "failed" instead of "Not allowed in Plan mode".
 9. Onboarding step 3 at 1280x800: the list is clipped behind the sticky Start button; Select all/none off screen.
 
-## P2
+## P2 (fixed)
 10. Unsent draft text is lost on reload.
 11. The message box moves about 17 px when the running hint appears; Stop, Send now and Send at once look
     redundant.

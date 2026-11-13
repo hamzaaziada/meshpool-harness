@@ -566,3 +566,20 @@ table.t td.n{text-align:right;font-family:var(--mono);font-size:12px}
 .dlg.fb .row{display:flex;gap:8px;align-items:center}
 .impsel{display:flex;gap:12px;margin:2px 0 6px}
 .onb-card{padding-bottom:90px}
+
+/* 11: the hint line keeps its space, so the message box does not move when a task starts */
+.hintline{min-height:15px}
+#intrBtn:disabled{display:none}
+/* 15: labels on the top-bar buttons whenever there is room */
+@container main (min-width:1000px){.topbar .tbtn span{display:inline}.topbar .tbtn{padding:5px 8px}}
+/* 16 */
+@container main (max-width:860px){.topbar.newt #projChip{display:inline-flex}}
+/* 17 */
+.pbar{flex-wrap:nowrap}.pbar select{flex:1;min-width:0}
+/* 21: toasts above the message box, clear of the top bar */
+.toasts{top:auto!important;bottom:150px!important;right:24px!important}
+/* 22: a focused option is not mistaken for the chosen one */
+.scopeopt:focus{outline:none}.scopeopt:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.scopeopt[aria-checked="false"]{box-shadow:none}
+.th .tm{flex:none}
+table.t td.n,table.t th:not(:first-child){text-align:right}
