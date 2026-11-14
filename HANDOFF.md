@@ -99,6 +99,18 @@ Hermes replies. Stale tests fixed in `testkit/`. Still open: the custom-connecto
 `testkit/e2e_full.py` needs a local MCP-over-HTTP server that checks `Bearer abc123` (example.com is not one); no
 suite covers OpenCode; the dark-mode Preview panel shows a white empty frame for the default localhost:3000.
 
+## Added on 14 Nov, evening
+
+- **No step limit:** Meshpool Code and Work runs used to stop at 80 steps ("Stopped after 80 steps in one turn"); the
+  default is now no limit (`agent/core.py`, `MH_MAX_STEPS` sets one). Hermes and Pi have no cap of their own.
+- **/goal** (`ui/agent_api.py`, `ui/app.js`): the agent keeps taking turns until it ends a reply with `GOAL: DONE`;
+  it pauses when it asks the user something, after an error, or after two turns without acting. `/goal clear` ends
+  it; the goal shows under the message box. Works for every agent. `/usage` opens Usage.
+- **Changes view** in the Git panel: every file the branch adds, changes, renames or removes against the PR's base,
+  with lines added and removed (`workbench.branch_changes`), next to the PR, checks, runs and deployments.
+- Another agent (on the owner's computer) added Developer ID signing, notarization, Azure signing and the one-line
+  installers (`87e03ac`); merged to `main` in PR #11 so the one-liners work.
+
 ## Branches
 
 On 14 Nov the session had the owner delete the merged `claude/*` branches; `claude/tender-pascal-pwc9bg` was deleted

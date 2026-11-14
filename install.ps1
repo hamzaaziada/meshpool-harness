@@ -120,8 +120,6 @@ Say "  $E[38;2;16;86;234m$E[48;2;11;81;242m▀$E[0m$E[38;2;2;56;212m$E[48;2;2;67
 Say "  $E[38;2;7;101;251m$E[48;2;25;129;250m▀$E[0m$E[38;2;0;82;250m$E[48;2;13;114;255m▀$E[0m$E[38;2;2;70;230m$E[48;2;11;86;245m▀$E[0m$E[38;2;2;60;208m$E[48;2;8;77;230m▀$E[0m$E[38;2;0;52;192m$E[48;2;17;91;244m▀$E[0m$E[38;2;7;70;216m$E[48;2;41;106;230m▀$E[0m$E[38;2;33;96;216m▀$E[0m   $E[38;2;88;158;253m▀$E[0m$E[38;2;66;132;242m▀$E[0m$E[38;2;51;116;227m▀$E[0m$E[38;2;7;66;188m$E[48;2;19;85;211m▀$E[0m$E[38;2;100;178;239m$E[48;2;38;112;225m▀$E[0m$E[38;2;104;195;253m$E[48;2;108;200;255m▀$E[0m$E[38;2;87;179;251m$E[48;2;92;185;251m▀$E[0m$E[38;2;83;177;252m$E[48;2;87;180;251m▀$E[0m$E[38;2;84;178;252m$E[48;2;88;182;251m▀$E[0m$E[38;2;91;186;252m$E[48;2;95;187;250m▀$E[0m$E[38;2;111;200;252m$E[48;2;119;213;255m▀$E[0m$E[38;2;137;220;251m$E[48;2;136;220;252m▀$E[0m"
 Say "   $E[38;2;52;143;252m▀$E[0m$E[38;2;46;127;255m▀$E[0m$E[38;2;45;119;251m▀$E[0m$E[38;2;60;131;250m▀$E[0m          $E[38;2;58;140;238m▀$E[0m$E[38;2;105;201;255m$E[48;2;77;157;247m▀$E[0m$E[38;2;96;190;254m$E[48;2;104;193;251m▀$E[0m$E[38;2;93;187;252m$E[48;2;106;200;251m▀$E[0m$E[38;2;104;203;255m$E[48;2;112;209;253m▀$E[0m$E[38;2;118;211;253m▀$E[0m"
 Say ""
-Say "  ${Dim}Installing Meshpool for the terminal. This takes a minute the first time.$Off"
-Say ""
 
 # -App installs the Meshpool app itself, not the terminal version.
 if ($args -contains "-App" -or $args -contains "--app" -or $args -contains "-a") {
@@ -129,6 +127,8 @@ if ($args -contains "-App" -or $args -contains "--app" -or $args -contains "-a")
   Install-App
   return
 }
+Say "  ${Dim}Installing Meshpool for the terminal. This takes a minute the first time.$Off"
+Say ""
 if ($args -contains "-Help" -or $args -contains "--help" -or $args -contains "-h") {
   Say "Meshpool installer"
   Say "  (no arguments)  install Meshpool for the terminal"

@@ -19,6 +19,14 @@ from meshpool_harness.harnesses.pi_rpc import PiAgent
 LIVE: dict[str, "Session"] = {}
 LOCK = threading.Lock()
 _SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
+# /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
+GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
+             "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
+             "the next step if work remains. If you need the user to decide or provide something, ask, and leave the "
+             "GOAL line out.")
+GOAL_NEXT = "Continue working toward the goal."
+_GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
+
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan"}
 
@@ -179,6 +187,7 @@ class Session:
         self.events: list[dict] = []
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
+        self.goal, self._goal_idle = "", 0          # /goal: see GOAL_NOTE
         self.cp = None
         self.lock = threading.Lock()
         self.state = "starting"
@@ -268,6 +277,7 @@ class Session:
         if resume_id:
             meta = read_meta(self.id)
             self.plan = bool(meta.get("plan", self.plan))
+            self.goal = str(meta.get("goal") or "")
             if meta.get("model") and not getattr(self.agent, "model", None) and not legacy:
                 self.set_model(meta["model"])
         if hasattr(self.agent, "plan"):
@@ -481,6 +491,7 @@ class Session:
             self.agent.plan = self.plan
 
         self.t_turn = time.time()
+        ev0 = len(self.events)
 
         def go():
             idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
@@ -495,8 +506,10 @@ class Session:
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
                 from meshpool_harness import pace as PACE
-                quick = (not self.plan and not self.scheduled
+                quick = (not self.plan and not self.scheduled and not self.goal
                          and PACE.classify(text, bool(images)) == "quick")
+                if self.goal:
+                    body += GOAL_NOTE.format(goal=self.goal)
                 if quick:
                     body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
                     if hasattr(self.agent, "pace_deadline"):
@@ -545,6 +558,8 @@ class Session:
                         nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
                     elif self.queue:
                         self.queue = []
+                if not nxt and self.goal and not getattr(self.agent, "_stop", False):
+                    nxt = self._goal_next(ev0)
                 if nxt:
                     self.emit({"type": "queued", "text": "", "n": 0})
                     self._start_turn(*nxt)               # stays "working": the queued message goes straight in
@@ -576,6 +591,40 @@ class Session:
         else:
             self.agent.model = model or None
         write_meta(self.id, model=model)
+
+    def set_goal(self, text: str):
+        """/goal: keep working until this is done. An empty text clears it."""
+        self.goal, self._goal_idle = (text or "").strip()[:2000], 0
+        write_meta(self.id, goal=self.goal)
+        self.emit({"type": "status", "text": f"Goal set: {self.goal}. The agent keeps going until it is done; press "
+                                             "Stop or clear the goal to end it." if self.goal else "Goal cleared."})
+
+    def _goal_next(self, ev0: int):
+        """After a turn with a goal: the next turn's message, or None when the goal is met or the user is needed."""
+        with self.lock:
+            evs = self.events[ev0:]
+        reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
+        found = _GOAL_RE.findall(reply)
+        verdict = found[-1].upper() if found else ""
+        acted = any(e.get("type") == "tool_end" for e in evs)
+        failed = any(e.get("type") in ("error", "interrupted") for e in evs)
+        if verdict == "DONE":
+            done, self.goal = self.goal, ""
+            write_meta(self.id, goal="")
+            self.emit({"type": "status", "text": f"Goal met: {done}"})
+            return None
+        if failed or verdict != "CONTINUE":
+            self.emit({"type": "status", "text": "Goal paused: the agent needs you. Reply to carry on; the goal stays "
+                                                 "set." if not failed else "Goal paused after an error. Reply to "
+                                                 "carry on; the goal stays set."})
+            return None
+        self._goal_idle = 0 if acted else self._goal_idle + 1
+        if self._goal_idle >= 2:
+            self._goal_idle = 0
+            self.emit({"type": "status", "text": "Goal paused: two turns in a row without doing anything. Reply "
+                                                 "with what to try next; the goal stays set."})
+            return None
+        return (GOAL_NEXT, [])
 
     def set_plan(self, on: bool):
         self.plan = bool(on)
@@ -657,7 +706,7 @@ class Session:
                                                              "providers", "runs_on")},
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
-                "harness_models": getattr(a, "available_models", None), "plan": self.plan,
+                "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -778,7 +827,7 @@ def view(sid: str, since: int) -> dict:
         meta = read_meta(sid)
         return {"id": sid, "workdir": str(e), "state": "idle", "readonly": True, "mode": "ask", "kind":
                 meta.get("kind") or "code", "title": meta.get("title") or "Chat", "pinned": bool(meta.get("pinned")),
-                "usage": {}, "harness": {}, "model": meta.get("model"), "plan": False, "epoch": 0, "turns": [],
+                "usage": {}, "harness": {}, "model": meta.get("model"), "plan": False, "goal": meta.get("goal", ""), "epoch": 0, "turns": [],
                 "checkpoints_note": "", "events": evs[since:], "total": len(evs), "mcp": None}
 
 

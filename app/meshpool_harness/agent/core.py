@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import difflib
 import http.client
+import itertools
 import json
 import os
 import platform
@@ -395,7 +396,7 @@ def _drop_images(messages: list, keep: int = 0) -> None:
 
 class Agent:
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
-                 session_id: str | None = None, max_steps: int = 80, profile: str = "code",
+                 session_id: str | None = None, max_steps: int = 0, profile: str = "code",
                  sessions_dir: str | None = None):
         self.profile = "work" if profile == "work" else "code"
         self.root = Path(workdir).expanduser().resolve()
@@ -410,7 +411,8 @@ class Agent:
         self.approve = approve
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
-        self.max_steps = max_steps
+        # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
+        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0)
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
@@ -573,7 +575,7 @@ class Agent:
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
             wrapped = False
-            for step in range(self.max_steps):
+            for step in (range(self.max_steps) if self.max_steps else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
                 self._maybe_compact()

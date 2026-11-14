@@ -614,8 +614,10 @@ function renderBar() {
   $("#stopBtn")?.addEventListener("click", stopNow);
   $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
   const root = curRoot();
-  $("#hintline").innerHTML = c.busy ? `Enter adds to the task · Esc stops`
-    : "";
+  const goal = S.cur?.view?.goal;
+  $("#hintline").innerHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy ? " · " : ""}` : "")
+    + (c.busy ? `Enter adds to the task · Esc stops` : "");
+  $("#goalClr")?.addEventListener("click", () => setGoal(""));
   $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
   const inp = $("#input");
   inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
@@ -663,7 +665,7 @@ async function sendNow(interrupt) {
   if (!text && !S.attachments.length) return;
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
-  if (!S.settings?.ready) { showOnboarding(); return; }
+  if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
@@ -686,6 +688,7 @@ async function sendNow(interrupt) {
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
     const cur = S.cur;
+    if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g); }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
@@ -694,6 +697,7 @@ async function sendNow(interrupt) {
     renderBar();
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
+    S.pendingGoal = null;
     S.stopping = false; renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
@@ -707,6 +711,8 @@ const SLASH = [
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
   ["/agent", "Choose the agent", () => harnessPop($("#hPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
+  ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
+  ["/usage", "Tokens and spend", () => openSettings("usage")],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
   ["/terminal", "Open the terminal", () => togglePanel("term", true)],
@@ -720,7 +726,20 @@ const SLASH = [
 ];
 async function runSlash(text) {
   const cmd = text.split(/\s/)[0].toLowerCase(); const hit = SLASH.find(s => s[0] === cmd);
-  if (!hit) return false; hit[2](); return true;
+  if (!hit) return false; hit[2](text.slice(cmd.length).trim()); return true;
+}
+/* /goal: the agent keeps taking turns until it reports the goal met and checked, it needs you, or you stop it. */
+async function goalCmd(arg) {
+  const cur = S.cur?.view?.goal || "";
+  if (!arg) { toast(cur ? `Goal: ${cur}. Type /goal clear to end it.` : "Type /goal and what should be done, e.g. /goal make every test pass", 5000); return; }
+  if (/^(clear|off|stop|none|end)$/i.test(arg)) { if (S.cur) await setGoal(""); else toast("No goal is set."); return; }
+  S.pendingGoal = arg;
+  const inp = $("#input"); inp.value = arg; sendNow(false);     // sends it as the first message of the goal
+}
+async function setGoal(text) {
+  const cur = S.cur; if (!cur) return;
+  try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) cur.view.goal = v.goal; renderBar(); }
+  catch (e) { toast(e.message, 4000); }
 }
 /* Frequency of use: the commands and skills you use most come first in their menus. */
 const USE = (() => { try { return JSON.parse(localStorage.getItem("mp_use") || "{}"); } catch (e) { return {}; } })();
@@ -956,7 +975,7 @@ async function poll() {
   if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { cur.total = 0; cur.epoch = v.epoch; $("#col").innerHTML = ""; cur.live = null; cur.group = null; cur.tools = {}; cur.log = []; cur.next = 0; return poll(); }
   const first = !cur.view || cur.view.prefill || cur.view.state === "starting" && !cur.total;
   cur.epoch = v.epoch; cur.total = v.total;
-  const prevState = cur.view?.state;
+  const prevState = cur.view?.state, prevGoal = cur.view?.goal;
   cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
   const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; inpEl.placeholder = v.readonly ? "This chat's folder is gone, so it can't continue. Start a new chat." : "Ask Meshpool anything. / for commands, $ for skills"; }
   cur.log = cur.log || [];
@@ -975,7 +994,7 @@ async function poll() {
     $(".el", wk).textContent = Math.round((Date.now() - (cur.since || Date.now())) / 1000) + "s";
     $("#col").appendChild(wk);
   } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
-  if (first || prevState !== v.state || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   if (first && S.panel) renderPanel();
   scrollConv(first);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
@@ -1425,6 +1444,18 @@ async function panelGit(body) {
 const CK = {success: ["ok", "Passed"], failure: ["bad", "Failed"], timed_out: ["bad", "Timed out"], cancelled: ["bad", "Cancelled"],
   action_required: ["bad", "Needs action"], skipped: ["", "Skipped"], neutral: ["", "Neutral"]};
 function ckState(c) { if (c.status && c.status !== "completed") return ["run", c.status === "queued" ? "Queued" : "Running"]; return CK[c.conclusion] || ["", c.conclusion || "Done"]; }
+/* What the branch (and its pull request) adds and removes, file by file, against the branch it merges into. */
+const CH_BADGE = {added: ["added", "Added"], deleted: ["deleted", "Removed"], renamed: ["modified", "Renamed"], copied: ["modified", "Copied"], changed: ["modified", "Changed"]};
+function changesHTML(ch, branch) {
+  if (!ch) return "";
+  const base = String(ch.base || "").replace(/^origin\//, "");
+  if (!ch.files?.length) return `<div class="cil"><b>Changes</b><div class="stat">${esc(ch.note || `Nothing on ${branch} that ${base || "the base branch"} does not have yet.`)}</div></div>`;
+  const n = ch.count || ch.files.length; const by = k => ch.files.filter(f => f.status === k).length;
+  const parts = [["added", "added"], ["changed", "changed"], ["deleted", "removed"], ["renamed", "renamed"]].map(([k, w]) => by(k) ? `${by(k)} ${w}` : "").filter(Boolean).join(", ");
+  return `<details class="cil chg" open><summary><b>Changes against ${esc(base)}</b> <span class="stat">${n} file${n === 1 ? "" : "s"} (${parts}) · <span class="plus">+${ch.added}</span> <span class="minus">−${ch.removed}</span></span></summary>
+    <ul>${ch.files.map(f => { const [cl, w] = CH_BADGE[f.status] || CH_BADGE.changed; return `<li title="${esc(f.from ? f.from + " → " + f.path : f.path)}"><span class="badge ${cl}">${w}</span><span class="cn">${esc(f.path)}</span><span class="cs">${f.binary ? "binary" : `<span class="plus">+${f.added}</span> <span class="minus">−${f.removed}</span>`}</span></li>`; }).join("")}</ul>
+    ${n > ch.files.length ? `<div class="stat">and ${n - ch.files.length} more</div>` : ""}</details>`;
+}
 async function drawCI(root, fresh) {
   const box = $("#ciBox"); if (!box) return;
   let ci;
@@ -1438,6 +1469,7 @@ async function drawCI(root, fresh) {
     ${pr ? `<div class="prcard"><a href="${esc(pr.url)}" target="_blank" rel="noopener"><b>#${pr.number} ${esc(pr.title)}</b></a><span class="badge ${pr.state === "open" ? "added" : pr.state === "merged" ? "modified" : "deleted"}">${pr.draft ? "Draft" : pr.state === "open" ? "Open" : pr.state === "merged" ? "Merged" : "Closed"}</span><small>${esc(ci.branch)} into ${esc(pr.base)}${pr.author ? " by " + esc(pr.author) : ""}</small>
       ${pr.state === "open" && ci.connected ? `<div class="row" style="margin-top:6px"><button class="btn" id="ciMerge" ${ci.summary === "failing" ? "disabled title='Fix the failing checks first'" : ""}>Squash and merge</button></div>` : ""}</div>`
       : `<div class="stat">No pull request for ${esc(ci.branch)} yet.</div>`}
+    ${changesHTML(ci.changes, ci.branch)}
     <div class="cil"><b>Checks</b> <span class="stat">${esc(ci.sha)}</span>${ci.checks.length ? `<ul>${ci.checks.map(c => { const [cl, tx] = ckState(c); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${tx}</span>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">Details</a>` : ""}</li>`; }).join("")}</ul>` : `<div class="stat">No checks on this commit.</div>`}</div>
     ${ci.runs.length ? `<div class="cil"><b>Workflow runs (CI)</b><ul>${ci.runs.map(r => { const [cl, tx] = ckState(r); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)}</span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && ci.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed</button>` : ""}</li>`; }).join("")}</ul></div>` : ""}
     <div class="cil"><b>Deployments (CD)</b>${ci.deployments.length ? `<ul>${ci.deployments.map(d => `<li><span class="cidot ${d.state === "success" || d.state === "active" ? "ok" : d.state === "failure" || d.state === "error" ? "bad" : d.state === "in_progress" || d.state === "pending" || d.state === "queued" ? "run" : ""}"></span><span class="cn">${esc(d.environment || "deployment")}</span><span class="cs">${esc(d.state)} · ${esc(d.ref || d.sha)}</span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>` : ""}</li>`).join("")}</ul>` : `<div class="stat">No deployments recorded on GitHub.</div>`}</div>

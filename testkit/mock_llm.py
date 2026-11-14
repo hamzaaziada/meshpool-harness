@@ -15,6 +15,11 @@ def plan(messages, tools):
     done = [m for m in messages[last_user + 1:] if m["role"] == "tool"]
     step = len(done)
     u = utext.lower()
+    if "the goal of this chat" in u and "goal test" in u:   # /goal: three turns, one file each, then done
+        n = sum(1 for m in messages if m["role"] == "user" and "the goal of this chat" in str(m["content"]).lower())
+        if step == 0:
+            return ("tool", "write_file" if "write_file" in names else "write", {"path": f"goal{n}.txt", "content": f"part {n}\n"})
+        return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
     if "ok" == u.strip(" .") or "single word" in u:
         return ("text", "ok")
     if "word doc" in u:
