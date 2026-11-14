@@ -298,13 +298,19 @@ def main(argv=None):
     return 0 if res["ok"] else 1
 
 
-def ping(model: str | None = None) -> dict:
-    """One tiny model call with the current settings (or `model`). Returns {ok, detail, model, seconds}."""
+def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
+    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet).
+    Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
     model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     t0 = time.time()
+    led = None
     try:
         led = SimpleLedger("check")
+        if base:
+            led.base_url = base.rstrip("/")
+        if key:
+            led.api_key = key
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
                      max_tokens=5, retries=1, timeout=60)
         txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
@@ -315,7 +321,7 @@ def ping(model: str | None = None) -> dict:
         if "401" in msg or "403" in msg:
             msg = "the endpoint rejected the API key (" + msg[:160] + ")"
         return {"ok": False, "detail": msg[:400], "model": model, "seconds": round(time.time() - t0, 1),
-                "endpoint": os.environ.get("MESHPOOL_BASE_URL", "")}
+                "endpoint": led.base_url if led else (base or os.environ.get("MESHPOOL_BASE_URL", ""))}
 
 
 def _check(live: bool) -> int:

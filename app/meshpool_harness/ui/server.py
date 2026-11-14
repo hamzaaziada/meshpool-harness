@@ -127,24 +127,17 @@ def assistant_action(b: dict) -> dict:
 
 
 def test_connection(values: dict | None = None) -> dict:
-    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
+    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
+    straight to the check: saved settings win over the environment, so setting them there would test the saved
+    endpoint and send the typed key to it."""
     C.load_into_env(override=True)
+    from meshpool_harness import providers as PV
     from meshpool_harness.cli import ping
-    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL")}
-    try:
-        for k, v in (values or {}).items():
-            if k in keep and str(v).strip():
-                os.environ[k] = str(v).strip()
-        if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-            return {"ok": False, "detail": "No API key saved yet."}
-        return ping()
-    finally:
-        if values:
-            for k, v in keep.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+    v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
+    key = v.get("MESHPOOL_API_KEY") or PV.key()
+    if not key:
+        return {"ok": False, "detail": "No API key saved yet."}
+    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -336,6 +329,9 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import mcp_apps as CN
                 C.load_into_env(override=True)
                 return self._send(200, {"connectors": CN.listing()})
+            if u.path == "/api/git/changes":                    # local git only: shows before GitHub answers
+                q = parse_qs(u.query)
+                return self._send(200, W.branch_changes(q.get("root", [""])[0], q.get("base", [""])[0]))
             if u.path == "/api/git/ci":
                 return self._send(200, W.git_ci(parse_qs(u.query).get("root", [""])[0]))
             if u.path == "/api/usage":

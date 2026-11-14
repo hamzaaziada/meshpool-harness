@@ -597,13 +597,16 @@ def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     and the facts behind them. Pages whose inputs are not in the workbook are skipped."""
     bk = Book(path)
     pages = []
-    for fn in (financial_summary, football_field, weighting_table, dcf_outputs, dcf_sensitivity, scenario_chart,
-               comps, lambda b: comps(b, "prec_", "Precedent transactions"), lbo_page, merger_page):
+    # rank: which pages stay when the deck is too short for all of them (1 = keep first)
+    for rank, fn in ((4, financial_summary), (1, football_field), (7, weighting_table), (2, dcf_outputs),
+                     (5, dcf_sensitivity), (8, scenario_chart), (3, comps),
+                     (6, lambda b: comps(b, "prec_", "Precedent transactions")), (9, lbo_page), (10, merger_page)):
         try:
             p = fn(bk)
         except Exception:                                      # noqa: BLE001 - one unreadable table skips its page
             p = None
         if p:
+            p["rank"] = rank
             p.setdefault("node", f"W{len(pages) + 1}")
             p.setdefault("section", "Valuation")
             pages.append(p)

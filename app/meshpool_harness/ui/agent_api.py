@@ -594,8 +594,11 @@ class Session:
 
     def set_goal(self, text: str):
         """/goal: keep working until this is done. An empty text clears it."""
+        had = self.goal
         self.goal, self._goal_idle = (text or "").strip()[:2000], 0
         write_meta(self.id, goal=self.goal)
+        if not self.goal and not had:
+            return                                   # nothing was set: no "Goal cleared." line
         self.emit({"type": "status", "text": f"Goal set: {self.goal}. The agent keeps going until it is done; press "
                                              "Stop or clear the goal to end it." if self.goal else "Goal cleared."})
 

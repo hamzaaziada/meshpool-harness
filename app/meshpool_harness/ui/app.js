@@ -30,6 +30,9 @@ function termShellPicker() {
 const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
+function modelLabel(id, list) {                 // the name, plus the id when another model in the list shares it
+  const n = modelName(id); return (list || []).filter(m => modelName(m.id || m) === n).length > 1 ? `${n} · ${bareModel(id)}` : n;
+}
 function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
   return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
@@ -101,6 +104,7 @@ function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); cons
 
 function toast(text, ms = 2600, action) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
+  if ([...box.children].some(x => x.firstChild?.nodeValue === text && !x.classList.contains("out"))) return;
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
   if (action) { const b = document.createElement("button"); b.className = "tact"; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); ms = Math.max(ms, 6000); }
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 160); }, ms);
@@ -239,7 +243,7 @@ function setAppMode(m) {
   if (last && S.threads.some(t => t.id === last && !t.archived && (t.kind || "code") === m)) { renderSide(); renderBar(); openThread(last); return; }
   newThread();
 }
-const GIT_WORD = {"??": "new", "A": "added", "M": "changed", "D": "deleted", "R": "renamed", "AM": "added", "MM": "changed", "U": "conflict", "UU": "conflict"};
+const GIT_WORD = {"??": "New", "A": "Added", "M": "Changed", "D": "Removed", "R": "Renamed", "AM": "Added", "MM": "Changed", "U": "Conflict", "UU": "Conflict"};
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
   $("#app").classList.toggle("steps", S.steps);
@@ -518,7 +522,7 @@ function renderTop() {
   $("#topbar").innerHTML = `
     ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
     <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
-    ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}${esc(projName(root))}</button>` : ""}
+    ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
     <span class="sp"></span>
     ${usage ? `<span class="chip use" title="Tokens in this chat">${esc(usage)}</span>` : ""}
@@ -603,7 +607,7 @@ function renderBar() {
     <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
     <button class="pill" id="aPill" title="${esc(MODES[c.mode]?.[1] || "")}">${ICON.shield}<span class="lbl">${esc(MODES[c.mode]?.[0] || "Supervised")}</span>${ICON.chev}</button>
     <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
-    <button class="pill" id="attBtn" title="Attach images or files">${ICON.clip}</button>
+    <button class="pill" id="attBtn" title="Attach images or files" aria-label="Attach images or files">${ICON.clip}</button>
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spin"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
@@ -617,8 +621,9 @@ function renderBar() {
   $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
   const root = curRoot();
   const goal = S.cur?.view?.goal;
-  $("#hintline").innerHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy ? " · " : ""}` : "")
-    + (c.busy ? `Enter adds to the task · Esc stops` : "");
+  const touch = matchMedia("(pointer: coarse)").matches;
+  $("#hintline").innerHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
+    + (c.busy && !touch ? `Enter adds to the task · Esc stops` : "");
   $("#goalClr")?.addEventListener("click", () => setGoal(""));
   $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
   const inp = $("#input");
@@ -715,7 +720,7 @@ const SLASH = [
   ["/agent", "Choose the agent", () => harnessPop($("#hPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
-  ["/usage", "Tokens and spend", () => openSettings("usage")],
+  ["/usage", "Tokens used, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
@@ -729,6 +734,7 @@ const SLASH = [
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
 ];
+const ARG_CMDS = new Set(["/goal", "/qa"]);         // these need words after them; /review works on its own
 async function runSlash(text) {
   const cmd = text.split(/\s/)[0].toLowerCase(); const hit = SLASH.find(s => s[0] === cmd);
   if (!hit) return false; hit[2](text.slice(cmd.length).trim()); return true;
@@ -788,7 +794,7 @@ function menuFromInput() {
   const skill = /(^|\s)\$([\w-]*)$/.exec(before);
   if (slash) {
     const q = slash[1].toLowerCase();
-    const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); inp.value = ""; s[2](); }})));
+    const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); if (ARG_CMDS.has(s[0])) { inp.value = s[0] + " "; inp.focus(); inp.dispatchEvent(new Event("input")); return; } inp.value = ""; s[2](); }})));
     return items.length ? inlinePop(items) : closePop();
   }
   if (skill) {
@@ -891,7 +897,7 @@ function modelPop(anchor) {
     const shown = (TABS.find(t => t[0] === tab) || TABS[0])[2];
     const q = $("#mq").value.trim().toLowerCase();
     const hit = m => !q || m.id.toLowerCase().includes(q) || modelName(m.id).toLowerCase().includes(q) || (m.provider || "").toLowerCase().includes(q);
-    const row = (m, note) => `<button class="opt" data-id="${esc(m.id)}" ${note ? "style='opacity:.7'" : ""}><span class="ol" title="${esc(m.id)}">${esc(modelName(m.id))}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}${note ? `<span class="od">${esc(note)}</span>` : ""}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}${provOf(m.id) === "key" ? `<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span>` : ""}</button>`;
+    const row = (m, note) => `<button class="opt" data-id="${esc(m.id)}" ${note ? "style='opacity:.7'" : ""}><span class="ol" title="${esc(m.id)}">${esc(modelLabel(m.id, M.models))}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}${note ? `<span class="od">${esc(note)}</span>` : ""}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}${provOf(m.id) === "key" ? `<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span>` : ""}</button>`;
     let html = "";
     if (own.length) html += `<div class="grp">${esc(h.name)} on ${esc(h.runs_on || "its account")}</div>` + own.filter(m => !q || (m.name || m.id).toLowerCase().includes(q)).map(m => `<button class="opt" data-own="${esc(m.id)}"><span class="ol">${esc(m.name)}</span>${m.id === c.model || bareModel(c.model) === m.id ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
     const favs = M.models.filter(m => M.favorites.includes(m.id) && hit(m) && shown.includes(provOf(m.id)));
@@ -1013,8 +1019,9 @@ async function poll() {
   cur.epoch = v.epoch; cur.total = v.total;
   const prevState = cur.view?.state, prevGoal = cur.view?.goal;
   cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
-  const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; inpEl.placeholder = v.readonly ? "This chat's folder is gone, so it can't continue. Start a new chat." : "Ask Meshpool anything. / for commands, $ for skills"; }
+  const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; if (v.readonly) inpEl.placeholder = "This chat's folder is gone, so it can't continue. Start a new chat."; }
   cur.log = cur.log || [];
+  const cv = $("#conv"); const stick = !!cv && cv.scrollHeight - cv.scrollTop - cv.clientHeight < 200;
   for (const ev of v.events) {
     if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // two polls in flight
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
@@ -1032,7 +1039,7 @@ async function poll() {
   } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
   if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   if (first && S.panel) renderPanel();
-  scrollConv(first);
+  scrollConv(first || stick);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
   cur.pollT = setTimeout(poll, busy ? 400 : document.hidden ? 15000 : 3000);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
@@ -1094,6 +1101,8 @@ function bumpGroup(g, done) {
   if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); }
 }
 function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
+const GOAL_NEXT = "Continue working toward the goal.";
+const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 function applyEv(ev) {
   const cur = S.cur, col = $("#col");
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
@@ -1104,6 +1113,7 @@ function applyEv(ev) {
       if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
       break; }
     case "user": {
+      if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking";
       add(`<div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
@@ -1113,8 +1123,9 @@ function applyEv(ev) {
       cur.liveText += ev.text; cur.live.textContent = cur.liveText; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; } break;
     case "assistant":
-      if (cur.live) { if (ev.text) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = linkFiles(md(ev.text)); } else cur.live.remove(); cur.live = null; }
-      else if (ev.text) { closeGroup(); add(linkFiles(md(ev.text)), "msg-ai"); }
+      { const txt = stripGoal(ev.text);
+      if (cur.live) { if (txt) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = linkFiles(md(txt)); } else cur.live.remove(); cur.live = null; }
+      else if (txt) { closeGroup(); add(linkFiles(md(txt)), "msg-ai"); } }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {
@@ -1312,11 +1323,15 @@ function progressSteps() {
   const plan = [...turn].reverse().find(e => e.type === "plan");
   if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map(e => ({text: e.content, status: e.status}))};
   const tools = {};
+  let turnIds = [];
   for (const e of turn) {
     if (e.type === "tool_start") { const nm = e.mcp ? String(e.name || "").split("__").slice(2).join("__") : e.name; const sm = stepSummary(nm, e); tools[e.id] = {name: nm, sm, text: `${TOOL_RUN[nm] || e.label || nm}${sm ? " " + sm : ""}`, status: "in_progress"}; }
     if (e.type === "tool_end" && tools[e.id] && e.ok) tools[e.id].text = `${TOOL_DONE[tools[e.id].name] || TOOL_LABEL[tools[e.id].name] || tools[e.id].name}${tools[e.id].sm ? " " + tools[e.id].sm : ""}`;
-    if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = e.ok ? "completed" : "failed";
-    if (e.type === "interrupted" || e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = e.type === "interrupted" ? "stopped" : "completed";
+    if (e.type === "tool_end" && tools[e.id]) tools[e.id].status = tools[e.id].status === "stopped" ? "stopped" : e.ok ? "completed" : "failed";
+    if (e.type === "user") turnIds = [];
+    if (e.type === "tool_start") turnIds.push(e.id);
+    if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
+    if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
   }
   return {kind: "steps", items: Object.values(tools)};
 }
@@ -1337,7 +1352,7 @@ function panelProgress(body) {
   const users = threadLog().filter(e => e.type === "user");
   const skills = [...new Set(users.flatMap(u => (String(u.text).match(/\$[\w-]+/g) || [])))].filter(x => S.skills.some(k => "$" + k.name === x));
   body.innerHTML = `<div class="cw">
-    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? ` <span class="cwdone">Stopped</span>` : ` <span class="cwdone">Done</span>`) : ""}</h4>
+    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? ` <span class="cwstop">Stopped</span>` : ` <span class="cwdone">Done</span>`) : ""}</h4>
       ${pr.items.length ? `<ol class="stepl">${pr.items.map(it => `<li class="${esc(it.status)}">${icon(it.status)}<span>${esc(it.text)}</span></li>`).join("")}</ol>` : `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`}
     </section>
     <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
@@ -1466,6 +1481,7 @@ async function panelGit(body) {
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
     <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
     <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
+    <div id="chgBox"></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
     <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
@@ -1475,7 +1491,8 @@ async function panelGit(body) {
   $("#gpush").onclick = () => gitAct({action: "push"});
   $("#gpull").onclick = () => gitAct({action: "pull"});
   $("#gpr").onclick = () => gitAct({action: "pr", title: $("#gprt").value, body: $("#gprb").value});
-  if (g.github) drawCI(root); else $("#ciBox").innerHTML = `<h4>Pull request, checks and deployments</h4><div class="stat">Show up for repositories on GitHub.</div>`;
+  api("/api/git/changes?root=" + encodeURIComponent(root)).then(ch => { const b = $("#chgBox"); if (b) b.innerHTML = changesHTML(ch, g.branch); }).catch(() => {});
+  if (g.github) drawCI(root); else $("#ciBox").innerHTML = `<h4>Pull request, checks and deployments</h4><div class="stat">Pull requests, checks and deployments show here for repositories on GitHub.</div>`;
 }
 const CK = {success: ["ok", "Passed"], failure: ["bad", "Failed"], timed_out: ["bad", "Timed out"], cancelled: ["bad", "Cancelled"],
   action_required: ["bad", "Needs action"], skipped: ["", "Skipped"], neutral: ["", "Neutral"]};
@@ -1483,13 +1500,15 @@ function ckState(c) { if (c.status && c.status !== "completed") return ["run", c
 /* What the branch (and its pull request) adds and removes, file by file, against the branch it merges into. */
 const CH_BADGE = {added: ["added", "Added"], deleted: ["deleted", "Removed"], renamed: ["modified", "Renamed"], copied: ["modified", "Copied"], changed: ["modified", "Changed"]};
 function changesHTML(ch, branch) {
-  if (!ch) return "";
+  if (!ch || ch.same) return "";                                  // on the base branch: nothing to compare
   const base = String(ch.base || "").replace(/^origin\//, "");
-  if (!ch.files?.length) return `<div class="cil"><b>Changes</b><div class="stat">${esc(ch.note || `Nothing on ${branch} that ${base || "the base branch"} does not have yet.`)}</div></div>`;
+  if (!ch.files?.length) return `<div class="cil"><b>Changes in this branch</b><div class="stat">${esc(ch.note || `${branch} has nothing that ${base || "the base branch"} does not have yet.`)}</div></div>`;
   const n = ch.count || ch.files.length; const by = k => ch.files.filter(f => f.status === k).length;
   const parts = [["added", "added"], ["changed", "changed"], ["deleted", "removed"], ["renamed", "renamed"]].map(([k, w]) => by(k) ? `${by(k)} ${w}` : "").filter(Boolean).join(", ");
-  return `<details class="cil chg" open><summary><b>Changes against ${esc(base)}</b> <span class="stat">${n} file${n === 1 ? "" : "s"} (${parts}) · <span class="plus">+${ch.added}</span> <span class="minus">−${ch.removed}</span></span></summary>
-    <ul>${ch.files.map(f => { const [cl, w] = CH_BADGE[f.status] || CH_BADGE.changed; return `<li title="${esc(f.from ? f.from + " → " + f.path : f.path)}"><span class="badge ${cl}">${w}</span><span class="cn">${esc(f.path)}</span><span class="cs">${f.binary ? "binary" : `<span class="plus">+${f.added}</span> <span class="minus">−${f.removed}</span>`}</span></li>`; }).join("")}</ul>
+  const num = (v, cl, sign) => `<span class="${v ? cl : "zero"}">${sign}${v}</span>`;
+  const name = p => { const i = p.lastIndexOf("/"); return i < 0 ? `<b>${esc(p)}</b>` : `<b>${esc(p.slice(i + 1))}</b> <span class="dir">${esc(p.slice(0, i))}</span>`; };
+  return `<details class="cil chg" open><summary><b>Changes against ${esc(base)}</b> <span class="stat">${n} file${n === 1 ? "" : "s"} (${parts}) · <span class="nw">${num(ch.added, "plus", "+")} ${num(ch.removed, "minus", "−")}</span></span></summary>
+    <ul>${ch.files.map(f => { const [cl, w] = CH_BADGE[f.status] || CH_BADGE.changed; return `<li title="${esc(f.from ? f.from + " → " + f.path : f.path)}"><span class="badge ${cl}">${w}</span><span class="cn">${name(f.path)}${f.from ? ` <span class="dir">from ${esc(f.from)}</span>` : ""}</span><span class="cs nw">${f.binary ? "binary" : `${num(f.added, "plus", "+")} ${num(f.removed, "minus", "−")}`}</span></li>`; }).join("")}</ul>
     ${n > ch.files.length ? `<div class="stat">and ${n - ch.files.length} more</div>` : ""}</details>`;
 }
 async function drawCI(root, fresh) {
@@ -1505,7 +1524,6 @@ async function drawCI(root, fresh) {
     ${pr ? `<div class="prcard"><a href="${esc(pr.url)}" target="_blank" rel="noopener"><b>#${pr.number} ${esc(pr.title)}</b></a><span class="badge ${pr.state === "open" ? "added" : pr.state === "merged" ? "modified" : "deleted"}">${pr.draft ? "Draft" : pr.state === "open" ? "Open" : pr.state === "merged" ? "Merged" : "Closed"}</span><small>${esc(ci.branch)} into ${esc(pr.base)}${pr.author ? " by " + esc(pr.author) : ""}</small>
       ${pr.state === "open" && ci.connected ? `<div class="row" style="margin-top:6px"><button class="btn" id="ciMerge" ${ci.summary === "failing" ? "disabled title='Fix the failing checks first'" : ""}>Squash and merge</button></div>` : ""}</div>`
       : `<div class="stat">No pull request for ${esc(ci.branch)} yet.</div>`}
-    ${changesHTML(ci.changes, ci.branch)}
     <div class="cil"><b>Checks</b> <span class="stat">${esc(ci.sha)}</span>${ci.checks.length ? `<ul>${ci.checks.map(c => { const [cl, tx] = ckState(c); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${tx}</span>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">Details</a>` : ""}</li>`; }).join("")}</ul>` : `<div class="stat">No checks on this commit.</div>`}</div>
     ${ci.runs.length ? `<div class="cil"><b>Workflow runs (CI)</b><ul>${ci.runs.map(r => { const [cl, tx] = ckState(r); return `<li><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)}</span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && ci.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed</button>` : ""}</li>`; }).join("")}</ul></div>` : ""}
     <div class="cil"><b>Deployments (CD)</b>${ci.deployments.length ? `<ul>${ci.deployments.map(d => `<li><span class="cidot ${d.state === "success" || d.state === "active" ? "ok" : d.state === "failure" || d.state === "error" ? "bad" : d.state === "in_progress" || d.state === "pending" || d.state === "queued" ? "run" : ""}"></span><span class="cn">${esc(d.environment || "deployment")}</span><span class="cs">${esc(d.state)} · ${esc(d.ref || d.sha)}</span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>` : ""}</li>`).join("")}</ul>` : `<div class="stat">No deployments recorded on GitHub.</div>`}</div>
@@ -1527,8 +1545,13 @@ async function gitAct(b) {
 }
 function panelPreview(body) {
   const url = store("preview") || "http://localhost:3000";
-  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" style="padding:6px 12px">Start your app first (for example ask Meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
-  const go = () => { let u = $("#purl").value.trim(); if (!/^https?:\/\//.test(u)) u = "http://" + u; store("preview", u); $("#pframe").src = u; };
+  body.innerHTML = `<div class="pbar"><input id="purl" value="${esc(url)}" aria-label="Address"><button class="btn" id="pgo">Open</button><button class="btn" id="pext" title="Open in your browser">${ICON.globe}</button></div><div class="pnote" id="pempty" style="padding:6px 12px">Start your app first (for example ask Meshpool to run it), then enter its address.</div><iframe class="preview" id="pframe" hidden title="Preview" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>`;
+  const go = () => {
+    let u = $("#purl").value.trim(); if (!/^https?:\/\//.test(u)) u = "http://" + u; store("preview", u);
+    const fr = $("#pframe"), msg = $("#pempty");
+    fetch(u, {mode: "no-cors"}).then(() => { fr.hidden = false; msg.hidden = true; fr.src = u; })
+      .catch(() => { fr.hidden = true; msg.hidden = false; msg.textContent = `Nothing is running at ${u} yet. Start your app (or ask the agent to), then press Open.`; });
+  };
   $("#pgo").onclick = go; $("#purl").onkeydown = e => { if (e.key === "Enter") go(); };
   $("#pext").onclick = () => openExternal($("#purl").value);
   go();
@@ -1566,7 +1589,7 @@ async function renderSection(sec) {
       <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
       <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].map(([id, name, desc]) =>
         `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="sProvRes"></div>`;
-    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
+    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelLabel(m.id, ms))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sProv").onchange = async () => {
       const v = $("#sProv").value;
@@ -1604,7 +1627,7 @@ async function renderSection(sec) {
       ${M.error ? `<div class="res bad">${esc(M.error)}</div>` : ""}<ul class="rows2" id="sml"></ul>`;
     const draw = () => {
       const q = $("#smq").value.trim().toLowerCase();
-      $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b title="${esc(m.id)}">${esc(modelName(m.id))}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
+      $("#sml").innerHTML = M.models.filter(m => !q || m.id.toLowerCase().includes(q)).map(m => `<li><span class="tg"><b title="${esc(m.id)}">${esc(modelLabel(m.id, M.models))}</b><small>${esc(m.provider)}${m.context ? ` · ${fmt(m.context)} context` : ""}${(m.caps || []).length ? " · " + m.caps.join(", ") : ""}</small></span>
         ${m.id === M.default ? `<span class="badge modified">Default</span>` : `<button class="btn" data-def="${esc(m.id)}">Make default</button>`}
         <button class="iconbtn" data-fav="${esc(m.id)}" title="Favorite" style="color:${M.favorites.includes(m.id) ? "var(--warn)" : "var(--ink-3)"}">${ICON.star}</button></li>`).join("") || `<li class="pnote">No models.</li>`;
       $$("[data-def]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/default", {id: x.dataset.def}); Object.assign(M, S.models); draw(); renderBar(); });

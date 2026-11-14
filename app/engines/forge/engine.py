@@ -21,7 +21,10 @@ def _inputs(workdir: str, files: list[str] | None) -> list[str]:
 
 
 def _brief(task: str, workdir: str, files: list[str] | None) -> str:
-    parts = [task]
+    import time
+    # the model does not know the date: without this a cover reads "March 2026" in November
+    parts = [task, f"(Today is {time.strftime('%d %B %Y')}. Date the cover {time.strftime('%B %Y')} unless the brief "
+                   "gives another date.)"]
     for f in _inputs(workdir, files):
         p = Path(f)
         try:
@@ -113,13 +116,23 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
             fixed, extra = pages_from_workbook(wbk)
         except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
             print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    # The computed pages count inside the slides asked for: the model writes the rest (at least 3: cover, argument,
+    # next steps). Asked for fewer than that leaves room for, the first pages (football field, DCF, comps) stay.
+    if fixed and len(fixed) > slides - 3:
+        keep = {id(p) for p in sorted(fixed, key=lambda p: p.get("rank", 99))[:max(2, slides - 3)]}
+        fixed = [p for p in fixed if id(p) in keep]               # the most useful pages, still in deck order
     look, prof = brand_from(task, attached)
-    res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
+    res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client, task_id=task_id,
                 density=mode, fixed_pages=fixed, extra_facts=extra, **look)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
-    answer = (f"Built {Path(pptx).name}: {slides + len(fixed)} slides in the forge design system ({mode} density), "
+    try:
+        from pptx import Presentation
+        made = len(Presentation(pptx).slides)               # what is in the file, not what was planned
+    except Exception:  # noqa: BLE001
+        made = max(slides, len(fixed) + 3)
+    answer = (f"Built {Path(pptx).name}: {made} slides in the forge design system ({mode} density), "
               + (f"{len(fixed)} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
                  if fixed else "")
               + (f"in the {prof.get('name') or 'company'} look ("

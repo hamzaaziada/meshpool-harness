@@ -171,7 +171,8 @@ def test_forge_engine_finds_the_model_workbook(books, monkeypatch, tmp_path):
     shutil.copy(books / "model.xlsx", tmp_path / "model.xlsx")
     out = FE.solve("Build an 8-slide board deck on the valuation", workdir=str(tmp_path), task_id="t",
                    client=object())
-    assert got["fixed_pages"] and got["slides_wanted"] == 8 + len(got["fixed_pages"])
+    # the computed pages count inside the 8 slides asked for; the model still writes at least 3
+    assert got["fixed_pages"] and got["slides_wanted"] == 8 and len(got["fixed_pages"]) <= 5
     assert "computed from model.xlsx" in out["answer"]
 
 

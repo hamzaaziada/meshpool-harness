@@ -585,23 +585,31 @@ def branch_changes(root: str, base: str = "") -> dict:
     remote's default branch): each file added, changed, renamed or deleted, with its lines added and removed. Plain
     git on this computer, so it needs no GitHub sign-in and shows before a pull request exists."""
     r = check_root(root)
+    if not base:                                         # the open pull request's base is the best guess; GitHub only
+        try:
+            base = (git_ci_pr(root) or {}).get("base", "")
+        except Exception:  # noqa: BLE001
+            base = ""
     cands = [f"origin/{base}", base] if base else []
     head = _git(r, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", check=False).strip()
     cands += [head, "origin/main", "origin/master", "main", "master"]
     ref = next((c for c in cands if c and _git(r, "rev-parse", "-q", "--verify", c + "^{commit}", check=False).strip()), "")
     if not ref:
         return {"base": base, "files": [], "added": 0, "removed": 0, "note": "No base branch to compare with."}
+    branch = _git(r, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+    if branch and branch == re.sub(r"^origin/", "", ref):
+        return {"base": ref, "same": True, "files": [], "added": 0, "removed": 0}    # on the base branch itself
     mb = _git(r, "merge-base", ref, "HEAD", check=False).strip()
     if not mb:
         return {"base": ref, "files": [], "added": 0, "removed": 0, "note": f"This branch shares no history with {ref}."}
     kinds = {"A": "added", "D": "deleted", "M": "changed", "R": "renamed", "C": "copied", "T": "changed"}
     status = {}
-    for line in _git(r, "diff", "--name-status", "-M", mb, "HEAD").splitlines():
+    for line in _git(r, "-c", "core.quotePath=false", "diff", "--name-status", "-M", mb, "HEAD").splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
             status[parts[-1]] = (kinds.get(parts[0][:1], "changed"), parts[1] if len(parts) == 3 else "")
     files, plus, minus = [], 0, 0
-    for line in _git(r, "diff", "--numstat", "-M", mb, "HEAD").splitlines():
+    for line in _git(r, "-c", "core.quotePath=false", "diff", "--numstat", "-M", mb, "HEAD").splitlines():
         a_, d_, path = (line.split("\t", 2) + ["", "", ""])[:3]
         if " => " in path:                                 # a rename: "dir/{old => new}.py" or "old => new"
             m = re.match(r"(.*)\{(.*) => (.*)\}(.*)", path)
@@ -614,6 +622,14 @@ def branch_changes(root: str, base: str = "") -> dict:
                       **({"from": old} if old else {})})
     files.sort(key=lambda f: (-(f["added"] + f["removed"]), f["path"]))
     return {"base": ref, "files": files[:300], "count": len(files), "added": plus, "removed": minus}
+
+
+_PR_BASE: dict = {}
+
+
+def git_ci_pr(root: str) -> dict | None:
+    """The current branch's pull request as git_ci last saw it (no network call)."""
+    return _PR_BASE.get(root)
 
 
 def git_ci(root: str) -> dict:
@@ -643,6 +659,7 @@ def git_ci(root: str) -> dict:
                      "state": "merged" if p.get("merged_at") else p["state"], "draft": p.get("draft", False),
                      "base": p["base"]["ref"], "author": (p.get("user") or {}).get("login", "")}
         sha = p["head"]["sha"] or sha
+        _PR_BASE[root] = out["pr"]
     if sha:
         try:
             cr = _gh_api(f"/repos/{slug}/commits/{sha}/check-runs?per_page=50", token)
@@ -679,10 +696,6 @@ def git_ci(root: str) -> dict:
                                        "url": url, "created": d.get("created_at"), "sha": (d.get("sha") or "")[:7]})
     except ValueError:
         pass
-    try:
-        out["changes"] = branch_changes(root, (out["pr"] or {}).get("base", ""))
-    except (ValueError, OSError, subprocess.SubprocessError) as e:
-        out["changes"] = {"files": [], "added": 0, "removed": 0, "note": str(e)}
     fails = [c for c in out["checks"] if c["conclusion"] in ("failure", "timed_out", "cancelled", "action_required")]
     running = [c for c in out["checks"] if c["status"] != "completed"]
     out["summary"] = "failing" if fails else "running" if running else "passing" if out["checks"] else "none"
