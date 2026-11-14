@@ -43,8 +43,9 @@ jobs:
           done
           git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
-          rt-mac/python/bin/python3 -m pip install -q -r ../packaging/requirements-cli.txt "./vendor-hermes[acp,mcp]" $RUNTIME_EXTRAS
-          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q -r ../packaging/requirements-cli.txt "./vendor-hermes[acp,mcp]" $RUNTIME_EXTRAS
+          rt-mac/python/bin/python3 ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
+          rt-mac/python/bin/python3 -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -oE 'node-v24\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           for a in arm64 x64; do
             mkdir -p node-mac-$a
@@ -92,7 +93,8 @@ jobs:
           mkdir -p rt-win && tar -xzf "$asset" -C rt-win && rm "$asset"
           git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
-          rt-win/python/python.exe -m pip install -q -r ../packaging/requirements-cli.txt "./vendor-hermes[acp,mcp]" $RUNTIME_EXTRAS
+          rt-win/python/python.exe ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
+          rt-win/python/python.exe -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -oE 'node-v24\.[0-9.]+-win-x64\.zip' | head -1)
           curl -fsSLo node.zip "https://nodejs.org/dist/latest-v24.x/$NODE"
           python -m zipfile -e node.zip . && mv "${NODE%.zip}" node-win && rm node.zip
