@@ -64,7 +64,7 @@ LEGACY = {"claude-subscription": "claude-code", "chatgpt-subscription": "codex"}
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-code", "codex", "gemini-cli",
             *LEGACY}
-HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across threads, uses "
+HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
 
 

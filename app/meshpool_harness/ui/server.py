@@ -837,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                         webbrowser.open(url)
                         return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
                     return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
-                                            "message": f"Connected: {n} tool{'s' * (n != 1)}. New threads can use it."})
+                                            "message": f"Connected: {n} tool{'s' * (n != 1)}. New chats can use it."})
                 if act == "github_found":
                     r = CN.github_use_found()
                     C.load_into_env(override=True)

@@ -2,7 +2,7 @@
 
 The message box has two separate choices:
 
-- **Agent (harness):** who does the work in a thread. Pick it in the CPU pill. Each agent has a one-line "best at":
+- **Agent (harness):** who does the work in a chat. Pick it in the CPU pill. Each agent has a one-line "best at":
 
   | Agent | Best at |
   |---|---|
@@ -10,7 +10,7 @@ The message box has two separate choices:
   | Meshpool Code | Coding in your project, with browser, connectors and skills |
   | Meshpool Work | Documents, spreadsheets, decks and research |
   | Pi | Quick, low-cost code fixes |
-  | Hermes | Ongoing work: remembers what it learns across threads |
+  | Hermes | Ongoing work: remembers what it learns across chats |
   | Codex | Terminal and command-line work, on GPT models |
   | Claude Code | Hard, multi-file coding, on Claude models |
   | Gemini CLI | Large codebases and long context, on Gemini models |
@@ -30,9 +30,9 @@ Sign-up asks for one provider, and that provider sets the defaults. You can conn
 | Gemini, API key | `GEMINI_API_KEY` (Google AI Studio) | Meshpool Code, Work, Auto, Pi, Hermes, Gemini CLI | `gemini:<model>` |
 | Gemini, Google sign-in | Gemini CLI's own sign-in | Gemini CLI only | `google:default` |
 
-A model's provider is a prefix on its id. An id with no prefix runs on the API key endpoint. `app/meshpool_harness/providers.py` turns the id into the endpoint, key and wire to use. It also lists each provider's models for the picker and records which agents can use which provider (`SUPPORTS`). `harnesses.credentials()` gives each agent the environment and config its process starts with, for the provider of the thread's model.
+A model's provider is a prefix on its id. An id with no prefix runs on the API key endpoint. `app/meshpool_harness/providers.py` turns the id into the endpoint, key and wire to use. It also lists each provider's models for the picker and records which agents can use which provider (`SUPPORTS`). `harnesses.credentials()` gives each agent the environment and config its process starts with, for the provider of the chat's model.
 
-If you pick a model the current agent can't run, Meshpool switches the thread to an agent that can and says so. For example, a Claude-subscription model switches to Claude Code, and a Claude-key model picked while Codex is the agent switches to Meshpool Code. In a running Codex, Claude Code or Gemini CLI thread, a model from another provider starts a new thread, because those agents sign in once when they start.
+If you pick a model the current agent can't run, Meshpool switches the chat to an agent that can and says so. For example, a Claude-subscription model switches to Claude Code, and a Claude-key model picked while Codex is the agent switches to Meshpool Code. In a running Codex, Claude Code or Gemini CLI chat, a model from another provider starts a new chat, because those agents sign in once when they start.
 
 ## ChatGPT subscription for Meshpool's own agents
 
@@ -81,7 +81,7 @@ So in Meshpool:
 - `app/tests/test_providers.py` covers:
   - model prefixes;
   - which agents run on which provider;
-  - the agent switching that follows from the thread's model;
+  - the agent switching that follows from the chat's model;
   - Gemini key and Google sign-in handling;
   - Anthropic and Gemini endpoint routing;
   - sign-in-only models never reaching Meshpool's own loop.
@@ -89,4 +89,4 @@ So in Meshpool:
 
 ## Older settings
 
-Before this change, the subscriptions were harnesses called `claude-subscription` and `chatgpt-subscription`. Old threads and settings that name them now open `claude-code` and `codex`.
+Before this change, the subscriptions were harnesses called `claude-subscription` and `chatgpt-subscription`. Old chats and settings that name them now open `claude-code` and `codex`.

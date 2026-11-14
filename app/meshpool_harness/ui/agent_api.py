@@ -130,8 +130,8 @@ def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
     or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
     t = str(text or "").split("\u200b")[0].strip()
-    if not t or t in ("New thread", "Session"):
-        return t or "New thread"
+    if not t or t in ("New thread", "New chat", "Session"):
+        return "New chat" if t in ("", "New thread") else t
     t = t.splitlines()[0]
     t = re.sub(r"https?://\S+", "", t)
     t = re.sub(r"(?<!\w)[$/][\w-]+", "", t)
@@ -143,7 +143,7 @@ def nice_title(text: str) -> str:
         t = full
     t = re.sub(r"\s+", " ", t)
     if not t:
-        return "New thread"
+        return "New chat"
     if len(t) > 48:
         cut = t[:48].rsplit(" ", 1)[0]
         t = (cut if len(cut) > 20 else t[:48]).rstrip(" ,;:") + "…"
@@ -499,12 +499,12 @@ class Session:
         sup = self.harness.get("providers") or []
         prov = PV.split(model)[0] if model else None
         if prov and sup and prov not in sup:
-            raise ValueError(f"{self.harness['name']} cannot run {PV.name(prov)} models. Start a new thread with an "
+            raise ValueError(f"{self.harness['name']} cannot run {PV.name(prov)} models. Start a new chat with an "
                              "agent that can.")
         if (prov and self.harness["type"] == "acp" and self.harness.get("provider")
                 and prov != self.harness["provider"] and self.agent.acp_session):
-            raise ValueError(f"This thread runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
-                             f"{PV.name(prov)}, start a new thread.")
+            raise ValueError(f"This chat runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
+                             f"{PV.name(prov)}, start a new chat.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
         else:
@@ -521,7 +521,7 @@ class Session:
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
-            raise ValueError("No checkpoints for this thread.")
+            raise ValueError("No checkpoints for this chat.")
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
@@ -709,7 +709,7 @@ def listing() -> list:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            row = {"id": d["id"], "title": nice_title(d.get("title") or "New thread"), "workdir": d.get("workdir"),
+            row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
                    "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
                    "harness": d.get("harness") or "meshpool-code", "model": d.get("model"),
                    "imported": (d.get("imported") or {}).get("source", "")}
@@ -717,7 +717,7 @@ def listing() -> list:
             rows[d["id"]] = dict(row)
     with LOCK:
         for sid, s in LIVE.items():
-            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New thread"), "workdir": s.workdir,
+            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New chat"), "workdir": s.workdir,
                          "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
@@ -758,7 +758,7 @@ def thread_action(sid: str, body: dict) -> dict:
         if d.is_dir() and d.parent == SESSIONS:
             shutil.rmtree(d, ignore_errors=True)
     else:
-        raise ValueError("Unknown thread action.")
+        raise ValueError("Unknown chat action.")
     return {"ok": True}
 
 
@@ -782,7 +782,7 @@ def search(q: str) -> list:
             continue
         if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
-        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New thread")
+        title = read_meta(d["id"]).get("title") or nice_title(d.get("title") or "New chat")
         # Search what the user reads (titles, messages, replies), not the saved JSON around it.
         texts = [title]
         for m in d.get("messages") or []:
