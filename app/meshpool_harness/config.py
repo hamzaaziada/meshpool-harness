@@ -261,7 +261,11 @@ def system_check() -> list[dict]:
 
 
 def packaged() -> bool:
-    """True inside the installed app (Meshpool.app or the Windows install), where Python is Meshpool's own."""
+    """True inside the installed app (Meshpool.app or the Windows install), where Python is Meshpool's own. A
+    command-line install (its own venv, or the launcher the installers write) is not the app, even when it
+    downloaded its own Python."""
+    if (APP.parent / "venv").is_dir() or (APP / "meshpool_launch.py").exists():
+        return False
     return (APP.parent / "python").is_dir() or (APP.parent / "runtime").is_dir()
 
 
