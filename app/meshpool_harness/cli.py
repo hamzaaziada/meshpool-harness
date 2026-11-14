@@ -51,7 +51,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         bad = [e for e in engine.split(",") if e not in ENGINES]
         if bad:
             raise SystemExit(f"error: unknown engine(s) {bad}; choose from {', '.join(ENGINES)}")
-    if not (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")) and client is None:
+    if not (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("MH_PROVIDER") == "chatgpt") and client is None:
         raise SystemExit(f"error: no API key. Put MESHPOOL_API_KEY=... in {_config.config_path()}")
     client = client or LiveClient("phase_2_build")
     task_id = "req-" + uuid.uuid4().hex[:8]

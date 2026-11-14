@@ -1,5 +1,6 @@
 """Stand-alone model transport: any OpenAI-compatible endpoint (chat-completions or Responses API). No eval/ needed.
-Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses."""
+Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses.
+A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in, an Anthropic or a Gemini key."""
 from __future__ import annotations
 
 import json
@@ -149,6 +150,18 @@ class SimpleLedger:
             body["prompt_cache_key"] = root
             body["user"] = root
         wire = os.environ.get("MH_WIRE", "chat")
+        from meshpool_harness import providers as PV
+        prov, body["model"] = PV.split(body["model"])    # the model's provider decides where the call goes
+        if prov == "chatgpt":                            # the user's ChatGPT sign-in (core/chatgpt.py)
+            from meshpool_harness.core import chatgpt as CG
+            out = from_responses(CG.chat(body, task_id=task_id, idle=int(os.environ.get("MH_STREAM_IDLE_S", "120"))))
+            log_usage_line(task_id, body["model"], out["usage"])
+            return out
+        base_url, api_key = self.base_url, self.api_key
+        if prov in ("anthropic", "gemini"):
+            (base_url, api_key), wire = PV.endpoint(prov), "chat"
+        elif prov in PV.SIGNIN_ONLY:
+            raise RuntimeError(f"{PV.name(prov)} models run only in their maker's agent.")
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
         stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"
@@ -159,9 +172,9 @@ class SimpleLedger:
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
         if wire == "responses":
             body = to_responses(body)
-        req = urllib.request.Request(f"{self.base_url}/{'responses' if wire == 'responses' else 'chat/completions'}",
+        req = urllib.request.Request(f"{base_url}/{'responses' if wire == 'responses' else 'chat/completions'}",
                                      data=json.dumps(body).encode(), method="POST",
-                                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json",
+                                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
                                               "X-Harness-Task-Id": task_id,
                                               **({"session_id": task_id.split("-esc")[0]}
                                                  if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})

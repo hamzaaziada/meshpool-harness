@@ -97,4 +97,5 @@ def test_registry_add_remove_and_defaults(home):
         HR.add("{not json")
     HR.remove("my-agent")
     assert not any(h["id"] == "my-agent" for h in HR.load_all())
-    assert {e["id"] for e in HR.examples()} >= {"gemini-cli", "goose"}
+    assert {e["id"] for e in HR.examples()} >= {"goose"}
+    assert any(h["id"] == "gemini-cli" for h in HR.load_all())          # built in now, no longer an example
