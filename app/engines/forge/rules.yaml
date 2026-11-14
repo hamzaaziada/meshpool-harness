@@ -7,7 +7,7 @@
 version: 1
 
 repair:
-  max_rounds: 3                 # content repair rounds before failures are frozen into the QA report
+  max_rounds: 4                 # content repair rounds before failures are frozen into the QA report
   flag_in_file: true            # unresolved failures are written into the speaker notes as "[QA] ..." lines
 
 pptx:

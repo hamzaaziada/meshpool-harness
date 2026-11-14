@@ -93,7 +93,12 @@ SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","titl
 Every text element that holds numbers carries "prov": [fact ids] (bullets as {"text","prov"}; cells as
 {"lead","bullets":[{"text","prov"}],"prov"}). Use ONLY fact values; if a number is missing write [GAP: what].
 Titles: one sentence stating the takeaway, with a verb, <= 18 words. Every data slide has a source.
-ONE chart = ONE measure in ONE unit. Line charts need >= 4 periods. Sort bars largest first."""
+ONE chart = ONE measure in ONE unit. Line charts need >= 4 periods. Sort bars largest first.
+A number the facts do not state but that follows from them by arithmetic (an offer price from the unaffected price
+and the premium, a change, a ratio, a share) goes in "calcs": [{"id": "C1", "value": "$65.37", "formula":
+"48.42 * (1 + 0.35)", "from": ["F33"]}] and is cited by its C id in prov. The formula uses only numbers written in the
+"from" facts (plus 1, 2, 4, 12, 100, 1000), + - * / and parentheses; the engine recomputes every calc and rejects one
+that does not match. Never estimate: no calc, no number."""
 
 
 _OPEN_RE = re.compile(r"(?i)\b(title|cover|opening|intro(?:duction|ductory)?)\s+(slide|page)\b|\bagenda\b|"
@@ -353,6 +358,198 @@ def chart_checks(slides) -> dict[int, list[str]]:
                                              "sorted, with the key part highlighted")
             if len(series) == 1 and len(cats) < 2 and kind != "waterfall":
                 out.setdefault(n, []).append("chart with a single bar shows nothing; use kpi_tiles or add comparators")
+            if kind != "range":
+                pct = [bool(re.search(r"%|percent|\bpp\b", cat, re.I)) for cat in cats]
+                if any(pct) and not all(pct):
+                    out.setdefault(n, []).append(
+                        f"chart puts a percentage ({cats[pct.index(True)]}) on the same axis as amounts "
+                        f"({cats[pct.index(False)]}); one chart, one unit: state the percentage in the text or a "
+                        "stat, and chart only the comparable amounts")
+                qtr = [bool(re.search(r"\bQ[1-4]\b|\bH[12]\b|quarter", cat, re.I)) for cat in cats]
+                ann = [bool(re.search(r"\bFY|\bfull[- ]year|annual|^\s*(19|20)\d\dE?\s*$", cat, re.I)) for cat in cats]
+                if any(qtr) and any(ann):
+                    out.setdefault(n, []).append(
+                        f"chart mixes quarterly and annual figures ({', '.join(cats[:4])}); a quarter next to a full "
+                        "year is not comparable: chart one period type, and give the annual figure in the text")
+            missing = [cats[i] if i < len(cats) else str(i) for se in series
+                       for i, v in enumerate(se.get("values") or [])
+                       if not isinstance(v, (int, float)) and kind != "line"]
+            if missing:
+                out.setdefault(n, []).append(
+                    f"chart has no value for {', '.join(map(str, missing[:4]))}; never draw an empty bar: chart only "
+                    "categories the facts give a number for (>= 3), or switch to an archetype that fits what is known "
+                    "(kpi tiles, argument) and fill the slide with the evidence that exists")
+    return out
+
+
+_CONSTS = {1.0, 2.0, 4.0, 12.0, 100.0, 1000.0}
+
+
+def _safe_eval(formula: str):
+    """Arithmetic only: numbers, + - * /, parentheses. Returns (value, literals) or raises ValueError."""
+    import ast
+    tree = ast.parse(formula.replace(",", "").replace("×", "*").replace("÷", "/").replace("−", "-"), mode="eval")
+    lits: list[float] = []
+
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            lits.append(float(n.value))
+            return float(n.value)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.USub, ast.UAdd)):
+            v = ev(n.operand)
+            return -v if isinstance(n.op, ast.USub) else v
+        if isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+            a, b = ev(n.left), ev(n.right)
+            return {ast.Add: a + b, ast.Sub: a - b, ast.Mult: a * b}.get(type(n.op)) if not isinstance(n.op, ast.Div) \
+                else a / b
+        raise ValueError("only numbers, + - * / and parentheses")
+    return ev(tree), lits
+
+
+def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int, list[str]]]:
+    """Each slide's "calcs" are recomputed: every literal must be a number in the facts it cites (or a small
+    constant), and the stated value must match the result as rounded. Verified calcs become facts the slide can cite
+    (ids made unique per slide: S2C1); the rest are failures sent back to the writer."""
+    ignore = re.compile(rules["pptx"]["provenance"]["ignore_numbers"])
+    by_id = {f["id"]: f for f in facts}
+    ok_out: dict[int, list[dict]] = {}
+    bad_out: dict[int, list[str]] = {}
+    for n, s in enumerate(slides, 1):
+        calcs = [c for c in s.get("calcs") or [] if isinstance(c, dict)]
+        if not calcs:
+            continue
+        ren = {}
+        for c in calcs:                                       # C1 on every slide -> S<n>C1, prov rewritten to match
+            cid = str(c.get("id") or "")
+            if cid and not re.match(r"S\d+C", cid):
+                ren[cid] = f"S{n}{cid if cid.startswith('C') else 'C' + cid}"
+                c["id"] = ren[cid]
+        if ren:
+            def fix(node):
+                if isinstance(node, dict):
+                    for k in ("prov", "title_prov", "from"):
+                        if isinstance(node.get(k), list):
+                            node[k] = [ren.get(x, x) for x in node[k]]
+                    for v in node.values():
+                        fix(v)
+                elif isinstance(node, list):
+                    for v in node:
+                        fix(v)
+            fix(s)
+        local = dict(by_id)
+        for c in calcs:
+            cid, formula, value = c.get("id"), str(c.get("formula") or ""), str(c.get("value") or "")
+            src = [x for x in c.get("from") or [] if x in local]
+            try:
+                res, lits = _safe_eval(formula)
+            except Exception as e:                               # noqa: BLE001
+                bad_out.setdefault(n, []).append(f"calc {cid} '{formula}': not plain arithmetic ({e})")
+                continue
+            pool = [(abs(v), u) for x in src for _, v, u in _numbers(local[x]["text"], ignore)]
+            stray = [f"{v:g}" for v in lits if abs(v) not in _CONSTS
+                     and not any(_same_number(f"{v:g}", abs(v), "", fv, fu) or _same_number(f"{v:g}", abs(v), "", fv, "")
+                                 for fv, fu in pool)]
+            if not src or stray:
+                bad_out.setdefault(n, []).append(
+                    f"calc {cid} '{formula}': " + (f"{', '.join(stray)} not in the cited facts {', '.join(src)}"
+                                                   if src else "cites no facts (from: [fact ids])"))
+                continue
+            nums = _numbers(value, ignore) or _numbers(value, None)
+            if not nums:
+                bad_out.setdefault(n, []).append(f"calc {cid}: value '{value}' has no number")
+                continue
+            raw, v, u = nums[0]
+            if not any(_same_number(raw, v, u, abs(r), "") for r in (res, res * 100 if u in ("%", "pp") else res)):
+                bad_out.setdefault(n, []).append(f"calc {cid}: '{formula}' = {res:,.4g}, not {value}; fix the value "
+                                                 "or the formula")
+                continue
+            fact = {"id": cid, "text": f"{value} (calculated: {formula}; from {', '.join(src)})", "calc": True}
+            local[cid] = fact
+            ok_out.setdefault(n, []).append(fact)
+    return ok_out, bad_out
+
+
+def _strings(node, where=""):
+    if isinstance(node, str):
+        yield where, node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            if k not in ("prov", "notes", "chart", "charts", "node", "id", "archetype", "layout", "look", "kind",
+                         "title_prov", "highlight_categories", "type", "icon"):
+                yield from _strings(v, f"{where}.{k}" if where else k)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _strings(v, f"{where}[{i}]")
+
+
+def prose_checks(slides) -> dict[int, list[str]]:
+    """Sentences as the reader will see them (after gap removal): a phrase said twice in one title, unbalanced bold
+    markers, a sentence ending on 'but'/'and', stacked punctuation, left-over placeholders."""
+    from engines.forge.render import normalize
+    out: dict[int, list[str]] = {}
+    for n, s in enumerate(slides, 1):
+        if s.get("fixed"):
+            continue
+        sn = normalize(s)
+        title = re.sub(r"\*\*", "", str(sn.get("title") or "")).lower()
+        w = re.findall(r"[a-z0-9$%.-]+", title)
+        grams = [" ".join(w[i:i + 3]) for i in range(len(w) - 2)]
+        rep = sorted({g for g in grams if grams.count(g) > 1})
+        if rep:
+            out.setdefault(n, []).append(f"title repeats itself ('{rep[0]}' twice); say it once, <= 15 words")
+        for where, t in _strings(sn):
+            if t.count("**") % 2:
+                out.setdefault(n, []).append(f"{where}: unbalanced ** bold markers in '{t[:60]}'")
+            if re.search(r"\b(but|and|or|of|because|while)\s*[.!?]?\s*$", t.strip(), re.I) and len(t.split()) > 3:
+                out.setdefault(n, []).append(f"{where}: sentence breaks off ('...{t.strip()[-40:]}'); finish it or cut it")
+            if re.search(r"[,;:]\s*[.!?]|\bTBD\b|\bXX+\b|lorem|\[\s*\]|\{\w+\}", t, re.I):
+                out.setdefault(n, []).append(f"{where}: broken or placeholder text ('{t.strip()[:60]}')")
+    return out
+
+
+def _chart_unit(c: dict) -> str:
+    u = str(c.get("unit") or "")
+    if "%" in u:
+        return "%"
+    for pat, code in ((r"\bbn\b|\bB\b|billion", "bn"), (r"\bm\b|\bM\b|\bmm\b|million", "m"), (r"\bx\b|multiple", "x"),
+                      (r"\bk\b|thousand", "k")):
+        if re.search(pat, u):
+            return code
+    return ""
+
+
+def chart_fact_checks(slides, facts, rules) -> dict[int, list[str]]:
+    """Every plotted value must be a figure in the facts (or the midpoint of a range the facts give): a chart is
+    evidence, so a number drawn as a bar needs the same source as a number in a sentence. Catches invented
+    football-field ranges and estimated bars that the text checks cannot see."""
+    ignore = re.compile(rules["pptx"]["provenance"]["ignore_numbers"])
+    pool: list[tuple[float, str]] = []
+    for f in facts:
+        nums = _numbers(f["text"], ignore)
+        pool += [(abs(v), u) for _, v, u in nums]
+        pool += [((abs(a[1]) + abs(b[1])) / 2, a[2] or b[2]) for a, b in zip(nums, nums[1:])]   # 13.0-13.3 -> 13.15
+    out: dict[int, list[str]] = {}
+    for n, s in enumerate(slides, 1):
+        if s.get("fixed"):                                   # model pages are computed, not quoted
+            continue
+        charts = [c for c in ([s.get("chart")] + list(s.get("charts") or [])
+                              + [p.get("chart") for p in s.get("parts") or [] if isinstance(p, dict)])
+                  if isinstance(c, dict)]
+        for c in charts:
+            u = _chart_unit(c)
+            bad = []
+            for se in c.get("series") or []:
+                for v in (se.get("values") or []) if isinstance(se, dict) else []:
+                    if isinstance(v, (int, float)) and v and not any(
+                            _same_number(f"{v:g}", float(v), u, fv, fu) for fv, fu in pool):
+                        bad.append(f"{v:g}")
+            if bad:
+                out.setdefault(n, []).append(
+                    f"chart plots {', '.join(bad[:6])}{' ...' if len(bad) > 6 else ''}, which are not figures in the "
+                    "facts; plot only values the facts state (no estimates, no illustrative ranges), or drop the "
+                    "chart and make the point with the figures that exist")
     return out
 
 
@@ -448,12 +645,20 @@ design. {WRITE[density]}
         res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
                        provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
         fails = _content_failures(res)
-        for n, msgs in number_checks(slides, facts, rules).items():
+        calcs_ok, calcs_bad = verify_calcs(slides, facts, rules)
+        for n, msgs in calcs_bad.items():
+            fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
+        known = facts + [f for v in calcs_ok.values() for f in v]
+        for n, msgs in number_checks(slides, known, rules).items():
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
         for n, msgs in fill_checks(slides, density).items():
             fails.setdefault(n, []).extend(f"[fill] {m}" for m in msgs)
         for n, msgs in chart_checks(slides).items():
             fails.setdefault(n, []).extend(f"[chart] {m}" for m in msgs)
+        for n, msgs in chart_fact_checks(slides, known, rules).items():
+            fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
+        for n, msgs in prose_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
             if m and int(m.group(1)) - 1 < len(slides):
@@ -513,7 +718,8 @@ choice or the number of items; never layout. Keep node and keep the point of the
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True, density=density)
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
-    (out / "facts.json").write_text(json.dumps(facts, indent=1))
+    (out / "facts.json").write_text(json.dumps(facts + [f for v in verify_calcs(slides, facts, rules)[0].values()
+                                                         for f in v], indent=1))
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
     (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))

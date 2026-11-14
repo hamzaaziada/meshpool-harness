@@ -860,7 +860,10 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
     pre = OVERLAY                                              # data-placed labels: exempt from the grid snap
     if mk.get("value") is not None:                            # marker first: it reads before the bars below it
         mx = px(float(mk["value"]))
-        lab = f"{mk.get('label', 'Marker')}: {fmt_value(float(mk['value']), unit, dec)}"
+        val = fmt_value(float(mk["value"]), unit, dec)
+        name_ = str(mk.get("label") or "Marker").strip()
+        shown = re.sub(r"[^\d.]", "", val).rstrip(".")
+        lab = name_ if shown and shown in re.sub(r"[^\d.]", "", name_) else f"{name_}: {val}"   # never "$48.42: $48.42"
         _write(_box(sl, mx - 1.4, top - 0.34, 2.8, 0.26, pre + "MarkerLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False}], ctx, n)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(top - 0.05), Inches(mx),
@@ -1294,6 +1297,42 @@ def _cell(v):
     return _txt(v)
 
 
+_GAP_RE = re.compile(r"\s*[\(\[]?\[GAP:?\s*([^\]]*)\][\)\]]?")
+_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*$~(])")
+
+
+def tidy_prose(t: str) -> str:
+    """Repair what removing words leaves behind: empty bold markers, doubled spaces, a space before punctuation,
+    stacked punctuation (':.', ',.') and a sentence that ends on a dangling 'but'/'and'/'of'."""
+    t = re.sub(r"\*\*\s*\*\*", "", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"([,;:])\s*([.!?])", r"\2", t)
+    t = re.sub(r"\(\s*\)", "", t)
+    t = re.sub(r"[,;:]?\s+\b(but|and|or|of|with|to|because|while|from|by|for)\s*([.!?])?$",
+               lambda m: m.group(2) or "", t.strip(), flags=re.I)
+    return t.strip()
+
+
+def drop_gap_sentences(text: str, gaps: list | None = None) -> str:
+    """Prose with a [GAP] marker: the whole sentence that leaned on the missing figure goes (a sentence with a hole
+    in it reads as broken: 'market value of $5.5B but.'); what the gap was is recorded in `gaps`."""
+    if "[GAP" not in text:
+        return text
+    if gaps is not None:
+        gaps.extend(m.group(1).strip() for m in _GAP_RE.finditer(text))
+    keep = [x for x in _SENT.split(text) if "[GAP" not in x]
+    return tidy_prose(" ".join(keep))
+
+
+def _emptied(d: dict) -> bool:
+    """A bullet or block whose text was all gap and that has nothing else to show."""
+    if not any(k in d for k in ("text", "lead")):
+        return False
+    words = "".join(str(d.get(k) or "") for k in ("text", "lead", "label", "value")).strip()
+    return not words and not any(d.get(k) for k in ("bullets", "items", "chart", "table", "steps"))
+
+
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
@@ -1325,16 +1364,25 @@ def normalize(s: dict) -> dict:
 
     def scrub(v):                                          # prose: a gap is removed and noted, never shown
         if isinstance(v, str) and "[GAP" in v:
-            gaps.extend(m.group(1).strip() for m in gap_re.finditer(v))
-            return re.sub(r"\s+([,.;:])", r"\1", gap_re.sub("", v)).strip()
+            return drop_gap_sentences(v, gaps)
         if isinstance(v, list):
-            return [scrub(x) for x in v]
+            out = []                                       # a bullet that was only a gap goes, not an empty dot
+            for x in v:
+                y = scrub(x)
+                had_gap = "[GAP" in json.dumps(x, default=str)
+                if had_gap and (y == "" or (isinstance(y, dict) and _emptied(y))):
+                    continue
+                out.append(y)
+            return out
         if isinstance(v, dict):
             return {k: (x if k in ("table", "chart", "prov", "notes") else scrub(x)) for k, x in v.items()}
         return v
     for k in list(s):
         if k not in ("table", "chart", "prov", "notes", "source", "footnotes"):
             s[k] = scrub(s[k])
+    if isinstance(s.get("footnotes"), list):               # footnotes keep their numbering: the gap is named
+        s["footnotes"] = [tidy_prose(gap_re.sub(" not available in the sources", f)) if isinstance(f, str) else f
+                          for f in s["footnotes"]]
     if gaps:
         s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
                       + "; ".join(g for g in gaps if g)).strip()
