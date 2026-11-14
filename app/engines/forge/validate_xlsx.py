@@ -139,14 +139,17 @@ def _r1c1(formula: str, row: int, col: int) -> str:
             sheet, bang, rng = t.value.rpartition("!")
             parts = []
             for ref in rng.split(":"):
-                m = re.match(r"^(\$?)([A-Z]{1,3})(\$?)(\d+)$", ref)
-                if not m:
+                m = re.match(r"^(\$?)([A-Z]{1,3})?(\$?)(\d+)?$", ref.upper())
+                if not m or not (m.group(2) or m.group(4)):
                     parts.append(ref)
                     continue
-                cabs, cl, rabs, rw = m.groups()
-                c = column_index_from_string(cl)
-                rr = f"R{rw}" if rabs else f"R[{int(rw) - row}]"
-                cc = f"C{c}" if cabs else f"C[{c - col}]"
+                cabs, cl, rabs, rw = m.groups()        # C:C and 2:2 (whole columns / rows) are relative too
+                rr = "" if rw is None else f"R{rw}" if rabs else f"R[{int(rw) - row}]"
+                if cl is None:
+                    cc = ""
+                else:
+                    c = column_index_from_string(cl)
+                    cc = f"C{c}" if cabs else f"C[{c - col}]"
                 parts.append(rr + cc)
             out.append(sheet + bang + ":".join(parts))
         else:
@@ -267,7 +270,14 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
     file_sha = sha256(path)
     failures: list[dict] = []
     _opens_cleanly(path, failures)
-    wb = load_workbook(path, data_only=False)
+    try:
+        wb = load_workbook(path, data_only=False)
+    except Exception as e:                              # a corrupt file is an X0 failure, not a crash
+        if not any(f["rule"] == "X0" and f["status"] == "fail" for f in failures):
+            failures.append(F("X0", "unreadable", f"The workbook cannot be opened: {type(e).__name__}: {e}",
+                              fix_scope="renderer"))
+        return {"file": str(path), "sha256": file_sha, "failures": failures, "stats": {}, "evidence": {},
+                "rules": {r: "not_run" if st == "pass" else st for r, st in summarize(failures, RULES).items()}}
     sheets = set(wb.sheetnames)
     names_raw = _defined_names(wb)
     names = {}
@@ -285,10 +295,20 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
         except Exception as e:
             failures.append(F("X5", "recalc", f"Headless recalculation failed: {e}", fix_scope="renderer",
                               status="not_run"))
+    have_values = vals is not None
     if vals is None:
         vals = load_workbook(path, data_only=True)
         failures.append(F("X5", "recalc", "Values are cached values from the file, not a fresh recalculation.",
                           fix_scope="renderer", status="not_run", severity="info"))
+        # a workbook written by code (openpyxl) has no cached results: value checks cannot run on it
+        fcells = [(ws.title, c.coordinate) for ws in wb.worksheets for row in ws.iter_rows() for c in row
+                  if isinstance(c.value, str) and c.value.startswith("=")]
+        have_values = not fcells or any(vals[sh][co].value is not None for sh, co in fcells)
+
+    def no_values(rule, what):
+        failures.append(F(rule, "values_unavailable", f"{what} not checked: the formulas have no values (no "
+                          "recalculation and no cached results in the file).", status="not_run", severity="info",
+                          fix_scope="renderer"))
 
     def v(sheet, coord):
         try:
@@ -446,13 +466,16 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
             if re.search(R["balance"]["plug_label_regex"], lab):
                 failures.append(F("X3", "plug_line", f"{ws.title} row {r}: '{lab}' is a balancing plug. Balance the sheet "
                                   "through linked flows instead.", sheet=ws.title, cell=f"A{r}"))
-            if re.search(R["historicals"]["tieout_label_regex"], lab):
+            if re.search(R["historicals"]["tieout_label_regex"], lab) and have_values:
                 for c in pcols:
                     x = v(ws.title, f"{get_column_letter(c)}{r}")
                     if _is_num(x) and abs(x) > R["historicals"]["tolerance"]:
                         failures.append(F("X4", "tieout_nonzero", f"{ws.title}!{get_column_letter(c)}{r}: tie-out "
                                           f"'{lab}' is {x:,.4g}, not 0. Fix the historical inputs to match the filing.",
                                           sheet=ws.title, cell=f"{get_column_letter(c)}{r}", measured=x, limit=0))
+        if not have_values and any(re.search(R["historicals"]["tieout_label_regex"], _label(ws, r) or "")
+                                   for r in range(1, ws.max_row + 1)):
+            no_values("X4", f"{ws.title}: tie-outs")
         if st["external_refs"]:
             failures.append(F("X13", "external_ref", f"{ws.title}: {st['external_refs']} formulas point at other workbooks.",
                               sheet=ws.title))
@@ -470,6 +493,9 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
                     rows[key] = r
         if "assets" in rows and ("liab_equity" in rows or {"liabilities", "equity"} <= rows.keys()):
             bs_found = True
+            if not have_values:
+                no_values("X3", f"{ws.title}: the balance sheet check")
+                continue
             for c in pcols:
                 L = get_column_letter(c)
                 a = v(ws.title, f"{L}{rows['assets']}")
@@ -488,8 +514,10 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
     if len(errors_found) > 25:
         failures.append(F("X5", "error_value", f"{len(errors_found) - 25} more error cells.", measured=len(errors_found)))
     for n, dest in names_raw:
-        sheet = str(dest).rpartition("!")[0].strip("'") if dest and "!" in str(dest) else None
-        if dest is None or "#REF!" in str(dest) or (sheet and sheet not in sheets):
+        # every sheet the destination names ('Q''s'!A1, Model!A1:B2, OFFSET(Model!A1,...), multi-area lists)
+        refd = {(q.replace("''", "'") if q else p_) for q, p_ in
+                re.findall(r"(?:'((?:[^']|'')+)'|(?<![\w.'])([A-Za-z_][\w.]*))!", str(dest or ""))}
+        if dest is None or "#REF!" in str(dest) or refd - sheets:
             failures.append(F("X5", "bad_name", f"Defined name {n} does not resolve ({dest}).", cell=n))
     referenced = set()
     for ws in wb.worksheets:
@@ -522,7 +550,9 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
                               "interest on the prior-period balance.", cell=cells.split(",")[0]))
 
     # X7 independent recompute
-    if not recompute:
+    if recompute and not have_values:
+        no_values("X7", "The independent recompute")
+    elif not recompute:
         failures.append(F("X7", "recompute", "No independent recompute of key outputs was supplied.", status="not_run",
                           fix_scope="renderer"))
     else:
@@ -569,21 +599,25 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
     up = {k.upper(): d for k, d in names_raw}
 
     def target(ref, host):
+        """(sheet, cell) a single-cell operand points at (directly or through a defined name), else None."""
         ref = ref.replace("$", "")
         if ":" in ref:
             return None
-        if "!" in ref:
-            sh, _, coord = ref.rpartition("!")
-            return sh.strip("'"), coord
-        if ref.upper() in up and up[ref.upper()] and "!" in str(up[ref.upper()]):
-            sh, _, coord = str(up[ref.upper()]).replace("$", "").rpartition("!")
-            return sh.strip("'"), coord
-        if re.fullmatch(r"[A-Z]{1,3}\d+", ref):
-            return host, ref
+        sh, bang, coord = ref.rpartition("!")
+        sh = sh.strip("'").replace("''", "'") if bang else host
+        if re.fullmatch(r"[A-Z]{1,3}\d+", coord.upper()):
+            return sh, coord.upper()
+        d = up.get(coord.upper())                       # a (sheet-qualified) defined name
+        if d and "!" in str(d):
+            dsh, _, dc = str(d).replace("$", "").rpartition("!")
+            if re.fullmatch(r"[A-Z]{1,3}\d+", dc.upper()):
+                return dsh.strip("'").replace("''", "'"), dc.upper()
         return None
     sign_hits = []
-    for ws in wb.worksheets:
-        if roles[ws.title] in ("inputs", "cover", "checks"):
+    if not have_values:
+        no_values("X14", "Signs of added costs")
+    for ws in wb.worksheets if have_values else []:
+        if roles[ws.title] in ("input", "inputs", "cover", "checks"):
             continue
         for row in ws.iter_rows():
             for c in row:
@@ -643,7 +677,9 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
             if n in R["checks"]["master_flag_names"] and dest and "!" in str(dest):
                 sh, _, coord = str(dest).rpartition("!")
                 master = ((sh.strip("'"), coord.replace("$", "")), v(sh.strip("'"), coord.replace("$", "")))
-        if master is None:
+        if master is not None and not have_values:
+            no_values("X12", "The check rows and the master flag")
+        elif master is None:
             failures.append(F("X12", "no_master_flag", f"No master check flag (define one of "
                               f"{', '.join(R['checks']['master_flag_names'])}).", fix_scope="renderer"))
         else:

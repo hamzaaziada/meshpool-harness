@@ -42,7 +42,7 @@ CODE_DIRS = ("meshpool_harness", "engines", "profiles", "defaults")   # what a c
 CLI_REQ = "requirements-cli.txt"     # the package list the command line and the bundled runtimes are installed from
 SUMS = "SHA256SUMS.txt"              # published with each release by packaging/release.sh
 _CACHE: dict = {}
-_PRE = re.compile(r"\d[.-]?(alpha|beta|preview|pre|rc|dev|a|b|c)\.?(\d*)", re.I)
+_PRE = re.compile(r"\d[.-]?(alpha|beta|preview|pre|rc|dev|a|b|c)(?![a-z])\.?(\d*)", re.I)
 
 
 def _ver(s: str) -> tuple:

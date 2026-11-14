@@ -72,3 +72,54 @@ def test_unknown_arguments_are_dropped_not_fatal(monkeypatch):
                   "params": {"name": "probe", "arguments": {"path": "a.pptx", "engine": "slides"}}})
     text = r["result"]["content"][0]["text"]
     assert not r["result"]["isError"] and got["path"] == "a.pptx" and "Ignored unknown argument(s): engine" in text
+
+
+def test_engine_output_is_drained_while_it_runs(tmp_path):
+    """An engine that writes more than a pipe buffer to stderr used to hang until the timeout."""
+    from meshpool_harness.agent import office_jobs as OJ
+    jid = OJ.new_job("sheets", "a model", [], tmp_path)
+    OJ.JOBS[jid]["cmd"] = [sys.executable, "-c", "import sys; sys.stderr.write('x' * 500000); "
+                                                 "print('log'); print('{\"ok\": true, \"steps\": []}')"]
+    try:
+        t0 = time.time()
+        OJ.run(jid, timeout=60)
+        assert time.time() - t0 < 30 and OJ.JOBS[jid]["result"] == {"ok": True, "steps": []}
+    finally:
+        OJ.JOBS.pop(jid, None)
+
+
+def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
+    """The agent's office_task and the MCP server read the same report: no "passed" above failing rules."""
+    from meshpool_harness.agent import core
+    from meshpool_harness.agent import office_jobs as OJ
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
+    monkeypatch.setattr("engines.forge.tools.qa_summary", lambda files: "")
+
+    def fake_run(jid, timeout=None, should_stop=None):
+        j = OJ.JOBS[jid]
+        (j["out"] / "model.xlsx").write_bytes(b"x")
+        j.update(result={"ok": True, "steps": [{"answer": "Built model.xlsx. rules failing: X3."}]}, done=time.time())
+    monkeypatch.setattr(OJ, "run", fake_run)
+    a = core.Agent(str(tmp_path), mode="auto", profile="work")
+    saved = dict(OJ.JOBS)
+    OJ.JOBS.clear()
+    try:
+        text, ok = a._office({"engine": "sheets", "request": "a model"})
+        assert ok and "flagged" in text and "checks passed" not in text
+        assert "- Meshpool outputs/" in text and text.rstrip().endswith("rules failing: X3.")
+        for _ in range(OJ.REBUILD_LIMIT - 1):
+            text, _ = a._office({"engine": "sheets", "request": "a model"})
+        assert "stop here" in text
+        text, ok = a._office({"engine": "sheets", "request": "x", "files": ["missing.csv"]})
+        assert not ok and "missing.csv" in text
+    finally:
+        OJ.JOBS.clear()
+        OJ.JOBS.update(saved)
+
+
+def test_conversions_keep_the_words(tmp_path, monkeypatch):
+    monkeypatch.setattr(O, "_project", lambda: tmp_path)
+    seen = {}
+    monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True: (seen.update(clarity=_clarity), ("ok", False))[1])
+    (tmp_path / "a.md").write_text("# Title\n\nSome words.")
+    assert O.convert_document("a.md", "docx") == ("ok", False) and seen["clarity"] is False

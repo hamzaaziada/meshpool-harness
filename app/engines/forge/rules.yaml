@@ -237,11 +237,12 @@ xlsx:
   literals:                     # X2
     allowed: [0, 1, 2, 4, 12, 52, 100, 365, 1000, 1000000, 1000000000]
   balance:                      # X3
-    plug_label_regex: "(?i)plug|balancing (item|figure)|difference to balance|squeeze|to balance"
-    assets_regex: "(?i)^total assets$"
-    liabilities_regex: "(?i)^total liabilities$"
-    equity_regex: "(?i)^total (shareholders'? |stockholders'? )?equity$"
-    liab_equity_regex: "(?i)^total liabilities (and|&) (shareholders'? |stockholders'? )?equity$"
+    plug_label_regex: "(?i)\\b(plug|balancing (item|figure)|difference to balance|squeeze|to balance)\\b"
+    # a trailing unit or note is allowed: "Total assets ($m)", "Total assets, USD k"
+    assets_regex: "(?i)^total assets\\s*(\\(.*\\)|[,:–-].*)?$"
+    liabilities_regex: "(?i)^total liabilities\\s*(\\(.*\\)|[,:–-].*)?$"
+    equity_regex: "(?i)^total (shareholders'? |stockholders'? )?equity\\s*(\\(.*\\)|[,:–-].*)?$"
+    liab_equity_regex: "(?i)^total liabilities (and|&) (shareholders'? |stockholders'? )?equity\\s*(\\(.*\\)|[,:–-].*)?$"
     tolerance: 0.005
   historicals:                  # X4
     header_regex: "(?i)^(fy)?\\s*\\d{2,4}\\s*a$|actual|hist"
