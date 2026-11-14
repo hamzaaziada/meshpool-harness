@@ -48,10 +48,10 @@ jobs:
           # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
           sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
           arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
-          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -oE 'node-v24\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
+          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           for a in arm64 x64; do
             mkdir -p node-mac-$a
-            curl -fsSL "https://nodejs.org/dist/latest-v24.x/$NODE-darwin-$a.tar.gz" | tar -xz -C node-mac-$a --strip-components=1
+            curl -fsSL "https://nodejs.org/dist/latest-v22.x/$NODE-darwin-$a.tar.gz" | tar -xz -C node-mac-$a --strip-components=1
           done
           mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
       - name: Build the app trees
@@ -61,7 +61,9 @@ jobs:
           set -euo pipefail
           for a in arm64 x64; do
             arch=$a; [ $a = x64 ] && arch=x86_64
-            clang -O2 -arch $arch -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+            # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
+            clang -O2 -arch $arch -mmacosx-version-min=11.0 -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app 11.0
           done
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
@@ -97,8 +99,8 @@ jobs:
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
           rt-win/python/python.exe ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
           rt-win/python/python.exe -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
-          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -oE 'node-v24\.[0-9.]+-win-x64\.zip' | head -1)
-          curl -fsSLo node.zip "https://nodejs.org/dist/latest-v24.x/$NODE"
+          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-win-x64\.zip' | head -1)
+          curl -fsSLo node.zip "https://nodejs.org/dist/latest-v22.x/$NODE"
           python -m zipfile -e node.zip . && mv "${NODE%.zip}" node-win && rm node.zip
           MG=$(gh release view --repo git-for-windows/git --json assets -q '.assets[].name' | grep -E '^MinGit-[0-9.]+-64-bit\.zip$' | head -1)
           gh release download --repo git-for-windows/git -p "$MG"

@@ -56,7 +56,7 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 | Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
 
-- **Mac:** drag Meshpool to Applications. The first time, right-click it and choose **Open** (the app is not notarized yet).
+- **Mac** (macOS 11 or later): drag Meshpool to Applications. The app is not notarized yet, so the first time open System Settings → Privacy & Security and click **Open Anyway** (on macOS 14 and earlier, right-click the app and choose **Open**).
 - **Windows:** run the installer. If SmartScreen appears, choose **More info**, then **Run anyway**.
 
 On first launch, add your Meshpool API key or sign in with ChatGPT, then choose where Meshpool may work.
