@@ -118,6 +118,8 @@ too. The owner wanted them back; all seven were restored at their last commits. 
 
 ## Known gaps worth knowing
 
+- Signing and notarization: see `docs/TRUSTED_INSTALL_PROMPT.md` (needs the owner's Apple and Azure accounts).
+
 - Installers are not code-signed or notarized (no certificates). Users see Gatekeeper/SmartScreen warnings.
 - Codex and OpenCode download through `npx` on first use (needs network); Pi and Hermes are bundled.
 - Computer use only works on macOS/Windows; it can't be tested in a Linux container.
