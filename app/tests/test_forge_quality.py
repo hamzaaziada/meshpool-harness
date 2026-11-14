@@ -107,4 +107,4 @@ def test_fallback_keeps_the_title_whole_and_moves_the_right_title_into_the_text(
                   "synergy timing drives EPS", "chart": {"kind": "column", "categories": ["A"],
                                                          "series": [{"name": "x", "values": [2.46]}]},
                   "blocks": [{"text": "Body."}]})
-    assert s["title"] == "Year 1 dilutes EPS" and s["blocks"][0]["text"].startswith("**Synergy timing drives EPS**")
+    assert s["title"] == "Year 1 dilutes EPS" and s["intro"].startswith("**Synergy timing drives EPS**")

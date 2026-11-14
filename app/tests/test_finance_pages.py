@@ -2,6 +2,7 @@
 and sensitivities, scenarios, method weighting and the three-statement summary. Numbers on the pages equal the
 recalculated workbook; the pages pass the deck rules; build() inserts them untouched; the forge engine finds the
 model workbook on its own."""
+import re
 import json
 import shutil
 import sys
@@ -31,10 +32,12 @@ def test_fmt_value_and_range_checks():
     from engines.forge.render import chart_problems, fmt_value
     assert [fmt_value(24.37, "$"), fmt_value(12.46, "x"), fmt_value(38, "%"), fmt_value(-4.2, "$m"),
             fmt_value(None, "x")] == ["$24.37", "12.5x", "38.0%", "($4.2m)", "NM"]
-    ok = {"kind": "range", "categories": ["A", "B"], "series": [{"name": "Low", "values": [1, 2]},
-                                                                  {"name": "High", "values": [3, 4]}]}
+    ok = {"kind": "range", "categories": ["A", "B", "C"], "series": [{"name": "Low", "values": [1, 2, 2]},
+                                                                       {"name": "High", "values": [3, 4, 5]}]}
     assert chart_problems(ok) == []
-    bad = dict(ok, series=[{"name": "Low", "values": [5, 2]}, {"name": "High", "values": [3, 4]}])
+    assert any(">= 3 methods" in p for p in chart_problems(dict(ok, categories=["A", "B"], series=[
+        {"name": "Low", "values": [1, 2]}, {"name": "High", "values": [3, 4]}])))
+    bad = dict(ok, series=[{"name": "Low", "values": [5, 2, 2]}, {"name": "High", "values": [3, 4, 5]}])
     assert "low above high for A" in chart_problems(bad)[0]
     from engines.forge.finance_pages import _a                 # "The DCF puts the shares at $109 at an 8.8% WACC"
     assert [_a(w) for w in ("8.8%", "9.5%", "11.0%", "18.2%", "80.1%", "10.5%", "110%")] == \
@@ -116,7 +119,7 @@ def test_pages_render_and_pass_the_deck_rules(books, tmp_path):
     ff = prs.slides[1]
     chart = next(s for s in ff.shapes if s.has_chart).chart
     assert [s.name for s in chart.plots[0].series] == ["Low", "Range"]                # native, editable bars
-    assert any(s.name == "ov_Marker" for s in ff.shapes)
+    assert any(re.fullmatch(r"ov_Marker\d+", s.name) for s in ff.shapes)                 # numbered reference lines
 
 
 def test_build_inserts_fixed_pages_before_the_closing(monkeypatch, tmp_path):
