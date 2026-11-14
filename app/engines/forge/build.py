@@ -381,7 +381,9 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     narrative_n = max(3, slides_wanted - len(fixed))
     fixed_txt = ("\nThese data pages are already built from the model and will be inserted as a section before the "
                  "closing slide; do NOT plan slides that repeat them, build the argument around them and cite their "
-                 "facts (W ids) where you use their numbers:\n" + "\n".join(f"- {p['title']}" for p in fixed)
+                 "facts (W ids) where you use their numbers. Your slides carry no valuation tables, grids or charts of "
+                 "their own (the pages below have them, computed from the model); never estimate or interpolate a "
+                 "number the model does not state:\n" + "\n".join(f"- {p['title']}" for p in fixed)
                  if fixed else "")
     ends = bookends(brief)
     opening = ('slide 1 MUST be the cover (node "0", archetype cover; the brief asks for an opening slide); '
@@ -411,6 +413,10 @@ supports it. Choose varied archetypes that prove each title.
     # ---- stage 3: content, one call per slide (in parallel), each with only its own facts
     from concurrent.futures import ThreadPoolExecutor
     plan = _enforce_bookends([x for x in story.get("slides", []) if isinstance(x, dict)], ends)
+    if fixed and len(plan) > narrative_n:
+        # The model often plans more than asked when model pages exist, and the extra slides restate (or worse,
+        # re-estimate) those pages' numbers. Keep the opening slides and the closing one, at the asked length.
+        plan = plan[:narrative_n - 1] + plan[-1:]
     nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
 
     def one(x):

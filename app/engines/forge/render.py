@@ -1326,6 +1326,7 @@ def normalize(s: dict) -> dict:
     def scrub(v):                                          # prose: a gap is removed and noted, never shown
         if isinstance(v, str) and "[GAP" in v:
             gaps.extend(m.group(1).strip() for m in gap_re.finditer(v))
+            v = re.sub(r"\s+(?:as of|as at|dated|on|from)\s*(?=\[GAP)", "", v)   # "data as of [GAP: date]" -> "data"
             v = re.sub(r"\*\*\s*\*\*", "", gap_re.sub("", v))      # "**[GAP: x]**" left an empty "****" on the slide
             return re.sub(r"\s+([,.;:])", r"\1", re.sub(r"  +", " ", v)).strip()
         if isinstance(v, list):
@@ -1334,7 +1335,7 @@ def normalize(s: dict) -> dict:
             return {k: (x if k in ("table", "chart", "prov", "notes") else scrub(x)) for k, x in v.items()}
         return v
     for k in list(s):
-        if k not in ("table", "chart", "prov", "notes", "source", "footnotes"):
+        if k not in ("table", "chart", "prov", "notes"):           # sources and footnotes too: a footer showed it
             s[k] = scrub(s[k])
     if gaps:
         s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
