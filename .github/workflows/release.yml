@@ -64,6 +64,15 @@ jobs:
       - name: Build the app trees
         run: python3 packaging/build_all.py --only=mac-arm64,mac-x64
       - name: Launchers, sign, disk images
+        env:
+          # Signing and notarization. Empty until the owner's Apple Developer account is set up; sign.sh then does
+          # nothing and the apps stay ad hoc-signed, so the build works either way.
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           for a in arm64 x64; do
@@ -88,6 +97,10 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # Secrets cannot be read in an "if" condition, so the signing steps test this copy of the endpoint instead.
+      # Empty until the owner's Azure account is set up; the signing steps are then skipped and the build still works.
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -120,13 +133,91 @@ jobs:
           (cd ../packaging/win/launcher && GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o ../../../deps/win/Meshpool/Meshpool.exe .)
       - name: Build the app tree
         run: python packaging/build_all.py --only=win
+      - name: Sign the launcher and the app files
+        # Signs Meshpool.exe (the Go launcher) and everything else in the app tree that Windows checks, before the
+        # installer is built. Skipped when the Azure secrets are not set, so the build works before the account exists.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist-src\app-win
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Signing tools for the uninstaller
+        # The uninstaller is generated while makensis runs, so it cannot go through the action above; this puts
+        # signtool and the Artifact Signing dlib on the machine for !uninstfinalize to use.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: packaging/win/sign-setup.ps1
       - name: Installer
+        shell: bash
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           command -v makensis >/dev/null || choco install nsis -y --no-progress
           MAKENSIS="$(command -v makensis || echo '/c/Program Files (x86)/NSIS/makensis.exe')"
-          (cd dist-src/app-win && "$MAKENSIS" -V2 installer.nsi)
+          cd dist-src/app-win
+          # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
+          # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
+          if [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
+            "$MAKENSIS" -V2 -DMP_UNINSTALLER_OUT="$PWD/UninstallMeshpool.exe" uninstaller.nsi
+            # The generator writes the uninstaller when it runs, not when it is compiled.
+            ./Meshpool-Uninstaller-Generator.exe
+            [ -f UninstallMeshpool.exe ] || { echo "the uninstaller was not written"; exit 1; }
+            pwsh -NoProfile -NonInteractive -File "$GITHUB_WORKSPACE/packaging/win/sign-file.ps1" \
+              -File "$PWD/UninstallMeshpool.exe" -Description "Meshpool Uninstall"
+            "$MAKENSIS" -V2 -DMP_SIGNED_UNINSTALLER="$PWD/UninstallMeshpool.exe" installer.nsi
+          else
+            "$MAKENSIS" -V2 installer.nsi
+          fi
+          cd "$GITHUB_WORKSPACE"
           mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
+      - name: Sign the installer
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files: ${{ github.workspace }}\out\Meshpool-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check the signature
+        # Windows' own verdict. A build that fails here is not published.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sig = Get-AuthenticodeSignature "out/Meshpool-Setup.exe"
+          $sig | Format-List Status, StatusMessage, SignerCertificate
+          if ($sig.Status -ne "Valid") { throw "Meshpool-Setup.exe is not validly signed ($($sig.Status))" }
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\x64\\" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $st) { throw "signtool.exe was not found" }
+          & $st.FullName verify /pa /v "out/Meshpool-Setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signtool verify /pa failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: windows

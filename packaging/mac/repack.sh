@@ -1,9 +1,13 @@
 #!/bin/bash
-# Refresh the Meshpool app code inside existing Mac app trees, then recompile, ad hoc sign and build the dmgs.
+# Refresh the Meshpool app code inside existing Mac app trees, then recompile, sign and build the dmgs.
 # Usage: packaging/mac/repack.sh [WORK]
 #   WORK holds app-mac-arm64/Meshpool.app and app-mac-x64/Meshpool.app (from build_all.py and build_mac.sh).
 #   Output: WORK/out/Meshpool.dmg (Apple silicon) and WORK/out/Meshpool-Intel.dmg.
 # Run it on a Mac, from anywhere.
+#
+# Signing: with the Apple Developer secrets set (see packaging/mac/sign.sh) the apps are signed with the Developer ID
+# certificate and the dmgs are notarized and stapled, so they open with no Gatekeeper warning. Without them the apps
+# are ad hoc signed, as before, and the build still works.
 set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 W="${1:-$HOME/Meshpool-Build/v4/work}"; OUT="$W/out"
@@ -27,7 +31,16 @@ for a in arm64 x64; do
       -s "$R" -p /Applications/Meshpool.app/Contents/Resources "$R/app/$d" >/dev/null 2>&1
   done
   xattr -cr "$APP"
-  codesign --force --deep --sign - "$APP" 2>&1 | grep -v "replacing existing" | tail -2
+done
+# Sign the app trees before the dmgs are built, so the copy inside each image is already signed. sign.sh does
+# nothing (and exits 0) when the Apple Developer secrets are not set.
+bash "$REPO/packaging/mac/sign.sh" sign "$W"
+for a in arm64 x64; do
+  APP="$W/app-mac-$a/Meshpool.app"
+  # Without the Developer ID secrets sign.sh did nothing, so the app is still ad hoc signed here, as before.
+  if [ -z "${MAC_SIGN_IDENTITY:-}" ] || [ -z "${MAC_CERT_P12_BASE64:-}" ]; then
+    codesign --force --deep --sign - "$APP" 2>&1 | grep -v "replacing existing" | tail -2
+  fi
   codesign --verify --deep --strict "$APP" && echo "signature ok ($a) $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
   ST="$W/stage-$a"; rm -rf "$ST"; mkdir -p "$ST"; ditto "$APP" "$ST/Meshpool.app"; ln -s /Applications "$ST/Applications"
   NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
@@ -40,4 +53,7 @@ for a in arm64 x64; do
   [ -n "$ok" ] || exit 1
   hdiutil convert -quiet "$W/$NAME-udzo.dmg" -format ULMO -o "$OUT/$NAME.dmg" && rm -f "$W/$NAME-udzo.dmg" && echo "built $NAME.dmg"
 done
+# Notarize, staple and check both disk images. sign.sh does nothing (and exits 0) when the Apple Developer secrets
+# are not set, so this is safe before the owner's accounts are ready.
+bash "$REPO/packaging/mac/sign.sh" notarize "$W"
 ls -la "$OUT"

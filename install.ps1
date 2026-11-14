@@ -2,6 +2,10 @@
 #
 #   irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
 #
+# With -App it installs the Meshpool app itself instead, the same one the download button gives you:
+#
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1))) -App
+#
 # It installs into %USERPROFILE%\.meshpool-cli and adds the `meshpool` command to your PATH, in this window too. It uses
 # your Python 3.10 or later if you have one; otherwise it downloads a private copy of Python into .meshpool-cli.
 # Settings: MESHPOOL_REF (branch or tag), MESHPOOL_DIR, MESHPOOL_NO_SETUP=1 (do not start setup).
@@ -45,6 +49,66 @@ function Run {
   }
 }
 
+# ---------- the app ----------------------------------------------------------------------------------------------
+# Installs the Meshpool app itself, the same one the download button gives you. It is fetched with Invoke-WebRequest,
+# which does not set the Mark-of-the-Web that makes Windows show "Windows protected your PC", so the installer runs
+# normally. This is the stopgap until the app is signed with a certificate SmartScreen trusts (then the download
+# button works on its own and this is just a second way in).
+function Install-App {
+  $Base = "https://github.com/$Repo/releases/latest/download"
+  $Name = "Meshpool-Setup.exe"
+
+  Say ""
+  Say "  ${Dim}Installing the Meshpool app. This takes a minute.$Off"
+  Say ""
+
+  Step "Downloading $Name..."
+  $Exe = Join-Path $Tmp $Name
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "$Base/$Name" -OutFile $Exe
+  } catch {
+    Die "Could not download $Name. Check your internet connection."
+  }
+  Ok $Name
+
+  # The checksum is published next to the download. A mismatch means the file is not the one Meshpool built, so stop.
+  Step "Checking the download..."
+  $Sums = Join-Path $Tmp "SHA256SUMS.txt"
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "$Base/SHA256SUMS.txt" -OutFile $Sums
+  } catch {
+    Die "Could not download SHA256SUMS.txt, so the download cannot be checked. Nothing was installed."
+  }
+  $Want = (Get-Content $Sums | Where-Object { $_ -match "\s\*?$([regex]::Escape($Name))$" } |
+    ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1)
+  if (-not $Want) { Die "$Name is not listed in SHA256SUMS.txt. Nothing was installed." }
+  $Got = (Get-FileHash -Algorithm SHA256 -Path $Exe).Hash.ToLower()
+  if ($Want.ToLower() -ne $Got) {
+    Die "The download does not match its checksum, so it was not installed.`n     expected $Want`n     got      $Got`n     Try again, and if it keeps happening tell us at https://github.com/$Repo/issues"
+  }
+  Ok "Checksum matches"
+
+  # /S is silent, and the installer is per user, so no admin rights are needed.
+  Step "Installing..."
+  $Code = Run -Exe $Exe -A @("/S")
+  if ($Code -ne 0) { Die "The installer stopped with code $Code. Nothing was installed." }
+  Ok "Meshpool"
+
+  # Invoke-WebRequest does not set the Mark-of-the-Web, but be sure: without it Windows has nothing to warn about.
+  $ExeDir = Join-Path $env:LOCALAPPDATA "Programs\Meshpool"
+  if (Test-Path $ExeDir) {
+    Get-ChildItem -Path $ExeDir -Recurse -File -ErrorAction SilentlyContinue |
+      Unblock-File -ErrorAction SilentlyContinue
+  }
+
+  Say ""
+  Say "  ${Blue}Meshpool is installed.$Off Opening it now."
+  Say "  ${Dim}You can also open it from the Start menu.$Off"
+  Say ""
+  $App = Join-Path $ExeDir "Meshpool.exe"
+  if (Test-Path $App) { Start-Process $App } else { Start-Process "shell:AppsFolder" }
+}
+
 $Tmp = Join-Path $env:TEMP ("meshpool-" + [guid]::NewGuid())
 try {
 Say ""
@@ -58,6 +122,19 @@ Say "   $E[38;2;52;143;252m▀$E[0m$E[38;2;46;127;255m▀$E[0m$E[38;2;45;119;251
 Say ""
 Say "  ${Dim}Installing Meshpool for the terminal. This takes a minute the first time.$Off"
 Say ""
+
+# -App installs the Meshpool app itself, not the terminal version.
+if ($args -contains "-App" -or $args -contains "--app" -or $args -contains "-a") {
+  New-Item -ItemType Directory -Path $Tmp | Out-Null
+  Install-App
+  return
+}
+if ($args -contains "-Help" -or $args -contains "--help" -or $args -contains "-h") {
+  Say "Meshpool installer"
+  Say "  (no arguments)  install Meshpool for the terminal"
+  Say "  -App            install the Meshpool app"
+  return
+}
 
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 New-Item -ItemType Directory -Path $Tmp | Out-Null

@@ -157,6 +157,10 @@ def win_app():
     pi_and_node(root / "app", root / "node", "win")
     docs(root / "harness-docs")
     stamp(PKG / "nsis/installer.nsi", OUT / "app-win" / "installer.nsi")
+    # The uninstaller generator and the shared macro: the release build writes and signs the uninstaller with these
+    # before it builds the installer, so the uninstaller carries a signature too.
+    stamp(PKG / "nsis/uninstaller.nsi", OUT / "app-win" / "uninstaller.nsi")
+    shutil.copy2(PKG / "nsis/winsetup.nsh", OUT / "app-win" / "winsetup.nsh")
     shutil.copy2(PKG / "nsis/winsetup.ps1", OUT / "app-win" / "winsetup.ps1")
 
 

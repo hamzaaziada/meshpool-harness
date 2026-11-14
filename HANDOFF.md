@@ -115,13 +115,16 @@ too. The owner wanted them back; all seven were restored at their last commits. 
 3. Open a **draft PR** from `claude/release-build` to `main` (remove this file first), then merge once green, so the
    release workflow lives on `main`. After that, future releases: bump `__version__`, publish a GitHub release
    `vX.Y.Z`, and the workflow attaches the builds.
-4. Optional, needs the owner's Mac: install the `.dmg` and check first launch (unsigned app: right-click → Open).
-   Windows SmartScreen will warn on the unsigned installer ("More info" → "Run anyway"); the release notes say so.
+4. Optional, needs the owner's Mac: install the `.dmg` and check first launch. With the signing secrets set the app
+   opens with no warning; without them it is ad hoc signed and needs right-click → Open.
 
 ## Known gaps worth knowing
 
-- Signing and notarization: see `docs/TRUSTED_INSTALL_PROMPT.md` (needs the owner's Apple and Azure accounts).
-
-- Installers are not code-signed or notarized (no certificates). Users see Gatekeeper/SmartScreen warnings.
+- Signing and notarization are wired up and live: `packaging/mac/sign.sh` signs every file inside the app with the
+  Developer ID certificate and the hardened runtime, then notarizes and staples both dmgs; the Windows job signs the
+  launcher, the app files, the uninstaller and the installer with Azure Artifact Signing. Both are gated on the
+  secrets, so the build still works before the accounts exist. See `docs/TRUSTED_INSTALL_PROMPT.md` for the accounts
+  and the secret names. Until the secrets are set, users see Gatekeeper/SmartScreen warnings and the terminal
+  one-liner (`install.sh --app` / `install.ps1 -App`) is the way in that avoids them.
 - Codex and OpenCode download through `npx` on first use (needs network); Pi and Hermes are bundled.
 - Computer use only works on macOS/Windows; it can't be tested in a Linux container.
