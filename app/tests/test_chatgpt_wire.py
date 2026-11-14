@@ -28,6 +28,7 @@ class Mock:
         self.seen, self.token_calls = [], []
         self.valid = {jwt(time.time() + 3600)}            # access tokens the endpoint accepts
         self.reject_next = False
+        self.limit = False                                   # answer like a plan whose usage limit is used up
         self.refresh_status = 200
         self.issued = 0
 
@@ -78,6 +79,11 @@ def mock(tmp_path, monkeypatch):
                                                     "id_token": jwt(time.time() + 3600)}).encode())
             if self.path == "/codex/responses":
                 tok = self.headers.get("Authorization", "")[7:]
+                if m.limit:                                      # the body ChatGPT sends (seen live, Go plan)
+                    return self._reply(429, json.dumps({"error": {
+                        "type": "usage_limit_reached", "message": "The usage limit has been reached", "plan_type": "go",
+                        "resets_at": int(time.time()) + 973722, "limit_window_minutes": 43200,
+                        "resets_in_seconds": 973722}}).encode())
                 if m.reject_next or tok not in m.valid:
                     m.reject_next = False
                     return self._reply(401, b'{"detail": "token expired"}')
@@ -113,6 +119,7 @@ def mock(tmp_path, monkeypatch):
         {"claudeAiOauth": {"accessToken": CLAUDE_SECRET, "refreshToken": CLAUDE_SECRET}}))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     CG._MODELS.update(t=0.0, rows=[])
+    CG._LIMIT.clear()
     yield m
     srv.shutdown()
 
@@ -338,3 +345,62 @@ def test_hermes_config_points_at_the_relay(mock, tmp_path, monkeypatch):
     assert cfg["model"]["base_url"] == url and cfg["model"]["api_key"] == tok
     assert cfg["model"]["default"] == "gpt-6-luna"
     assert cfg["auth"]["adopt_external_logins"] is False
+
+
+
+# ---------- found live: the model list needs a Codex-format version; a used-up plan must not hang a chat -----------
+
+def test_model_list_sends_a_codex_compatible_version_and_the_default_follows_the_plan(mock, tmp_path):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    assert CG.models() == ["gpt-6.1-sol", "gpt-6-luna"]
+    path = [s[1] for s in mock.seen if s[1].startswith("/codex/models")][0]
+    assert f"client_version={CG.CODEX_COMPAT_VERSION}" in path      # "0" or Meshpool's 0.1.0 get an empty list
+    assert CG.default_model() == "gpt-6.1-sol"                        # the plan's first model, not a fixed name
+
+
+def test_a_model_the_plan_does_not_offer_falls_back_to_one_it_does(mock, tmp_path, monkeypatch):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    CG.models()
+    monkeypatch.setenv("MH_MODEL", "chatgpt:gpt-retired")
+    assert CG.default_model() == "gpt-6.1-sol"
+    assert CG.resolve_model("gpt-retired") == "gpt-6.1-sol"
+
+
+def test_used_up_plan_is_reported_once_not_retried(mock, tmp_path):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    mock.limit = True
+    with pytest.raises(CG.UsageLimit) as e:
+        CG.chat(body())
+    msg = str(e.value)
+    assert "Usage limit reached on ChatGPT Go" in msg and "resets in 11 days" in msg and "another provider" in msg
+    assert "HTTP 429" not in msg                                     # so no client loop treats it as a short rate limit
+    assert len([s for s in mock.seen if s[1] == "/codex/responses"]) == 1
+    assert CG.limit_note().startswith("Usage limit reached")          # the model menu shows it under the ChatGPT tab
+
+
+def test_relay_answers_a_used_up_plan_with_no_quota(mock, tmp_path):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    mock.limit = True
+    code, r = _relay_call("/v1/chat/completions", body())
+    assert code == 429 and r["error"]["code"] == "insufficient_quota" and "resets" in r["error"]["message"]
+
+
+def test_meshpool_code_stops_at_once_on_a_used_up_plan(mock, tmp_path, monkeypatch):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    mock.limit = True
+    monkeypatch.setenv("MH_PROVIDER", "chatgpt")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    from meshpool_harness.agent.core import Agent
+    ev = []
+    a = Agent(str(tmp_path), emit=ev.append, mode="auto")
+    t0 = time.time()
+    try:
+        a.send("say hello")
+    except CG.UsageLimit:
+        pass
+    assert time.time() - t0 < 5                                       # no 65 s rate-limit waits
+    shown = " ".join(str(e.get("text") or e.get("message") or "") for e in ev if e.get("type") in ("error", "status"))
+    assert "Usage limit reached" in shown and "Rate limited" not in shown, shown
+    assert len([s for s in mock.seen if s[1] == "/codex/responses"]) == 1

@@ -84,6 +84,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not stream:
             try:
                 r = CG.chat(body, task_id=task)
+            except CG.UsageLimit as e:
+                return self._json(429, {"error": {"message": str(e), "type": "insufficient_quota", "code": "insufficient_quota"}})
             except CG.NotSignedIn as e:
                 return self._error(401, str(e), "authentication_error")
             except RuntimeError as e:
@@ -113,6 +115,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             r = CG.chat(body, task_id=task, on_text=on_text)
         except (BrokenPipeError, ConnectionResetError):
+            return
+        except CG.UsageLimit as e:
+            if not started[0]:
+                return self._json(429, {"error": {"message": str(e), "type": "insufficient_quota",
+                                                  "code": "insufficient_quota"}})
+            self.wfile.write(f"data: {json.dumps({'error': {'message': str(e), 'type': 'insufficient_quota'}})}\n\n".encode())
+            self.close_connection = True
             return
         except RuntimeError as e:
             if not started[0]:
