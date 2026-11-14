@@ -7,7 +7,7 @@
 version: 1
 
 repair:
-  max_rounds: 3                 # content repair rounds before failures are frozen into the QA report
+  max_rounds: 4                 # content repair rounds before failures are frozen into the QA report
   flag_in_file: true            # unresolved failures are written into the speaker notes as "[QA] ..." lines
 
 pptx:
@@ -83,7 +83,10 @@ pptx:
     max_per_slide_by_archetype: {challenge_matrix: 6}
     max_icon_size_in: 1.0
     tag_prefix: "icon:"         # alt text "icon:<set>:<name>" identifies an icon and its set
-    allowed_sets: [lucide]
+    allowed_sets: [lucide, tabler, tabler-filled, phosphor, phosphor-light, phosphor-thin, phosphor-bold, phosphor-fill,
+                   phosphor-duotone, iconoir, iconoir-solid, heroicons, heroicons-solid, bootstrap, bootstrap-fill,
+                   material, material-fill, material-rounded, material-rounded-fill, material-sharp,
+                   material-sharp-fill, carbon]   # engines/icons SETS; one set per deck
     forbid_gradients: true
     forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
     max_rule_weight_pt: 1.5

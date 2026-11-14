@@ -95,6 +95,18 @@ def _balance(t: str) -> str:
     return t
 
 
+_LEAD_IN = re.compile(r"^\W*(on|in|at|for|with|by|from|to|after|before|despite|unlike|like|compared|versus|vs|"
+                      r"if|when|while|although|though|because|since|as|under|over|across|including|excluding)\b",
+                      re.I)
+
+
+def _is_clause(head: str) -> bool:
+    """A cut must leave a sentence that stands alone: not a lead-in phrase ('On EV per live GW') and with a verb."""
+    from engines.forge.validate_pptx import _has_verb
+    plain = _plain(head)
+    return not _LEAD_IN.match(plain) and _has_verb(plain)
+
+
 def headline(text: str, max_words: int) -> str:
     """The lead clause of a bullet: the text before its first ';', dash, colon or comma once that clause has at least
     four words; a long sentence with no clean break is cut at a word boundary. Never adds words."""
@@ -105,7 +117,7 @@ def headline(text: str, max_words: int) -> str:
         for m in re.finditer(sep, t):
             head = t[:m.start()]
             k = len(_plain(head).split())
-            if 4 <= k <= max_words:
+            if 4 <= k <= max_words and _is_clause(head):
                 return _balance(head)
             if k > max_words:
                 break

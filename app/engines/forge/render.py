@@ -363,8 +363,109 @@ def _icon_png(name: str, hexcolor: str) -> str | None:
     return str(out)
 
 
+ICON_SET = {"name": None}       # the deck's icon set (render(icon_set=...) or theme["icon_set"]); None: Lucide, PNG
+SVG_BLIP_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+
+
+def _set_icons(icon_set: str | None) -> str | None:
+    """Check and apply the deck's icon set (any set of engines/icons); None keeps the Lucide PNG default."""
+    s = (str(icon_set).strip().lower() or None) if icon_set else None
+    if s:
+        from engines.icons import SETS
+        if s not in SETS:
+            raise ValueError(f"Unknown icon set {icon_set!r}. Sets: {', '.join(SETS)}")
+    ICON_SET["name"] = s
+    return s
+
+
+@lru_cache(maxsize=512)
+def icon_ref(key: str | None, icon_set: str | None = None) -> tuple[str, str]:
+    """(set, icon name) for a meaning in one set. Lucide: icon_name() (deck meanings, aliases, closest name). Other
+    sets: the name itself when the set has it (for a deck meaning, when the Lucide icon is tagged with it too, so
+    "scale" keeps meaning "maximize"); otherwise the library's search for the
+    meaning together with the Lucide icon it maps to and that icon's tags, so "risk" finds each set's warning sign
+    and "congestion" its traffic cone."""
+    s = icon_set or "lucide"
+    lucide = icon_name(key)
+    if s == "lucide":
+        return "lucide", lucide
+    from engines import icons as IC
+    k = (key or "").strip().lower().replace("_", "-").replace(" ", "-")
+    own = IC._lookup(k, s) if k else None
+    tags = next((r["tags"] for r in IC.index("lucide") if r["name"] == lucide), [])
+    remapped = any(w in ICON_MEANINGS or w in ICON_ALIASES for w in k.split("-"))
+    if own and (not remapped or k == lucide or k in tags):     # "money" -> the set's own "money" icon
+        return s, own
+    query = " ".join([k.replace("-", " "), lucide.replace("-", " ")] + list(tags[:6]))
+    words = set(IC._words(query))
+    subject = set(IC._words(" ".join([lucide.replace("-", " ")] + list(tags[:6])))) if remapped else words
+
+    def fit(r):                                    # the icon's subject (first name word) should be in the query
+        nw = IC._words(r["name"].replace("-", " "))
+        return (r["score"] + (4 if nw and nw[0] in subject else 0) + (5 if r["name"] == lucide else 0)
+                - 2 * sum(1 for w in nw if w not in words))
+    hits = IC.search(query, set=s, limit=10) or IC.search("circle dot", set=s, limit=1)
+    return s, (max(hits, key=fit)["name"] if hits else (own or ""))
+
+
+@lru_cache(maxsize=256)
+def _set_png(name: str, hexcolor: str, icon_set: str) -> str | None:
+    """PNG fallback for an icon of another set, drawn with Pillow (engines/icons/raster.py: no Cairo, so it works on
+    Mac and Windows too)."""
+    from engines.icons.raster import png_bytes
+    svg = _icon_svg(name, hexcolor, icon_set)
+    if not svg:
+        return None
+    ICON_CACHE.mkdir(exist_ok=True)
+    out = ICON_CACHE / f"{icon_set}-{name}-{hexcolor}.png"
+    if not out.exists():
+        tmp = out.with_suffix(".tmp.png")
+        tmp.write_bytes(png_bytes(svg.decode("utf-8"), hexcolor, 192))
+        tmp.replace(out)
+    return str(out)
+
+
+@lru_cache(maxsize=256)
+def _icon_svg(name: str, hexcolor: str, icon_set: str) -> bytes | None:
+    """The icon's SVG in `hexcolor` (PowerPoint does not resolve currentColor), 2px strokes thinned to 1.25px like
+    the Lucide PNGs."""
+    from engines import icons as IC
+    txt = IC.svg(name, icon_set)
+    if not txt:
+        return None
+    txt = txt.replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
+    if "<?xml" not in txt[:10]:
+        txt = '<?xml version="1.0" encoding="UTF-8"?>' + txt
+    return txt.encode("utf-8")
+
+
+def _embed_svg(pic, blob: bytes) -> None:
+    """Add the SVG beside the PNG (a:blip/a:extLst/asvg:svgBlip, how PowerPoint stores an SVG picture): PowerPoint
+    2016+ draws the crisp, recolourable SVG; older readers and LibreOffice draw the PNG. One part per distinct SVG."""
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.opc.package import Part
+    slide_part = pic.part
+    pkg = slide_part.package
+    seen = pkg.__dict__.setdefault("_forge_svg_parts", {})
+    part = seen.get(blob)
+    if part is None:
+        part = Part(pkg.next_partname("/ppt/media/image%d.svg"), "image/svg+xml", pkg, blob)
+        seen[blob] = part
+    rid = slide_part.relate_to(part, RT.IMAGE)
+    blip = pic._element.find(".//" + qn("a:blip"))
+    ext_lst = blip.find(qn("a:extLst"))
+    if ext_lst is None:
+        ext_lst = etree.SubElement(blip, qn("a:extLst"))
+    ext = etree.SubElement(ext_lst, qn("a:ext"), uri=SVG_BLIP_URI)
+    el = etree.SubElement(ext, f"{{{ASVG}}}svgBlip", nsmap={"asvg": ASVG})
+    el.set(qn("r:embed"), rid)
+
+
 def _icon(sl, name, x, y, d, meaning="", muted=False):
-    """Thin line icon (Lucide, ISC) in a thin circle; muted draws it in the rule grey (an agenda's other sections)."""
+    """Thin line icon (Lucide, ISC) in a thin circle; muted draws it in the rule grey (an agenda's other sections).
+    With the deck's icon_set, that set's icon as SVG (asvg:svgBlip) with a PNG fallback."""
     from .template import COLORS
     circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
     circ.name = f"ov_IconRing_{name}"
@@ -372,12 +473,27 @@ def _icon(sl, name, x, y, d, meaning="", muted=False):
     circ.fill.background()
     circ.line.color.theme_color = TC.ACCENT_5 if muted else TC.TEXT_1
     circ.line.width = Pt(0.75)
-    png = _icon_png(name, COLORS["accent5" if muted else "dk1"])
-    if png:
-        pad = d * 0.24
-        pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
-        pic.name = f"ov_Icon_{name}"
-        _alt(pic, f"icon:lucide:{name}:{meaning or name}")
+    iset = ICON_SET.get("name")
+    color = COLORS["accent5" if muted else "dk1"]
+    if iset is None:
+        png = _icon_png(name, color)
+        if png:
+            pad = d * 0.24
+            pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
+            pic.name = f"ov_Icon_{name}"
+            _alt(pic, f"icon:lucide:{name}:{meaning or name}")
+        return
+    iset, nm = icon_ref(name, iset)
+    svg = _icon_svg(nm, color, iset) if nm else None
+    png = (_icon_png(nm, color) if iset == "lucide" else None) or (_set_png(nm, color, iset) if svg else None)
+    if not png:
+        return
+    pad = d * 0.24
+    pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
+    pic.name = f"ov_Icon_{name}"
+    _alt(pic, f"icon:{iset}:{nm}:{meaning or name}")
+    if svg:
+        _embed_svg(pic, svg)
 
 
 FACE = {"head": "Segoe UI", "body": "Segoe UI"}
@@ -906,7 +1022,10 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
     pre = OVERLAY                                              # data-placed labels: exempt from the grid snap
     if mk.get("value") is not None:                            # marker first: it reads before the bars below it
         mx = px(float(mk["value"]))
-        lab = f"{mk.get('label', 'Marker')}: {fmt_value(float(mk['value']), unit, dec)}"
+        val = fmt_value(float(mk["value"]), unit, dec)
+        name_ = str(mk.get("label") or "Marker").strip()
+        shown = re.sub(r"[^\d.]", "", val).rstrip(".")
+        lab = name_ if shown and shown in re.sub(r"[^\d.]", "", name_) else f"{name_}: {val}"   # never "$48.42: $48.42"
         _write(_box(sl, mx - 1.4, top - 0.34, 2.8, 0.26, pre + "MarkerLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False}], ctx, n)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(top - 0.05), Inches(mx),
@@ -1347,6 +1466,53 @@ def _cell(v):
     return _txt(v)
 
 
+_GAP_RE = re.compile(r"\s*[\(\[]?\[GAP:?\s*([^\]]*)\][\)\]]?")
+_SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*$~(])")
+
+
+def tidy_prose(t: str) -> str:
+    """Repair what removing words leaves behind: empty bold markers, doubled spaces, a space before punctuation,
+    stacked punctuation (':.', ',.') and a sentence that ends on a dangling 'but'/'and'/'of'."""
+    t = re.sub(r"\*\*\s*\*\*", "", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"([,;:])\s*([.!?])", r"\2", t)
+    t = re.sub(r"\(\s*\)", "", t)
+    t = re.sub(r"[,;:]?\s+\b(but|and|or|of|with|to|because|while|from|by|for)\s*([.!?])?$",
+               lambda m: m.group(2) or "", t.strip(), flags=re.I)
+    return t.strip()
+
+
+def drop_gap_sentences(text: str, gaps: list | None = None) -> str:
+    """Prose with a [GAP] marker: the whole sentence that leaned on the missing figure goes (a sentence with a hole
+    in it reads as broken: 'market value of $5.5B but.'); what the gap was is recorded in `gaps`."""
+    if "[GAP" not in text:
+        return text
+    if gaps is not None:
+        gaps.extend(m.group(1).strip() for m in _GAP_RE.finditer(text))
+    keep = []
+    for sent in _SENT.split(text):
+        if "[GAP" not in sent:
+            keep.append(sent)
+            continue
+        parts = re.split(r"(?<=[,;])\s+", sent)                  # "Margin is 28.9%, net debt [GAP]." keeps
+        good = [x for x in parts if "[GAP" not in x]              # "Margin is 28.9%." when what is left is a
+        if good and parts[0] in good:                             # leading clause that stands on its own
+            head = tidy_prose(" ".join(good)).rstrip(",;")
+            from engines.forge.density import _is_clause
+            if _is_clause(head):
+                keep.append(head if head.endswith((".", "!", "?")) else head + ".")
+    return tidy_prose(" ".join(keep))
+
+
+def _emptied(d: dict) -> bool:
+    """A bullet or block whose text was all gap and that has nothing else to show."""
+    if not any(k in d for k in ("text", "lead")):
+        return False
+    words = "".join(str(d.get(k) or "") for k in ("text", "lead", "label", "value")).strip()
+    return not words and not any(d.get(k) for k in ("bullets", "items", "chart", "table", "steps"))
+
+
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
@@ -1378,18 +1544,25 @@ def normalize(s: dict) -> dict:
 
     def scrub(v):                                          # prose: a gap is removed and noted, never shown
         if isinstance(v, str) and "[GAP" in v:
-            gaps.extend(m.group(1).strip() for m in gap_re.finditer(v))
-            v = re.sub(r"\s+(?:as of|as at|dated|on|from)\s*(?=\[GAP)", "", v)   # "data as of [GAP: date]" -> "data"
-            v = re.sub(r"\*\*\s*\*\*", "", gap_re.sub("", v))      # "**[GAP: x]**" left an empty "****" on the slide
-            return re.sub(r"\s+([,.;:])", r"\1", re.sub(r"  +", " ", v)).strip()
+            return drop_gap_sentences(v, gaps)
         if isinstance(v, list):
-            return [scrub(x) for x in v]
+            out = []                                       # a bullet that was only a gap goes, not an empty dot
+            for x in v:
+                y = scrub(x)
+                had_gap = "[GAP" in json.dumps(x, default=str)
+                if had_gap and (y == "" or (isinstance(y, dict) and _emptied(y))):
+                    continue
+                out.append(y)
+            return out
         if isinstance(v, dict):
             return {k: (x if k in ("table", "chart", "prov", "notes") else scrub(x)) for k, x in v.items()}
         return v
     for k in list(s):
-        if k not in ("table", "chart", "prov", "notes"):           # sources and footnotes too: a footer showed it
+        if k not in ("table", "chart", "prov", "notes", "footnotes"):   # sources too: a footer showed it
             s[k] = scrub(s[k])
+    if isinstance(s.get("footnotes"), list):               # footnotes keep their numbering: the gap is named
+        s["footnotes"] = [tidy_prose(gap_re.sub(" not available in the sources", f)) if isinstance(f, str) else f
+                          for f in s["footnotes"]]
     if gaps:
         s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
                       + "; ".join(g for g in gaps if g)).strip()
@@ -1578,11 +1751,12 @@ def fallback(s: dict) -> dict:
         st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
         if len(st["items"]) < 2:                       # one number is not an exhibit: full-width argument instead
             s["chart"] = None
-            if s.get("title_right"):
-                s["title"] = s["title"].rstrip(" .…") + " " + s["title_right"].lstrip(" .…")
             s["archetype"] = "argument_only"
             if not s.get("blocks"):
                 s["blocks"] = [{"text": "", "bullets": list(s.get("bullets") or [])}]
+            if s.get("title_right"):                        # the right half's title leads the text, not the title:
+                tr = s.pop("title_right").strip(" .…")      # glued on, it made two sentences with no stop
+                s["blocks"] = [{"text": f"**{tr[0].upper() + tr[1:]}**."}] + list(s["blocks"])
             return s                                        # the callout stays a callout (so-what band)
         s["chart"] = st
         if s.get("archetype") in ("exhibit_argument",) and s.get("blocks") and s.get("title_right"):
@@ -2505,7 +2679,8 @@ DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
-           carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None) -> dict:
+           carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None,
+           icon_set: str | None = None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
     does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
@@ -2515,8 +2690,11 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     density: "present", "balanced" (default) or "read" (density.py): the type scale and how much text a slide keeps
     on the page; what a mode cuts goes to the speaker notes. A slide's own "density" overrides the deck's.
     brand: {"firm", "footer", "logo"} from a company profile (engines/forge/brand.py render_kwargs): the firm label,
-    and the logo in the footer of every page and on the cover."""
+    and the logo in the footer of every page and on the cover.
+    icon_set: one icon set for the whole deck ("phosphor", "material", "carbon", ... engines/icons SETS), also read
+    from theme["icon_set"]; icons are then embedded as SVG with a PNG fallback. Default: Lucide as PNG."""
     from .template import theme_spec
+    _set_icons(icon_set or (theme.get("icon_set") if isinstance(theme, dict) else None))
     BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None,
                   **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)

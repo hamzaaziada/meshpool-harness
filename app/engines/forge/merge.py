@@ -238,6 +238,12 @@ def _copy_chart(part, pkg, pin, f: float = 1.0):
     from pptx.parts.chart import ChartPart
     root = etree.fromstring(part.blob)
     pin(root)
+    C = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+    seen: dict[str, str] = {}                                  # negative axis ids (python-pptx) make Office repair
+    for el in root.iter(f"{C}axId", f"{C}crossAx"):
+        v = el.get("val")
+        if v and v.startswith("-"):
+            el.set("val", seen.setdefault(v, str(50000 + 1000 * len(seen) + abs(int(v)) % 1000)))
     if abs(f - 1) > 0.002:                                       # the chart's own text, on a smaller slide
         for node in root.iter():
             if node.tag.rsplit("}", 1)[-1] in ("rPr", "defRPr", "endParaRPr") and "sz" in node.attrib:

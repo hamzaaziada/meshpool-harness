@@ -115,8 +115,7 @@ def test_gap_marker_in_bold_leaves_no_empty_markup():
     s = normalize({"archetype": "grid", "bullets": [
         "Closing the gap implies roughly **[GAP: implied upside %]** upside to the price.",
         "Margin is **28.9%**, net debt [GAP: net debt]."]})
-    assert [b["text"] for b in s["bullets"]] == ["Closing the gap implies roughly upside to the price.",
-                                                 "Margin is **28.9%**, net debt."]
+    assert [b["text"] for b in s["bullets"]] == ["Margin is **28.9%**."]   # a sentence with a hole goes whole
     assert "implied upside %" in s["notes"] and "net debt" in s["notes"]
 
 

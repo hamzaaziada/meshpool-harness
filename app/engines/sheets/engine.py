@@ -27,6 +27,9 @@ How you work:
 3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix every issue it reports and rerun until it prints PASS.
 4. Finish with a short answer (what the workbook contains, key outputs with their cell references) and cite the
    checker command as evidence. List the .xlsx in artifacts.
+5. You have a fixed turn budget, stated in the task. A checked workbook delivered on time beats a richer one that is
+   still being refined when the budget runs out: once the workbook is complete and the checker passes, finish. Your
+   build scripts are moved out of the output folder when the run ends; only the .xlsx stays there.
 
 Workbook rules:
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
@@ -181,7 +184,9 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       # "Inputs" (the factor scores and weights are inputs). B.select_methods(profile) shows the rules in Python."""
 
 
-def finish_check(answer, artifacts, ws):
+def finish_check(answer, artifacts, ws, report=None):
+    """The engine's deterministic finish gate: None when every listed workbook passes, else the issues. report (a
+    dict), when given, collects the forge rule statuses ("rules") and warning-level findings ("warnings")."""
     from engines.sheets.qa import check
     xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
     if not xl:
@@ -204,6 +209,11 @@ def finish_check(answer, artifacts, ws):
         try:                                   # the forge workbook rules: logic errors QA cannot see (signs, plugs,
             from engines.forge.validate_xlsx import validate as forge_validate     # literals, tie-outs, master check)
             fr = forge_validate(p)
+            if report is not None:
+                report["rules"] = dict(fr.get("rules") or {})
+                report.setdefault("warnings", []).extend(
+                    f"{f['rule']} {f.get('cell') or f.get('sheet') or ''}: {f['message']}".replace("  ", " ")
+                    for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "warning")
             r["issues"] += [{"check": f["rule"], "cell": f.get("cell") or f.get("sheet") or "", "detail": f["message"]}
                             for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"][:10]
         except Exception:
@@ -242,6 +252,9 @@ class SheetsWorkspace(Workspace):
         self.inputs = {Path(f).resolve() for f in inputs or []}
         self.started = time.time()
         self.nudged = False
+        self.wrapped = False                  # the ~80% "wrap up and finish" note was sent
+        self.turn = 0                         # last turn whose tools ran (set by turn_budget)
+        self.before = set(_files(self.root))  # files already in the folder: never moved or deleted by the tidy-up
 
     def _allowed(self, q: Path) -> bool:
         return q == self.root or self.root in q.parents or q in self.inputs
@@ -269,17 +282,39 @@ class SheetsWorkspace(Workspace):
             raise ToolError(REFUSED)
         return super()._run(command, timeout_s, kind, record, raw)
 
-    def saved_workbook(self) -> bool:
-        """An .xlsx written in this run (input workbooks copied in beforehand do not count)."""
+    def saved_workbooks(self) -> list[Path]:
+        """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
+        then the most recently saved."""
+        out = []
         for p in self.root.rglob("*.xlsx"):
-            if ".run" in p.parts or p.name.startswith("~$"):
+            rel = p.relative_to(self.root).parts
+            if ".run" in rel or p.name.startswith(("~$", ".~lock")):
                 continue
             try:
-                if p.stat().st_mtime >= self.started - 1 and p.resolve() not in self.inputs:
-                    return True
+                m = p.stat().st_mtime
+                if m >= self.started - 1 and p.resolve() not in self.inputs:
+                    out.append((len(rel) > 1, -m, p))
             except OSError:
                 continue
-        return False
+        return [p for *_, p in sorted(out)]
+
+    def saved_workbook(self) -> bool:
+        """An .xlsx written in this run (input workbooks copied in beforehand do not count)."""
+        return bool(self.saved_workbooks())
+
+
+_SKIP_DIRS = {".run", ".git", "node_modules", "__pycache__", ".venv", "venv"}
+
+
+def _files(root: Path, limit: int = 20000) -> list[Path]:
+    """Files under root, outside .run and other tool folders (bounded: the folder may be a large user folder)."""
+    out = []
+    for d, dirs, names in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in _SKIP_DIRS]
+        out += [Path(d) / n for n in names]
+        if len(out) >= limit:
+            break
+    return out
 
 
 def build_first(turn: int, max_turns: int, ws) -> str | None:
@@ -292,12 +327,167 @@ def build_first(turn: int, max_turns: int, ws) -> str | None:
             "workbook now, then run python -m engines.sheets.check on it. Refine only after the file exists.")
 
 
+def turn_budget(turn: int, max_turns: int, ws) -> str | None:
+    """Notes injected after a turn's tools ran (the model reads them on the next turn). A live run built a passing
+    17-tab model, kept refining it and hit the turn cap without calling finish; these make it land the work:
+    - at ~60% with no workbook: BUILD NOW (build_first);
+    - at ~80%: stop adding features, run the checks, fix only failures, finish;
+    - on the last two turns: finish now."""
+    ws.turn = turn                                    # last completed turn (reported if the loop raises)
+    left = max_turns - turn                           # turns still to come after this note
+    notes = [n for n in [build_first(turn, max_turns, ws)] if n]
+    if left <= 0:
+        return "\n".join(notes) or None
+    if left <= 2:
+        ws.wrapped = True
+        notes.append(f"FINISH NOW: {turn} of {max_turns} turns used; {left} turn{'s' if left != 1 else ''} left. "
+                     "Call finish on this turn with the saved .xlsx in artifacts and the checker command as evidence. "
+                     "Do not change the workbook any more. If the run ends without finish, the last saved workbook "
+                     "is checked and delivered as it is.")
+    elif not getattr(ws, "wrapped", True) and turn >= max(2, int(0.8 * max_turns)):
+        ws.wrapped = True
+        if not ws.saved_workbook():
+            notes.append(f"WRAP UP: {turn} of {max_turns} turns used and still no .xlsx. Save a complete workbook "
+                         "with what you have now, run python -m engines.sheets.check on it, fix only what fails, "
+                         "then call finish.")
+        else:
+            notes.append(f"WRAP UP: {turn} of {max_turns} turns used; {left} left. Stop adding features or tabs. "
+                         "Run python -m engines.sheets.check on the saved workbook, fix only what fails (and any "
+                         "Checks row not OK), then call finish now with the .xlsx in artifacts. A finished, checked "
+                         "workbook is the goal; polish is not.")
+    return "\n".join(notes) or None
+
+
+CAPS = ("turn cap", "wall-clock cap", "task budget")
+
+
+def salvage(r, ws, max_turns: int) -> dict:
+    """The run hit a cap without an accepted finish. Do not throw the work away: check the last saved workbook with
+    the same gate finish uses. Passing -> ok with the file; failing -> not ok, but with the file and the failures, so
+    the caller can still deliver or repair it. The answer is never empty."""
+    books = ws.saved_workbooks()
+    if not books:
+        return {"ok": False, "artifacts": [], "evidence": [], "checks": [],
+                "answer": (f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
+                           "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request."),
+                "reason": f"{r.reason}; no workbook saved"}
+    book = books[0]
+    rel = str(book.relative_to(ws.root))
+    report: dict = {}
+    try:
+        msg = finish_check("", [str(book)], ws, report=report)
+    except Exception as e:                     # noqa: BLE001 - a crashing checker must not lose the file either
+        msg = f"ENGINE CHECK: the checker crashed: {type(e).__name__}: {e}"
+    failures = [ln[2:] for ln in (msg or "").splitlines() if ln.startswith("- ")] or ([msg] if msg else [])
+    rules = report.get("rules") or {}
+    rule_line = " ".join(f"{k}={v}" for k, v in rules.items())
+    warnings = report.get("warnings") or []
+    tabs = []
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(book, read_only=True)
+        tabs = list(wb.sheetnames)
+        wb.close()
+    except Exception:                          # noqa: BLE001
+        pass
+    head = (f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
+            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish."
+            if r.reason.startswith(CAPS) else f"The run stopped on an error before the model called finish ({r.reason}).")
+    what = f"{rel}" + (f" ({len(tabs)} tabs: {', '.join(tabs)})" if tabs else "")
+    lines = [head]
+    if not msg:
+        lines.append(f"Delivered the last saved, checked version: {what}. It passes the engine's finish checks "
+                     "(workbook QA, Checks tab, forge workbook rules, input sources, model completeness).")
+    else:
+        lines.append(f"The last saved version is {what}. It does NOT pass the engine's finish checks; "
+                     f"{len(failures)} failing:")
+        lines += [f"- {f}" for f in failures]
+    if rule_line:
+        lines.append(f"Forge workbook rules: {rule_line}")
+    if warnings:
+        lines.append(f"Remaining warnings ({len(warnings)}):")
+        lines += [f"- {w}" for w in warnings[:10]] + ([f"- and {len(warnings) - 10} more"] if len(warnings) > 10 else [])
+    elif not msg:
+        lines.append("Remaining warnings: none.")
+    evidence = [f"engine finish check on {rel}: " + ("pass" if not msg else f"{len(failures)} failing")]
+    if rule_line:
+        evidence.append(f"forge validate_xlsx: {rule_line}")
+    return {"ok": not msg, "answer": "\n".join(lines), "artifacts": [str(book)], "evidence": evidence,
+            "checks": failures, "warnings": warnings, "rules": rules,
+            "reason": f"{r.reason}; delivered the last saved workbook, checks pass" if not msg else
+                      f"{r.reason}; saved workbook fails {len(failures)} checks: " + "; ".join(failures)[:600]}
+
+
+def tidy(ws, artifacts: list) -> list:
+    """Keep the output folder to the deliverable: build scripts (and any helper .py) the model wrote move to .run/,
+    and extra .xlsx copies made this run (LibreOffice conversions such as conv/*.xlsx, earlier versions) move to
+    .run/scratch/, as do lock files and __pycache__. Files that were in the folder before the run are never touched.
+    Returns the artifacts with moved paths rewritten."""
+    import shutil
+    keep = {Path(a if os.path.isabs(a) else ws.root / a).resolve() for a in artifacts}
+    keep_xl = any(k.suffix.lower() in (".xlsx", ".xlsm") for k in keep)
+    moved: dict[Path, Path] = {}
+    for p in _files(ws.root):
+        try:
+            q = p.resolve()
+        except OSError:
+            continue
+        if p in ws.before or q in ws.inputs:
+            continue
+        rel = p.relative_to(ws.root)
+        name, suf = p.name, p.suffix.lower()
+        if suf in (".py", ".pyc"):
+            dst = ws.run_dir / "scripts" / rel
+        elif name.startswith((".~lock", "~$")) or (suf in (".xlsx", ".xlsm") and keep_xl and q not in keep):
+            dst = ws.run_dir / "scratch" / rel
+        else:
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                dst.unlink()
+            shutil.move(str(p), str(dst))
+            moved[q] = dst
+        except OSError:
+            continue
+    for src in {q.parent for q, dst in moved.items() if dst.suffix == ".py"}:   # the model's helper modules' cache
+        shutil.rmtree(src / "__pycache__", ignore_errors=True)
+    emptied = {q.parent for q in moved}                  # folders the moves emptied (conv/), deepest first
+    for dp in sorted({a for e in emptied for a in [e, *e.parents] if ws.root in a.parents}, key=lambda x: -len(x.parts)):
+        try:
+            dp.rmdir()                                   # only succeeds when empty
+        except OSError:
+            pass
+    return [str(moved.get(Path(a if os.path.isabs(a) else ws.root / a).resolve(), a)) for a in artifacts]
+
+
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", files=None) -> dict:
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
-    r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
-            caps=Caps(max_turns=max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))), temperature=0.0, finish_check=finish_check, turn_hook=build_first)
-    return {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
-            "reason": r.reason, "usage": r.usage}
+    n = max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))
+    task = (f"{task}\n\nTurn budget: {n} turns (one turn = one reply with its tool calls). Save a first complete "
+            f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
+            f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
+            "delivered as it is.")
+    crashed = False
+    try:
+        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
+                caps=Caps(max_turns=n), temperature=0.0, finish_check=finish_check, turn_hook=turn_budget)
+    except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose
+        if not ws.saved_workbook():            # workbook was already saved: check and deliver it, do not lose it
+            raise
+        from types import SimpleNamespace
+        crashed = True
+        r = SimpleNamespace(ok=False, answer="", artifacts=[], evidence=[], usage={}, turns=ws.turn + 1,
+                            reason=f"{type(e).__name__}: {e}")
+    out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
+           "reason": r.reason, "usage": r.usage}
+    if not r.ok and (crashed or r.reason.startswith(CAPS)):
+        out.update(salvage(r, ws, n))
+    try:
+        out["artifacts"] = tidy(ws, out["artifacts"])
+    except Exception:                          # noqa: BLE001 - tidying never costs the result
+        pass
+    return out
