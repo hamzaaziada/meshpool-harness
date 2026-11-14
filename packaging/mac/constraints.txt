@@ -1,0 +1,2 @@
+# Mac builds: the app runs on macOS 11 and later. pypdfium2 5.10 and later need macOS 12-13.
+pypdfium2<5.10

@@ -1,8 +1,8 @@
 """Find Mac programs and libraries in an app that need a newer macOS than the app promises.
 
 Usage: python3 check_minos.py Meshpool.app 11.0
-A launcher that needs a newer macOS than the user's makes Finder show the app crossed out, so the launcher, Python
-and Node must not need more than the minimum; the build stops if they do. Anything else above it is listed.
+A launcher that needs a newer macOS than the user's makes Finder show the app crossed out, and a library that does
+breaks the feature that loads it, so the build stops on any file that needs more than the minimum.
 """
 import struct
 import sys
@@ -65,14 +65,14 @@ def main():
         if v and v > want:
             (bad_core if p in core else other).append((p.relative_to(app), v))
     for p, v in other:
-        print(f"note: {p} needs macOS {v[0]}.{v[1]}")
+        print(f"ERROR: {p} needs macOS {v[0]}.{v[1]}")
     for p, v in bad_core:
         print(f"ERROR: {p} needs macOS {v[0]}.{v[1]}, the app promises {want[0]}.{want[1]}")
     missing = [p for p in core[:2] if not p.exists()]
     for p in missing:
         print(f"ERROR: {p.relative_to(app)} is missing")
     print(f"{app.name}: launcher {minos(core[0])}, node {minos(core[1])}, {len(other)} other file(s) above {sys.argv[2]}")
-    sys.exit(1 if bad_core or missing else 0)
+    sys.exit(1 if bad_core or other or missing else 0)
 
 
 if __name__ == "__main__":

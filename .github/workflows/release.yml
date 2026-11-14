@@ -49,10 +49,12 @@ jobs:
           git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
           rt-mac/python/bin/python3 ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
-          rt-mac/python/bin/python3 -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          rt-mac/python/bin/python3 -m pip install -q -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64
           # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
           sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
-          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           for a in arm64 x64; do
             mkdir -p node-mac-$a
@@ -68,6 +70,9 @@ jobs:
             arch=$a; [ $a = x64 ] && arch=x86_64
             # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
             clang -O2 -arch $arch -mmacosx-version-min=11.0 -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+            # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
+            D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
+            if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
             python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app 11.0
           done
           bash packaging/mac/repack.sh "$PWD/dist-src"
