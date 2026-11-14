@@ -51,7 +51,7 @@ but it is in Pi's favour, so we do not claim a lead.
 
 ## Code tools A/B (13 November 2026, 10 Verified dev tasks)
 
-`MH_OBSERVE` adds `probe` and `trace`; "x" arms add `MH_NAV` and `MH_LINT_EDIT` too.
+`MH_OBSERVE` adds `probe` and `trace`; "x" arms added `MH_NAV` and `MH_LINT_EDIT` too (both since removed: they added calls without adding solves).
 
 | Arm | Solved | $ per solved | Time per solved |
 |---|---|---|---|

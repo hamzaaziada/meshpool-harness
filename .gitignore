@@ -7,7 +7,6 @@ dist-src/
 *.exe
 !packaging/win/*.exe
 .DS_Store
-app/memory/*.sqlite
 mcp-health.json
 /runs/
 /skills/

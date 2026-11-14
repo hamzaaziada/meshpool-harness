@@ -140,7 +140,7 @@ def _r1c1(formula: str, row: int, col: int) -> str:
             parts = []
             for ref in rng.split(":"):
                 m = re.match(r"^(\$?)([A-Z]{1,3})?(\$?)(\d+)?$", ref.upper())
-                if not m or not (m.group(2) or m.group(4)):
+                if not m or not (m.group(2) and m.group(4) or ":" in rng and (m.group(2) or m.group(4))):
                     parts.append(ref)
                     continue
                 cabs, cl, rabs, rw = m.groups()        # C:C and 2:2 (whole columns / rows) are relative too

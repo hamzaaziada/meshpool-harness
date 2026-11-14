@@ -504,6 +504,13 @@ class Session:
                         self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
                     except Exception:  # noqa: BLE001
                         pass
+                while (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
+                       and self.agent.has_steers()):  # added with Enter just as the turn ended: answer it now
+                    try:
+                        self.agent.resume_steers()
+                    except Exception as e:  # noqa: BLE001
+                        self.emit({"type": "error", "text": str(e)})
+                        break
                 write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan)
                 nxt = None
                 with self.lock:

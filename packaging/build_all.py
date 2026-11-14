@@ -107,7 +107,7 @@ def pi_and_node(app_dir: Path, node_dst: Path, plat: str):
 
 def app_code(dst: Path):
     dst.mkdir(parents=True)
-    for name in ("meshpool_harness", "engines", "profiles", "memory", "defaults"):
+    for name in ("meshpool_harness", "engines", "profiles", "defaults"):
         shutil.copytree(APP_SRC / name, dst / name, ignore=IGN)
     for f in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
         shutil.copy2(ROOT / f, dst / f)

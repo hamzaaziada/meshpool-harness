@@ -29,7 +29,8 @@ quality doesn't depend on which model writes the content.
 ## Use it
 
 Every deck request to the Meshpool agent uses forge: `meshpool run "…" --engine slides` (or `--engine forge`) and
-Meshpool Work's office task both go through it. `MH_DECK_ENGINE=v1` selects the previous engine.
+Meshpool Work's office task both go through it. There is no other deck engine: a forge failure is reported as an
+error.
 
 From the command line (in `app/`):
 

@@ -1,8 +1,8 @@
 """Forge deck engine: request (+ input files) -> consulting-grade .pptx in the output folder.
 
 The model writes the storyline and the slide content as JSON; the forge renderer applies the design system
-(engines/forge/render.py) and validate_pptx checks the rendered file. Used by `meshpool run --engine forge` and,
-by default, by the slides engine.
+(engines/forge/render.py) and validate_pptx checks the rendered file. Used by `meshpool run --engine forge` and
+`--engine slides` (engines/slides/engine.py is a thin entry to this module).
 """
 from __future__ import annotations
 

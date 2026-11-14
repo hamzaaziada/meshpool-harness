@@ -5,7 +5,7 @@
 Covers, for each chat harness where it applies: using an imported skill in chat, an MCP tool called in chat, writing
 and running a file, a Word document from Meshpool Work, browser use on a real page (read-only date field, late menu),
 computer use failing cleanly where it is not supported, the meshpool command line, and (when CODE_TOOLS_PORT points at
-an app started with MH_OBSERVE=1 MH_NAV=1 MH_LINT_EDIT=1) probe, symbol and the edit check inside Meshpool Code.
+an app started with MH_OBSERVE=1) probe inside Meshpool Code.
 Run e2e_full.py first: it imports claude-skill and turns the MCP servers on. Prints PASS/FAIL lines and exits 1 on
 any failure.
 """
@@ -175,10 +175,6 @@ if CODE_PORT:
     joined = " ".join(outs)
     check("[meshpool-code + MH_OBSERVE] probe shows the failing test and its locals",
           "test_add" in joined and "x" in joined and "= 4" in joined, outs[:1])
-    check("[meshpool-code + MH_NAV] symbol shows the definition and its uses",
-          "definition: calc.py:1" in joined and "test_calc.py" in joined, outs[1:2])
-    check("[meshpool-code + MH_LINT_EDIT] an edit that breaks a name is flagged at once",
-          "F821" in joined and "bb" in joined, outs[-1:])
     check("[meshpool-code + code tools] no errors", not errors(v), errors(v))
 
 passed = sum(ok for _, ok in RESULTS)

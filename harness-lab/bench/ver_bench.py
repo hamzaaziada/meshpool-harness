@@ -24,8 +24,8 @@ ARMS = {"v4": {"MH_PRESET": "v4"}, "v5": {"MH_PRESET": "v5"}, "v5s": {"MH_PRESET
         "v5nt": {"MH_PRESET": "v5", "MH_TODO": "0"}, "v5ft": {"MH_PRESET": "v5", "MH_CODE_FINISH_SAME_TURN": "1"},
         "v5sp": {"MH_PRESET": "v5", "MH_SCOPE_PROMPT": "1"},
         "v5o": {"MH_PRESET": "v5", "MH_OBSERVE": "1"}, "appo": {"MH_PRESET": "v5", "MH_OBSERVE": "1"},
-        "v5x": {"MH_PRESET": "v5", "MH_OBSERVE": "1", "MH_LINT_EDIT": "1", "MH_NAV": "1"},
-        "appx": {"MH_PRESET": "v5", "MH_OBSERVE": "1", "MH_LINT_EDIT": "1", "MH_NAV": "1"},
+        "v5x": {"MH_PRESET": "v5", "MH_OBSERVE": "1"},
+        "appx": {"MH_PRESET": "v5", "MH_OBSERVE": "1"},
         "codex": {}, "pi": {}}
 TURNS, WALL = 60, 1800
 

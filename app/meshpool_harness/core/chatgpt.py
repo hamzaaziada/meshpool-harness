@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import http.client
 import json
 import os
 import time
@@ -356,6 +357,6 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
                 raise NotSignedIn(f"ChatGPT did not accept the sign-in. Sign in again: Settings, Account, Runs on. "
                                   f"({detail})")
             raise RuntimeError(f"chatgpt HTTP {e.code}: {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as e:
             raise RuntimeError(f"chatgpt HTTP 0: timed out or connection lost: {e}")
     raise RuntimeError("chatgpt HTTP 401")

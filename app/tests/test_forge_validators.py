@@ -146,3 +146,7 @@ def test_corrupt_workbook_is_x0_not_a_crash(tmp_path):
     p.write_bytes(b"PK\x03\x04 not really a zip")
     r = VX.validate(str(p), do_recalc=False)
     assert r["rules"]["X0"] == "fail" and r["rules"]["X3"] == "not_run"
+
+
+def test_r1c1_leaves_names_alone():
+    assert VX._r1c1("=C19*dso/365", 37, 3) == VX._r1c1("=D19*dso/365", 37, 4)
