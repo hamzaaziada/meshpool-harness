@@ -387,6 +387,10 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .chip.ci.running .cidot,.cidot.run{background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
 .chg summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}.chg summary::-webkit-details-marker{display:none}
 .chg ul{max-height:240px;overflow:auto}.chg li .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sugg{max-width:760px;margin:0 auto 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.schip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;padding:5px 12px;font-size:var(--fs-s);min-height:30px;transition:border-color .12s ease,color .12s ease,transform .12s ease}
+.schip:hover{border-color:var(--pool);color:var(--ink);transform:translateY(-1px)}.schip svg{flex:none}
+.sugg .sx{margin-left:auto;opacity:.6}.sugg .sx:hover{opacity:1}
 .goalh{color:var(--ink-2)}.goalh b{font-weight:600;color:var(--ink)}.goalh .linkbtn{font-size:inherit}
 .plus{color:var(--add)}.minus{color:var(--del)}
 .prcard{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}

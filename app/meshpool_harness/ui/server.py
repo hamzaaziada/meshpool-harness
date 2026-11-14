@@ -411,6 +411,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_action(self._json()))
+            if u.path == "/api/suggest":
+                from meshpool_harness import suggest as SG
+                b = self._json()
+                return self._send(200, {"suggestions": SG.suggest(b.get("text", ""), b.get("harness", ""),
+                                                                  b.get("kind", "cowork"), bool(b.get("new", True)))})
             if u.path == "/api/route-harness":
                 from meshpool_harness import harness_router as HRT
                 b = self._json()

@@ -185,6 +185,7 @@ function shell() {
       <div class="topbar" id="topbar"></div>
       <div class="conv" id="conv"><div class="col" id="col"></div></div>
       <div class="composer-wrap">
+        <div class="sugg" id="sugg" hidden></div>
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
@@ -569,6 +570,7 @@ function curRoot() { return S.cur?.view?.workdir || S.draft.project || S.default
 function setupComposer() {
   const inp = $("#input");
   inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
+  inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
   inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
@@ -667,6 +669,7 @@ async function sendNow(interrupt) {
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
+  clearTimeout(S.suggT); if ($("#sugg")) $("#sugg").hidden = true;
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
@@ -713,6 +716,8 @@ const SLASH = [
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Tokens and spend", () => openSettings("usage")],
+  ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
+  ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
   ["/terminal", "Open the terminal", () => togglePanel("term", true)],
@@ -727,6 +732,37 @@ const SLASH = [
 async function runSlash(text) {
   const cmd = text.split(/\s/)[0].toLowerCase(); const hit = SLASH.find(s => s[0] === cmd);
   if (!hit) return false; hit[2](text.slice(cmd.length).trim()); return true;
+}
+const REVIEW_PROMPT = "Review the changes on this branch against the branch it merges into: find the base with git, read `git diff <base>...HEAD` and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.";
+function qaPrompt(where) {
+  return `Do a UI and UX pass of ${where || "the app in this project"}. If it is not running, start it the way its README or package.json says. Open it with the browser tools and click through every page and control at desktop width (1280x800) and phone width (390x844), in light and dark mode if it has both. Take a screenshot of each problem. Report issues most severe first: what you saw, the screenshot, the likely cause (file:line) and the fix. Look for broken flows, console errors, overlapping or cut-off elements, poor contrast, small tap targets, missing empty, loading and error states, and unclear wording. Do not change any files.`;
+}
+function sendCmd(prompt) { const inp = $("#input"); inp.value = prompt; sendNow(false); }
+/* Suggestions while typing: the connector, skill, agent or command that fits the message (suggest.py). */
+async function suggestNow() {
+  const box = $("#sugg"); if (!box) return;
+  const text = $("#input").value.trim();
+  if (text.length < 12 || /^[\/$]/.test(text)) { box.hidden = true; return; }
+  let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: S.appMode, new: !S.cur}); } catch (e) { return; }
+  if ($("#input").value.trim() !== text) return;                 // typed on meanwhile: the next pause asks again
+  S.suggOff = S.suggOff || new Set();
+  const items = (r.suggestions || []).filter(x => !S.suggOff.has(x.type + ":" + x.id));
+  box.hidden = !items.length; if (!items.length) return;
+  const ic = {connect: ICON.plug, enable: ICON.plug, skill: ICON.skill, agent: ICON.cpu, command: ICON.bolt};
+  box.innerHTML = items.map((x, i) => `<button class="schip" data-i="${i}" title="${esc(x.why || "")}">${ic[x.type] || ""}<span>${esc(x.label)}</span></button>`).join("")
+    + `<button class="iconbtn sx" id="suggX" title="Hide suggestions" aria-label="Hide suggestions">${ICON.x}</button>`;
+  $$(".schip", box).forEach(b => b.onclick = () => useSuggestion(items[+b.dataset.i]));
+  $("#suggX").onclick = () => { items.forEach(x => S.suggOff.add(x.type + ":" + x.id)); box.hidden = true; };
+}
+async function useSuggestion(x) {
+  const inp = $("#input"); const box = $("#sugg");
+  S.suggOff.add(x.type + ":" + x.id); box.hidden = true;
+  if (x.type === "connect") openSettings("connectors");
+  else if (x.type === "enable") { try { await post("/api/connectors", {action: "enable", id: x.id, on: true}); toast(`${x.label.replace(/^Turn on /, "")} is on for your chats.`); } catch (e) { toast(e.message, 4000); } }
+  else if (x.type === "skill") { if (!inp.value.includes("$" + x.name)) inp.value = `$${x.name} ${inp.value}`; }
+  else if (x.type === "agent") { S.draft.harness = x.id; renderBar(); toast(`${x.label.replace(/^Use /, "")} will do this one.`); }
+  else if (x.type === "command") { const t = inp.value.trim(); inp.value = x.id === "/goal" ? `/goal ${t}` : x.id; }
+  inp.focus(); inp.dispatchEvent(new Event("input"));
 }
 /* /goal: the agent keeps taking turns until it reports the goal met and checked, it needs you, or you stop it. */
 async function goalCmd(arg) {
