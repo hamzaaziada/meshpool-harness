@@ -351,7 +351,7 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
 
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
-          extra_facts: list | None = None) -> dict:
+          extra_facts: list | None = None, template: str | None = None, brand: dict | None = None) -> dict:
     """density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
@@ -427,7 +427,8 @@ design. {WRITE[density]}
     rounds = []
     pptx = out / "deck.pptx"
     for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density)          # the brief's slide count is a hard limit
+        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
+                   brand=brand)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
                        provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
@@ -491,7 +492,8 @@ choice or the number of items; never layout. Keep node and keep the point of the
         for n, msgs in left.items():
             if n - 1 < len(slides):
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density)          # the brief's slide count is a hard limit
+        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
+                   brand=brand)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True, density=density)

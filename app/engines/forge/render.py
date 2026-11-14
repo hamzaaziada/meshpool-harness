@@ -45,6 +45,7 @@ T = {"title": 25, "sub": 18, "note": 8, "src": 9, "tag": 9, "label": 12, "body":
 DENSE = {"cell": 10, "lead": 10, "head": 14, "num": 20, "label": 10}            # challenge matrix (page 8)
 ARGUMENT = {"intro": 14, "bullet": 12, "callout": 12, "exhibit": 16, "unit": 12}  # exhibit + argument (page 3)
 FIRM = "Meshpool"
+BRAND = {"firm": None, "footer": None, "logo": None, "footer_right": None}   # the company look for this render (engines/forge/brand.py)
 _BASE = {"T": dict(T), "DENSE": dict(DENSE), "ARGUMENT": dict(ARGUMENT)}
 DENSITY = {"mode": "balanced", "bump": 1}       # deck density (engines/forge/density.py); set by render()
 
@@ -434,8 +435,18 @@ def _footer(ctx, s, sl, n):
         t = src["text"] if re.match(r"(?i)^(source|note)", src["text"]) else "Source: " + src["text"]
         sx, sw = span(0, 9)
         _write(_box(sl, sx, SRC_Y, sw, 0.34, "Source"), [{"text": t, "size": T["src"], "numbers": False}])
-    _write(_box(sl, colx(10), SRC_Y, RIGHT - colx(10), 0.25, "Firm"),
-           [{"text": f"{s.get('firm', FIRM)}      {n}", "size": T["src"] + 1, "numbers": False, "align": PP_ALIGN.RIGHT}])
+    edges = [colx24(i) + CW for i in range(COLS)]
+    snap = lambda x: max([e for e in edges if e <= x + 1e-6] or [colx(10)])  # noqa: E731 - box edges on the grid
+    right = snap(BRAND["footer_right"] - 0.1) if BRAND.get("footer_right") else RIGHT   # master artwork there
+    lw = _logo(sl, right, SRC_Y + 0.01, 0.24, 1.5, "ov_Logo")
+    if lw:                                               # the logo carries the name; the page number sits before it
+        right = snap(right - lw - 0.1)
+        label = f"{n}"
+    else:
+        label = f"{n}" if BRAND.get("footer_right") else f"{_firm_label(s)}      {n}"
+    if right - colx(10) >= 0.3:
+        _write(_box(sl, colx(10), SRC_Y, right - colx(10), 0.25, "Firm"),
+               [{"text": label, "size": T["src"] + 1, "numbers": False, "align": PP_ALIGN.RIGHT}])
 
 
 # ------------------------------------------------------------------ charts
@@ -1597,8 +1608,10 @@ def a_cover(ctx, s, sl, n):
     if s.get("date"):
         _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
                                                          "color": TC.TEXT_2}])
+    _logo(sl, RIGHT, 0.5, 0.55, 2.6, "ov_Logo", x_left=LEFT)
     _write(_box(sl, colx(9), 6.65, RIGHT - colx(9), 0.3, "Firm"),
-           [{"text": s.get("firm", FIRM), "size": 11, "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+           [{"text": s.get("firm") or BRAND.get("firm") or FIRM, "size": 11, "bold": True, "numbers": False,
+             "align": PP_ALIGN.RIGHT}])
 
 
 def a_closing(ctx, s, sl, n):
@@ -2268,7 +2281,7 @@ DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
-           carry: bool = True, theme=None, density: str | None = None) -> dict:
+           carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
     does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
@@ -2276,8 +2289,12 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     "fonts" ("serif", "sans", "calibri", "cambria") and slot -> hex overrides; colours stay theme slots, so the deck
     recolours in PowerPoint (Design > Variants) too.
     density: "present", "balanced" (default) or "read" (density.py): the type scale and how much text a slide keeps
-    on the page; what a mode cuts goes to the speaker notes. A slide's own "density" overrides the deck's."""
+    on the page; what a mode cuts goes to the speaker notes. A slide's own "density" overrides the deck's.
+    brand: {"firm", "footer", "logo"} from a company profile (engines/forge/brand.py render_kwargs): the firm label,
+    and the logo in the footer of every page and on the cover."""
     from .template import theme_spec
+    BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None,
+                  **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)
     spec = theme_spec(theme)
     FACE["head"], FACE["body"] = spec["fonts"]["major"], spec["fonts"]["minor"]
@@ -2296,6 +2313,40 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     finally:
         set_density(DENSITY["deck"])
     return res
+
+
+def _firm_label(s) -> str:
+    """The footer label: the company's footer line when it fits the label column, else its name, else the default."""
+    foot = BRAND.get("footer") or ""
+    if foot and len(foot) <= 30:
+        return foot
+    return s.get("firm") or BRAND.get("firm") or FIRM
+
+
+def _logo_size(path: str, h: float, max_w: float) -> tuple[float, float]:
+    from PIL import Image
+    with Image.open(path) as im:
+        w0, h0 = im.size
+    w = h * w0 / max(1, h0)
+    if w > max_w:
+        h, w = h * max_w / w, max_w
+    return w, h
+
+
+def _logo(sl, x_right: float, y: float, h: float, max_w: float, name: str, x_left: float | None = None) -> float:
+    """Place the brand logo (right-aligned at x_right, or left-aligned at x_left); returns its width (0 if none)."""
+    p = BRAND.get("logo")
+    if not p or not Path(p).exists():
+        return 0.0
+    try:
+        w, hh = _logo_size(p, h, max_w)
+    except Exception:                                      # an unreadable image never breaks the deck
+        return 0.0
+    x = x_left if x_left is not None else x_right - w
+    pic = sl.shapes.add_picture(str(p), Inches(x), Inches(y + (h - hh) / 2), Inches(w), Inches(hh))
+    pic.name = name
+    _alt(pic, f"{BRAND.get('firm') or 'Company'} logo")
+    return w
 
 
 _CYCLE = ["right", "left", "above", "below"]

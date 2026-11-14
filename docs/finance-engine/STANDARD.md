@@ -74,6 +74,7 @@ refuses its absence), **Gap** (not built).
 | D7 | IB page types: situation overview, company profile (strip), comps table, precedents table, football field, DCF output, sources & uses, accretion/dilution, ownership, share price performance | M&I; CFI; WSP | Built: football field (native floating bars with a price marker), comps, precedents, DCF bridge, stacked sensitivities, scenarios, weighting, statement summary; Gap: company profile, sources & uses, accretion/dilution, share price chart |
 | D8 | Same metric identical on every page; executive summary matches the body | WSO; Macabacus | Gap: deck-wide consistency check |
 | D9 | Deck numbers come from the workbook's named outputs, not re-typed | IB practice | Built (`finance_pages`: computed pages inserted untouched; W-facts cite sheet and cell) |
+| D10 | Decks in the client's own look: their colours, fonts, logo, name and slide master, learned from a few of their existing decks and editable; the page grammar still holds (readable contrast per colour role, grid, deck rules) | banks and firms ship on their own template | Built (`engines/forge/brand.py`, Settings > Company and brand; the active look is used unless the request names a theme or says "no branding") |
 
 ## 4. Research (research engine)
 
