@@ -913,8 +913,9 @@ def _waterfall_style(plot, vals, spans, dec, usfx):
         dl.has_text_frame = True
         dl.text_frame.text = txt
         dl.position = XL_LABEL_POSITION.CENTER
-        dl.font.size = Pt(T["label"])
-        dl.font.color.theme_color = TC.BACKGROUND_1
+        for f in (dl.font, dl.text_frame.paragraphs[0].runs[0].font):   # the rich text run carries its own font
+            f.size = Pt(T["label"])
+            f.color.theme_color = TC.TEXT_1 if colr == TC.ACCENT_2 else TC.BACKGROUND_1   # dark on the light highlight
 
 
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
@@ -992,10 +993,11 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         if kind in ("bar", "stacked_bar"):
             ca.reverse_order = True
         ca.tick_label_position = XL_TICK_LABEL_POSITION.LOW     # labels stay clear of negative bars
-        if kind in ("bar", "column", "stacked_bar", "stacked_column") and allv:
-            if min(allv) >= 0:                                 # the axis is hidden: bars must start at zero, or
+        ends = [e for sp in spans for e in sp] if kind == "waterfall" else allv
+        if kind in ("bar", "column", "stacked_bar", "stacked_column", "waterfall") and ends:
+            if min(ends) >= 0:                                 # the axis is hidden: bars must start at zero, or
                 va.minimum_scale = 0                           # auto-scaling exaggerates the differences
-            elif max(allv) <= 0:
+            elif max(ends) <= 0:
                 va.maximum_scale = 0
     except Exception:
         pass

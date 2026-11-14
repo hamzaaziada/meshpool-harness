@@ -26,7 +26,7 @@ from collections import Counter
 from pathlib import Path
 
 from .common import load_rules, soffice_convert, summarize
-from .common import SCALE as _SCALE, candidates as _candidates, numbers as _numbers  # noqa: F401  (one extractor)
+from .common import candidates as _candidates, numbers as _numbers  # one extractor (render records with it)
 from .common import failure as F
 from .ooxml_check import check as ooxml_check
 from .measure_pptx import measure, public
