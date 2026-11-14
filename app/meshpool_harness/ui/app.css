@@ -618,3 +618,6 @@ details .keyrow input{flex:1;min-width:0;padding:7px 9px;border:1px solid var(--
 .cnchips{display:flex;gap:6px;flex-wrap:wrap}
 .ownclient{display:flex;flex-direction:column;gap:4px;margin-top:8px}
 .ownclient .keyrow input{min-width:0}
+
+.ctx-src{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0}
+.ctx-steps small.muted{display:block;margin:4px 0}

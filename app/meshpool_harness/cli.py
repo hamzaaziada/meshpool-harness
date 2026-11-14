@@ -112,7 +112,7 @@ def _agent_parser():
                     "`meshpool -p \"...\"` for one answer.",
         epilog="other commands (meshpool <command> -h for options):\n"
                "  setup            the first-run walkthrough: key, folder, permissions, your skills\n"
-               "  import           bring your context from ChatGPT, Claude or Gemini\n"
+               "  import           bring your old chats and sessions (ChatGPT, Claude, Claude Code, Codex) and context\n"
                "  login            save your Meshpool API key\n"
                "  check            show settings and installed tools (--live sends one tiny model call)\n"
                "  connect          connect apps: Notion, Gmail, Slack, HubSpot... or any MCP server by URL\n"
@@ -193,6 +193,18 @@ def main(argv=None):
     if argv[0] == "import":
         from meshpool_harness.agent import onboard
         from meshpool_harness.agent.tui import Style, _enable_ansi
+        if len(argv) > 1:                         # meshpool import export.zip | claude-code | codex
+            from meshpool_harness import chat_import as CI
+            what = argv[1]
+            if what in ("claude-code", "codex"):
+                r = CI.import_local([what])
+                print(f"Imported {r['imported']} {what} sessions as threads ({r['skipped']} were already here).")
+                return 0
+            r = CI.import_export(os.path.expanduser(what))
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats as threads "
+                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+                  f"memory, {r['instructions']} instructions.")
+            return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
     if argv[0] == "login":
         from meshpool_harness.agent.tui import ask_key

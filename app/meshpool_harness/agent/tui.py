@@ -26,7 +26,7 @@ HELP = """Commands
   /connect [app]   connect an app (Notion, Gmail, Slack...) or an MCP server by URL; no app lists them
   /tokens          tokens used in this session
   /init            ask the agent to write MESHPOOL.md (project notes it reads every session)
-  /import          bring your context from ChatGPT, Claude or Gemini (instructions and memory)
+  /import          bring your old chats, Claude Code and Codex sessions, and context from ChatGPT or Claude
   /setup           change what Meshpool runs on (your key, another key, or a subscription)
   /exit            quit
 Tips

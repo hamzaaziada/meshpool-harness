@@ -472,6 +472,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import-context":
                 from meshpool_harness import importer as IM
                 return self._send(200, {"prompt": IM.context_prompt()})
+            if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
+                from meshpool_harness import chat_import as CI
+                return self._send(200, CI.scan_local())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -630,6 +633,47 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"skill": IM.import_instructions_as_skill(
                         b.get("name", ""), b["instructions"], b.get("description", ""))})
                 return self._send(200, IM.import_context_text(b.get("text", "")))
+            if u.path == "/api/import-file":          # a ChatGPT or Claude export, streamed to disk (they get large)
+                from meshpool_harness import chat_import as CI
+                import tempfile
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 8 * 1024 ** 3:
+                    raise ValueError("That file is larger than 8 GB.")
+                q = parse_qs(u.query)
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
+                    left = n
+                    while left > 0:
+                        chunk = self.rfile.read(min(left, 1 << 20))
+                        if not chunk:
+                            break
+                        tf.write(chunk)
+                        left -= len(chunk)
+                want_ctx = q.get("context", ["1"])[0] != "0"
+                try:
+                    r = CI.import_export(tf.name, chats=q.get("chats", ["1"])[0] != "0", context=False)
+                except Exception:
+                    os.unlink(tf.name)
+                    raise
+                if not want_ctx:
+                    os.unlink(tf.name)
+                    return self._send(200, r)
+                # The chats are in. Projects (as skills) and lasting facts (one model call) follow in the background
+                # and land in Skills and in Instructions and memory a little later.
+                from meshpool_harness import importer as IM
+
+                def learn(path=tf.name):
+                    try:
+                        IM.import_export(path)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    finally:
+                        os.unlink(path)
+                threading.Thread(target=learn, daemon=True).start()
+                return self._send(200, dict(r, context_pending=True))
+            if u.path == "/api/import-chats":
+                from meshpool_harness import chat_import as CI
+                b = self._json()
+                return self._send(200, dict(CI.import_local(b.get("sources") or None), found=CI.scan_local()))
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])
