@@ -67,6 +67,8 @@ Build history (the release is live: https://github.com/hamzaaziada/meshpool-harn
 | 4 | **succeeded**: v0.0.1 published with all four files (14:49 UTC, 14 Nov) | — |
 | 4 (on the owner's M4 Mac, macOS 15.5) | the app showed crossed out: the launcher was compiled for the build machine's newer macOS; Node 24 needs macOS 13.5 | launcher built with `-mmacosx-version-min=11.0`, Node 22 bundled, `packaging/mac/check_minos.py` stops a build whose launcher/Node/Python need more than macOS 11 (build 5) |
 | 6 | — | the crawl's fixes (commit `7b2c997`) |
+| 7 | the new strict check: numpy needed macOS 14, pypdfium2 5.x macOS 12, Playwright's Node 13.5 | macOS 11 wheels of the same versions (`packaging/mac/old_macos_wheels.py`), `pypdfium2==4.30.1` (`packaging/mac/constraints.txt`), Playwright runs on the app's Node 22 |
+| 8 | **succeeded** 15:39 UTC: every bundled file runs on macOS 11+; this is the live v0.0.1 | — |
 
 After run 4, `eb8b5c0` added `hdiutil` retries in `packaging/mac/repack.sh` (pushed with `[skip ci]`; it goes into the
 next build).
