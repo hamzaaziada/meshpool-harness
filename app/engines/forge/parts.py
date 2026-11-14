@@ -301,7 +301,7 @@ def stats_plan(items, w, boxed, h=None) -> dict:
         rows = -(-k // cols)
         tw = (w - gap * (cols - 1)) / cols
         for style in ("stack", "row") if tw >= 4.0 else ("stack",):
-            vw_max = (tw - 2 * pad) * (0.97 if style == "stack" else 0.42)
+            vw_max = (tw - 2 * pad) * (0.85 if style == "stack" else 0.38)   # margin: the house face may run wider
             vsize = next((z for z in STAT_VALUE_SIZES if all(_head_w(it.get("value", ""), z) <= vw_max for it in items)),
                          None)
             if vsize is None:
@@ -832,7 +832,7 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18 + bump, "italic": True}]
         if part.get("attribution"):
             bl.append({"text": _txt(part["attribution"]), "size": R.bump(12), "space_before": 10})
-        need = R._need(bl, iw - 0.6) + 0.2
+        need = R._need(bl, iw - 0.62) * 1.12 + 0.3            # the quote mark's column and its top offset
         return oh + need, oh + need, oh + need * 1.2
     return oh + 1.0, oh + 1.0, 99.0
 

@@ -2705,7 +2705,7 @@ def a_benchmark(ctx, s, sl, n):
     # row, so bars stay bars), and the panel follows the bars at one gap
     need = (_panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.45 * (bottom_all - BODY_Y), lead, bl, dry=True, grow=False)
             if (lead or bl) else 0)
-    want_h = min(rows_n * 0.62, max(rows_n * 0.36, bottom_all - BODY_Y - head_h - (need + 0.25 if need else 0)))
+    want_h = min(rows_n * 0.42, max(rows_n * 0.36, bottom_all - BODY_Y - head_h - (need + 0.25 if need else 0)))
     top = BODY_Y + head_h
     gap = 0.3
     pw = (RIGHT - LEFT - BENCH_LABEL_W - gap * (len(panels) - 1)) / len(panels)
