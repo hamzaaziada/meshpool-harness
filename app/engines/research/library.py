@@ -48,7 +48,7 @@ TIER_RULES: list[tuple[int, str, str]] = [  # (tier, kind, host regex), first ma
         "europa.eu", "federalreserve.gov", "bankofengland.co.uk", "bis.org", "imf.org", "worldbank.org", "oecd.org",
         "un.org", "iea.org", "fred.stlouisfed.org", "stlouisfed.org", "ons.gov.uk", "ecb.europa.eu")),
     (1, "issuer release", _hosts("prnewswire.com", "businesswire.com", "globenewswire.com") +
-        r"|^(ir|investors?|investor-relations|newsroom)\."),
+        r"|^(ir|investors?|investor-relations|newsroom)\.[^.]+\."),     # ir.<company>.<tld>, not investors.com
     (2, "financial press / wire", _hosts(
         "reuters.com", "bloomberg.com", "ft.com", "wsj.com", "economist.com", "nytimes.com", "apnews.com",
         "cnbc.com", "barrons.com", "nikkei.com", "asia.nikkei.com", "handelsblatt.com", "lesechos.fr",
@@ -75,6 +75,15 @@ TIER_RULES: list[tuple[int, str, str]] = [  # (tier, kind, host regex), first ma
 ]
 ISSUER_PATH = re.compile(r"/(investor|investors|investor-relations|ir|annualreport|annual-report|earnings)(/|$|[-_])",
                          re.I)
+# Market-data sites, aggregators and blogs whose URLs carry /earnings-..., /investors/... pages about OTHER companies:
+# the issuer-path rule above only counts on a company's own domain.
+NOT_ISSUER = _hosts(
+    "nasdaq.com", "nyse.com", "marketbeat.com", "investing.com", "yahoo.com", "zacks.com", "marketscreener.com",
+    "stocktitan.net", "streetinsider.com", "gurufocus.com", "macrotrends.net", "stockanalysis.com", "finviz.com",
+    "simplywall.st", "earningswhispers.com", "wallstreethorizon.com", "thestreet.com", "insidermonkey.com",
+    "advfn.com", "investorshub.com", "msn.com", "google.com", "tradingview.com", "alphaspread.com",
+    "companiesmarketcap.com", "investors.com", "kiplinger.com", "quiverquant.com", "fintel.io", "barchart.com",
+    "cnn.com", "businessinsider.com", "linkedin.com", "x.com", "twitter.com", "youtube.com", "facebook.com")
 JUNK = re.compile(r"request (has been|was) blocked|access denied|are you a robot|verify you are (a )?human|"
                   r"enable javascript|captcha|sign in or create|403 forbidden|404 not found|page not found|"
                   r"subscribe to (continue|read)|this content is for subscribers", re.I)
@@ -90,7 +99,7 @@ def classify(url: str | None, publisher: str | None = None) -> tuple[int, str]:
     for tier, kind, rx in TIER_RULES:
         if re.search(rx, host):
             return tier, kind
-    if ISSUER_PATH.search(p.path):                    # a company's own investor-relations pages
+    if ISSUER_PATH.search(p.path) and not re.search(NOT_ISSUER, host):   # a company's own investor-relations pages
         return 1, "issuer release"
     return 3, "other"
 

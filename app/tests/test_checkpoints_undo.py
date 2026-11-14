@@ -175,3 +175,14 @@ def test_files_named_like_build_folders_are_tracked(tmp_path):
     cp.end_turn()
     r = cp.revert_to_before(1)
     assert (root / "build").read_text() == "#!/bin/sh\nmake\n" and r["restored"] == ["build"]
+
+
+def test_undo_of_a_case_only_rename_on_a_case_insensitive_disk(tmp_path, monkeypatch):
+    root, cp = _cp(tmp_path)
+    monkeypatch.setattr(cp, "_case_insensitive", lambda: True)
+    cp.begin_turn("agent renames")
+    (root / "calc.py").rename(root / "Calc.py")
+    cp.end_turn()
+    r = cp.revert_to_before(1)            # removal first, then the write: the restored file is never deleted
+    assert (root / "calc.py").read_text() == "v1\n" and not (root / "Calc.py").exists()
+    assert r["restored"] == ["calc.py"] and r["deleted"] == ["Calc.py"]

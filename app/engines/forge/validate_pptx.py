@@ -914,9 +914,13 @@ def _chart_refs(n: int, c: dict, failures: list):
             failures.append(F("P2", "series_ref", f"Slide {n}, {c['shape']}: series ref {se['ref']} does not resolve.",
                               slide=n, shape=c["shape"], fix_scope="renderer"))
             continue
-        got = [x.value for x in cells]
-        if len(got) != len(se["values"]) or any(
-                not isinstance(g, (int, float)) or abs(g - v) > 1e-9 * max(1, abs(v)) for g, v in zip(got, se["values"])):
+        got = [None if x.value in (None, "") else x.value for x in cells]       # a blank cell is a missing point
+        pts = se.get("points", dict(enumerate(se["values"])))
+        n_ = se.get("count") if se.get("count") is not None else len(got)
+        if n_ != len(got) or set(pts) - set(range(len(got))) or any(
+                (g is None) != (pts.get(i) is None) or g is not None and (
+                    not isinstance(g, (int, float)) or abs(g - pts[i]) > 1e-9 * max(1, abs(pts[i])))
+                for i, g in enumerate(got)):
             failures.append(F("P2", "series_cache_mismatch", f"Slide {n}, {c['shape']}: series '{se['name']}' cached "
                               f"values differ from the embedded cells {se['ref']}.", slide=n, shape=c["shape"],
                               fix_scope="renderer"))
