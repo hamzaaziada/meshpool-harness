@@ -150,7 +150,10 @@ def prepare_opencode(model: str | None = None) -> dict:
         base, key_env, bare = PV.key_base(), "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
     home = opencode_home()
     home.mkdir(parents=True, exist_ok=True)
+    # "permission": OpenCode allows everything by default, so it never asked and Supervised and Plan meant nothing.
+    # Asking hands every edit, command and fetch to Meshpool, which applies the user's mode (and blocks in Plan).
     cfg = {"$schema": "https://opencode.ai/config.json", "autoupdate": False, "share": "disabled",
+           "permission": {"edit": "ask", "bash": "ask", "webfetch": "ask"},
            "provider": {"meshpool": {"npm": "@ai-sdk/openai-compatible", "name": "Meshpool",
                                      "options": {"baseURL": base, "apiKey": "{env:" + key_env + "}"},
                                      "models": {bare: {"name": bare}}}},

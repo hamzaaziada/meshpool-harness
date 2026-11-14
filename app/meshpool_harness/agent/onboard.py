@@ -168,7 +168,8 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
             continue
         os.environ["MESHPOOL_API_KEY"] = key
         _p(st.dim("    Checking your key..."))
-        r = ping(_check_model(custom))
+        # the typed endpoint and key, not the saved ones (those win over the environment and went to the new host)
+        r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key)
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"])

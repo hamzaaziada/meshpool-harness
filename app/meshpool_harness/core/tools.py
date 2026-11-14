@@ -193,6 +193,9 @@ class Workspace:
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
+        if write and ".git" in q.relative_to(self.root).parts:
+            # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
+            raise ToolError("agents cannot change files inside .git; use git commands instead")
         return q
 
     @staticmethod

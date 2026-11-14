@@ -905,8 +905,33 @@ class Agent:
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
 
     # ---------- tools ------------------------------------------------------------------------------------------
+    def _outside(self, name: str, args: dict) -> str:
+        """Why a read-only call still needs a yes in Supervised and Auto-accept edits: it reads outside the project
+        (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
+        if name in ("read_file", "grep"):
+            p = os.path.expanduser(str(args.get("path") or "."))
+        elif name == "glob":
+            pat = str(args.get("pattern") or "").replace("\\", "/")
+            return ("" if not (pat.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", pat) or ".." in pat.split("/"))
+                    else f"List files outside the project ({pat[:80]})?")
+        elif name in ("fetch_url", "mcp__meshpool_web__web_fetch"):
+            from urllib.parse import urlparse
+            u = urlparse(str(args.get("url") or ""))
+            long_part = max([len(x) for x in u.path.split("/")] + [0])
+            return (f"Send this to {u.hostname or 'a website'}? The address carries {len(u.query) + long_part} "
+                    "characters of data." if len(u.query) > 200 or long_part > 120 else "")
+        else:
+            return ""
+        try:
+            q = Path(p).resolve() if os.path.isabs(p) else (self.ws.root / p).resolve()
+        except (OSError, ValueError):
+            return f"Read {p[:80]} (outside the project)?"
+        ok = [self.ws.root, self.dir.resolve(), C.runs_dir().resolve()]   # the project, this chat's tool output
+        return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
+
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
-        if self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP:
+        risky = self._outside(name, args) if self.mode != "auto" else ""
+        if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
@@ -914,11 +939,15 @@ class Agent:
                 self._diff(name, args) == "(no change)":
             return True, ""                    # nothing would change: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
+        if risky:
+            group = "outside-" + name
         if group in self.always:
             return True, ""
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
-        if name == "bash":
+        if risky:
+            kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+        elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
         elif name == "bash_many":
             cmds = [str(c) for c in args.get("commands") or []]

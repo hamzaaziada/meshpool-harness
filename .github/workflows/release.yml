@@ -248,10 +248,12 @@ jobs:
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           TAG="v$VER"
-          cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe > SHA256SUMS.txt && cd ..
+          # the in-app code update installs this archive, checked against SHA256SUMS.txt
+          git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
+          cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz > SHA256SUMS.txt && cd ..
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
           fi
           gh release edit "$TAG" --notes-file packaging/release-notes.md
-          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/Meshpool-src.tar.gz dist/SHA256SUMS.txt --clobber
           gh release edit "$TAG" --draft=false --latest

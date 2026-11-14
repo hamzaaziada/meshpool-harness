@@ -687,16 +687,16 @@ async function sendNow(interrupt) {
       openThread(v.id, true);
       if (S.appMode === "cowork" && !S.panel && !store("cw_panel_closed") && innerWidth >= 1400) togglePanel("progress", true);
     }
+    const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
     const files = atts.filter(a => !a.image);
     if (files.length) {
       const saved = [];
-      for (const f of files) { const r = await post("/api/attach", {root: curRoot(), name: f.name, data: f.data}); saved.push(r.path); }
+      for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
       text += `\n\nAttached files (in the project folder): ${saved.join(", ")}`;
     }
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
-    const cur = S.cur;
-    if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g); }
+    if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
@@ -778,8 +778,8 @@ async function goalCmd(arg) {
   S.pendingGoal = arg;
   const inp = $("#input"); inp.value = arg; sendNow(false);     // sends it as the first message of the goal
 }
-async function setGoal(text) {
-  const cur = S.cur; if (!cur) return;
+async function setGoal(text, cur = S.cur) {
+  if (!cur) return;
   try { const v = await post(`/api/agent/${cur.id}/goal`, {text, since: 1e9}); if (cur.view) cur.view.goal = v.goal; renderBar(); }
   catch (e) { toast(e.message, 4000); }
 }
@@ -2038,7 +2038,7 @@ async function contextPanel(box) {
   const srcs = Object.entries(local).filter(([, v]) => v.found);
   const n = x => Number(x || 0).toLocaleString();
   box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
-    <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Nothing leaves this computer.</p>
+    <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Your files stay on this computer; to write those, the titles and first messages of up to 80 chats are sent once to your model.</p>
     <ol class="ctx-steps">
       <li><b>Your ChatGPT or Claude chats</b>
         <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>

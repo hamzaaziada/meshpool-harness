@@ -64,6 +64,17 @@ def get_settings() -> dict:
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
+def _key_follows_host(vals: dict, typed_key: str = ""):
+    """A saved key belongs to its endpoint: moving to another host needs that host's key, or the saved one is sent
+    to the new host."""
+    from meshpool_harness import providers as PV
+    new = vals.get("MESHPOOL_BASE_URL")
+    if new and PV.host(new) and PV.host(new) != PV.host(PV.key_base()) and PV.key() \
+            and not (vals.get("MESHPOOL_API_KEY") or typed_key):
+        raise ValueError(f"Enter the API key for {PV.host(new)} too: your saved key is for {PV.host(PV.key_base())} "
+                         "and is not sent anywhere else.")
+
+
 def save_settings(body: dict) -> dict:
     allowed = {f[0] for f in C.FIELDS}
     vals = {}
@@ -73,9 +84,11 @@ def save_settings(body: dict) -> dict:
         v = re.sub(r"[\r\n]", "", str(v)).strip()
         if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
             v = re.sub(r"^(?:bearer\s+)", "", v.strip("'\" "), flags=re.I)
+            v = re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", v)   # a pasted zero-width space broke every call
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
+    _key_follows_host(vals)
     if vals.get("GITHUB_TOKEN"):
         try:
             from meshpool_harness.ui import agent_api as _A
@@ -134,6 +147,13 @@ def test_connection(values: dict | None = None) -> dict:
     from meshpool_harness import providers as PV
     from meshpool_harness.cli import ping
     v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
+    if v.get("MESHPOOL_API_KEY"):
+        v["MESHPOOL_API_KEY"] = re.sub(r"^(?:bearer\s+)", "", re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "",
+                                                                     v["MESHPOOL_API_KEY"]), flags=re.I)
+    try:
+        _key_follows_host(v)
+    except ValueError as e:
+        return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
     key = v.get("MESHPOOL_API_KEY") or PV.key()
     if not key:
         return {"ok": False, "detail": "No API key saved yet."}
@@ -579,6 +599,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PL.api_action(self._json()))
             if u.path == "/api/file":
                 b = self._json()
+                A.mark_shared(b.get("root", ""))            # a turn running there can no longer be undone safely
                 return self._send(200, W.write_file(b.get("root", ""), b.get("path", ""), b.get("text", "")))
             if u.path == "/api/git":
                 b = self._json()

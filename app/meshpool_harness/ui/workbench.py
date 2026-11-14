@@ -42,12 +42,26 @@ def projects() -> list[dict]:
     return out
 
 
+_PROJ_LOCK = threading.RLock()                 # add, remove and rename read, change and write the list
+
+
+def _projects_locked(fn):
+    def run(*a, **kw):
+        with _PROJ_LOCK:
+            return fn(*a, **kw)
+    run.__name__, run.__doc__ = fn.__name__, fn.__doc__
+    return run
+
+
 def _save_projects(rows: list[dict]):
-    _projects_file().parent.mkdir(parents=True, exist_ok=True)
-    _projects_file().write_text(json.dumps([{k: r[k] for k in ("path", "name", "added")} for r in rows], indent=1),
-                                encoding="utf-8")
+    f = _projects_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f".{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps([{k: r[k] for k in ("path", "name", "added")} for r in rows], indent=1), encoding="utf-8")
+    C.replace_file(tmp, f)                       # never a half-written file: one was left as invalid JSON
 
 
+@_projects_locked
 def add_project(path: str, name: str = "") -> dict:
     p = Path(path.strip().strip('"')).expanduser()
     if not p.is_dir():
@@ -63,10 +77,12 @@ def add_project(path: str, name: str = "") -> dict:
     return r
 
 
+@_projects_locked
 def remove_project(path: str):
     _save_projects([r for r in projects() if r["path"] != path])
 
 
+@_projects_locked
 def rename_project(path: str, name: str):
     rows = projects()
     for r in rows:
@@ -276,10 +292,11 @@ def attach(root: str, name: str, data: bytes) -> dict:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     p = r / name
     stem, suf, i = p.stem, p.suffix, 2
-    while p.exists():
+    while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
         p = r / f"{stem} ({i}){suf}"
         i += 1
-    p.write_bytes(data)
+    with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
+        f.write(data)
     return {"path": p.name}
 
 
@@ -304,7 +321,10 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     g = git_exe()
     if not g:
         raise ValueError("Git is not installed." + (" On a Mac, run: xcode-select --install" if sys.platform == "darwin" else ""))
-    r = subprocess.run([g, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    # A project's own .git/config must not run programs when Meshpool merely looks at it (status on opening a
+    # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
+    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "--no-pager"]
+    r = subprocess.run([g, *safe, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=timeout, creationflags=NO_WINDOW, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
     if check and r.returncode != 0:
         raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")

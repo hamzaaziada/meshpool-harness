@@ -264,6 +264,7 @@ class PiAgent:
         from meshpool_harness import providers as PV
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
                     "MESHPOOL_PI_SAFE": json.dumps(sorted(READ_ONLY)),     # pi_gate.js: tools that never ask
+                    "MESHPOOL_PI_ROOT": str(self.root),       # ... unless they read outside the project
                     "MESHPOOL_API_KEY": PV.key()})
         if PV.ready("chatgpt"):
             from meshpool_harness.core import chatgpt_relay
@@ -428,7 +429,21 @@ class PiAgent:
         name, inp, tid = d.get("name") or m["title"].split(":", 1)[1], d.get("input") or {}, d.get("id")
         kind = "edit" if name in ("write", "edit") else "bash" if name in ("bash", "powershell") else "mcp"
         if name in READ_ONLY:
-            return True
+            out = self._outside(inp) if name in ("read", "grep", "find", "ls") else ""
+            if not out or self.mode == "auto" or "read" in self._always:
+                return True
+            if not self.approve or self._stop:
+                self._denied.add(tid)
+                return False
+            choice, note = self.approve("read", f"Read {out[:120]} (outside the project)?",
+                                        json.dumps(inp, indent=1, ensure_ascii=False)[:3000])
+            if choice == "always":
+                self._always.add("read")
+            if choice in ("yes", "always"):
+                return True
+            self._denied.add(tid)
+            self._tell(note)
+            return False
         if self.plan:
             # Plan mode only investigates: no edits, no commands, no tools that could change something.
             self._denied.add(tid)
@@ -448,13 +463,31 @@ class PiAgent:
             title = f"Use {name.split('__', 2)[-1].replace('_', ' ')}" + \
                 (f" ({name.split('__')[1]})" if name.startswith("mcp__") else "") + "?"
             detail = json.dumps(inp, indent=1, ensure_ascii=False)[:3000]
-        choice, _note = self.approve(kind, title, detail)
+        choice, note = self.approve(kind, title, detail)
         if choice == "always":
             self._always.add(kind)
         if choice in ("yes", "always"):
             return True
         self._denied.add(tid)
+        self._tell(note)
         return False
+
+    def _outside(self, inp: dict) -> str:
+        p = os.path.expanduser(str(inp.get("path") or inp.get("directory") or "."))
+        try:
+            q = Path(p).resolve() if os.path.isabs(p) else (Path(self.root) / p).resolve()
+            root = Path(self.root).resolve()
+        except (OSError, ValueError):
+            return p
+        return "" if q == root or root in q.parents else str(q)
+
+    def _tell(self, note: str):
+        """A note left with a denial reaches Pi as a message before its next step (the gate only says no)."""
+        if note and note.strip():
+            try:
+                self.steer(f"I did not allow that. {note.strip()}")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _flush_text(self, has_tools=False):
         if self._text:
