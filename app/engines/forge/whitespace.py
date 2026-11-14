@@ -51,3 +51,40 @@ def where(e: dict, W: float, H: float) -> str:
     v = "upper" if cy < H * 0.45 else ("lower" if cy > H * 0.6 else "middle")
     hz = "left" if cx < W * 0.4 else ("right" if cx > W * 0.6 else "centre")
     return f"{v} {hz}" if not (v == "middle" and hz == "centre") else "centre"
+
+
+def bottom_blank(page, width_in: float, height_in: float, top_in: float, rule_in: float, notes: bool = False,
+                 left_in: float = 0.6, right_in: float | None = None, dpi: int = 50, light: int = 250) -> dict:
+    """How far above its foot a slide's content ends: the blank band under the lowest content row of the body, as a
+    share of the body height. The body runs from `top_in` to the source rule (`rule_in`), or to the first footnote
+    line when the slide has footnotes; light grey panels count as content here (a panel that fits its text is not
+    empty space), only white is blank. `right_in` limits the columns read (an argument half-panel that runs the full
+    height is left out)."""
+    img = np.asarray(page.render(scale=dpi / 72).to_pil().convert("L"), dtype=int)
+    H, W = img.shape
+    px = lambda inch: max(0, min(H - 1, int(inch * dpi)))  # noqa: E731
+    x0 = int(left_in / width_in * W)
+    x1 = int((right_in if right_in else width_in - left_in) / width_in * W)
+    band = img[:, x0:int((width_in - left_in) / width_in * W)] < 235
+    dark = band.any(axis=1)
+    solid = band.mean(axis=1) > 0.5                       # a filled band, not a line of footnote text
+    content = (img[:, x0:x1] < light).any(axis=1)
+    limit = rule_in - 0.1
+    if notes:                                             # walk up through the footnote lines (8 pt, small gaps)
+        r = px(rule_in - 0.06)
+        while r > px(top_in) and not dark[r]:
+            r -= 1
+        gap = 0
+        while r > px(top_in) and r > px(rule_in - 0.6):  # three footnote lines at most
+            if solid[r]:
+                break
+            gap = 0 if dark[r] else gap + 1
+            if gap > 0.07 * dpi:
+                break
+            r -= 1
+        limit = (r + gap) / dpi
+    rows = np.where(content[px(top_in):px(limit)])[0]
+    last = (rows.max() + px(top_in)) / dpi if len(rows) else top_in
+    body = max(0.01, limit - top_in)
+    return {"share": max(0.0, (limit - last) / body), "blank_in": max(0.0, limit - last), "content_to": last,
+            "body_to": limit}

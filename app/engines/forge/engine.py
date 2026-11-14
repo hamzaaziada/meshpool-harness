@@ -222,5 +222,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
                    + ("ready to send." if rv.get("verdict") == "ship" else
                       f"slides {', '.join(map(str, rv.get('fix') or []))} still need work"
                       + (f" (most common: {rv['top'][0]['example']})" if rv.get("top") else "") + "."))
+    if rv.get("note"):                                         # the review did not run (or only in part): say why
+        answer += f" ({rv['note']}.)" if rv.get("score") is not None else f" {rv['note'][0].upper()}{rv['note'][1:]}."
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],
             "turns": res.get("calls"), "reason": None}

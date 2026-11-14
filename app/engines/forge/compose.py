@@ -173,8 +173,9 @@ def argument_layout(ctx, s, sl, n):
         used = _columns(ctx, s, sl, n, items, mode, y, avail)
     else:
         used = _rows(ctx, s, sl, n, items, y, avail)
-    if band_h:
-        _band(ctx, s, sl, n, min(y + used + 0.3, bottom - band_h), co)
+    if band_h:                                       # a thin page: the band keeps a larger gap (capped), not the foot
+        gap = 0.3 + max(0.0, min(R.RHYTHM_MAX - 0.3, avail - used))
+        _band(ctx, s, sl, n, min(y + used + gap, bottom - band_h), co)
 
 
 def _spans(k):

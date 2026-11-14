@@ -27,6 +27,12 @@ pptx:
     max_empty_share_by_density: # a presented slide may keep more air around one exhibit (balanced and read use
                                 # max_empty_share); slabs and stretched rows
       present: 0.30             # stay forbidden in every mode
+    max_bottom_share: 0.15      # thin: the content ends this share of the body above its foot (forge slides only;
+    max_bottom_share_by_density:  # the renderer first grows exhibits, then type, then the rhythm, so what is left is
+      present: 0.25             # missing substance, sent back to the writer with the facts the deck has not used)
+    bottom_exempt: [cover, section_divider, agenda, appendix_divider, end, closing, next_steps]
+    body_top_in: 1.55           # forge body band for the thin check: under the title block, down to the source rule
+    foot_rule_in: 7.02
   bookends:                     # P16: opening/closing slides the brief asks for
     opening_archetypes: [cover]
     closing_archetypes: [closing, end]

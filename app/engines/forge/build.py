@@ -41,7 +41,9 @@ renderer applies a strict consulting design; you only fill fields.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
 - executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
   answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
-  1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, what the reader must decide.
+  1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
+  today, written "Decision today: <approve / choose / fund what, by when>"; it must NOT restate the title (the title
+  is the answer, the decision line is the ask) - leave it out when there is no decision to take.
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
@@ -177,6 +179,29 @@ def add_agenda(plan: list) -> list:
     if len(plan) > at and plan[at].get("archetype") == "executive_summary":
         at += 1                                  # answer first, then the map of the deck
     return plan[:at] + [{"node": "0.1", "section": "", "title": "Agenda", "archetype": "agenda", "evidence": []}] + plan[at:]
+
+
+KEEP_IN_COUNT = ("cover", "executive_summary", "closing", "next_steps", "end")
+
+
+def fit_count(plan: list, n: int) -> tuple[list, list]:
+    """Trim a storyline to n slides: section dividers go first (they carry no evidence), then the content slides with
+    the least evidence (the later one on a tie); the cover, the executive summary and the closing slide stay.
+    Returns (plan, titles cut)."""
+    plan = list(plan)
+    cut = []
+    while len(plan) > max(1, n):
+        cands = [i for i, x in enumerate(plan) if x.get("archetype") not in KEEP_IN_COUNT]
+        if not cands:
+            break
+        div = [i for i in cands if x_arch(plan[i]) == "section_divider"]
+        i = div[-1] if div else min(cands, key=lambda k: (len(plan[k].get("evidence") or []), -k))
+        cut.append(plan.pop(i).get("title") or "")
+    return plan, cut
+
+
+def x_arch(x) -> str:
+    return (x or {}).get("archetype") or ""
 
 
 def fill_agenda(slides: list, plan: list) -> list:
@@ -678,6 +703,86 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
     return out
 
 
+def _why_not_run(rv: dict) -> str:
+    """Why a partner review did not run, in plain words (the gateway refusing the key, a render failure, ...)."""
+    errs = " ".join(str(e) for e in (rv or {}).get("errors") or [])
+    if re.search(r"\b401\b|invalid or missing api key|unauthori[sz]ed", errs, re.I):
+        return "gateway refused the key"
+    if re.search(r"\b429\b|rate limit", errs, re.I):
+        return "gateway rate limit"
+    if errs.startswith("render") or "no slides rendered" in errs:
+        return "the deck could not be rendered for review"
+    return (errs[:120] or "no reviewer response")
+
+
+def review_verdict(reviews: list) -> dict | None:
+    """The deck's partner-review verdict for the answer and qa.json: the final review's, or, when the final review
+    did not run (every batch refused, say), the first review's, with a plain note that the final one did not run and
+    why. A review that never ran at all says so too: the score never disappears silently."""
+    if not reviews:
+        return None
+    from engines.forge import review as RV
+    last = reviews[-1]
+    v = RV.deck_verdict(last)
+    if v.get("status") != "not_run":
+        if last.get("status") == "partial" and last.get("not_run"):
+            v["note"] = (f"partner review partial: slides {', '.join(map(str, last['not_run']))} not reviewed "
+                         f"({_why_not_run(last)})")
+        return v
+    why = _why_not_run(last)
+    earlier = next((r for r in reversed(reviews[:-1]) if RV.deck_verdict(r).get("status") != "not_run"), None)
+    if earlier is None:
+        return dict(v, note=f"partner review not run: {why}")
+    v = RV.deck_verdict(earlier)
+    v["final_status"] = "not_run"
+    v["note"] = (f"final partner review not run: {why}; the score is the first review's, before the repairs it "
+                 "asked for")
+    return v
+
+
+def used_fact_ids(slides) -> set:
+    """Fact ids the deck cites anywhere: every prov and title_prov list, and the facts each calc is computed from."""
+    used: set = set()
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k in ("prov", "title_prov") and isinstance(x, list):
+                    used.update(str(i) for i in x if i)
+                elif k == "calcs" and isinstance(x, list):
+                    for c in x:
+                        if isinstance(c, dict):
+                            used.update(str(i) for i in c.get("from") or [] if i)
+                            if c.get("id"):
+                                used.add(str(c["id"]))
+                else:
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(slides)
+    return used
+
+
+THIN_TAGS = ("[P20]", "[fill]", "[thin]")
+
+
+def substance_hint(slides, facts, limit: int = 14) -> str:
+    """For a thin slide: the facts the deck has NOT used yet, numeric ones first, and what to build from them."""
+    used = used_fact_ids(slides)
+    left = [f for f in facts if f.get("id") and f["id"] not in used]
+    if not left:
+        return ("Every fact is already used in the deck: make the slide denser with what it has (a stats row of its "
+                "own numbers, the comparison or the implication as a callout), or merge it with its neighbour.")
+    num = [f for f in left if re.search(r"\d", f.get("text", ""))]
+    pick = (num + [f for f in left if f not in num])[:limit]
+    return ("The slide is thin: the page ends well above its foot. Add ONE real part built from facts the deck has "
+            "NOT used yet (cite them in prov), never filler: a chart when 3+ of them are numbers in one unit, a stats "
+            "row (2-4 figures with labels) for unrelated headline numbers, or an implication callout that says what "
+            "they mean for the decision. Unused facts:\n" + "\n".join(f"  {f['id']}: {f['text']}" for f in pick)
+            + (f"\n  (+{len(left) - len(pick)} more unused)" if len(left) > len(pick) else ""))
+
+
 def _review_on(client, rules) -> bool:
     """The partner review runs on live builds (it needs a vision model): off with MH_REVIEW=0 or rules review.enabled
     false, and for stub clients in tests."""
@@ -768,6 +873,12 @@ supports it. Choose varied archetypes that prove each title.
         # The model often plans more than asked when model pages exist, and the extra slides restate (or worse,
         # re-estimate) those pages' numbers. Keep the opening slides and the closing one, at the asked length.
         plan = plan[:narrative_n - 1] + plan[-1:]
+    # The brief's slide count is a hard limit (P16): the storyline model often plans one or two slides more than
+    # asked, and the bookends add one; the agenda and the executive summary fit inside the count, never on top.
+    plan, cut = fit_count(plan, narrative_n)
+    if cut:
+        story["cut_to_fit_count"] = cut
+        (out / "storyline.json").write_text(json.dumps(story, indent=1))
     if agenda:
         plan = add_agenda(plan)
     nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
@@ -858,6 +969,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             rel = [f for f in facts if f["id"] in ev] or facts
             if any(m.startswith(("[P20]", "[fill]", "[schema]", "[review]")) for m in msgs):
                 rel = facts                                  # a thin slide needs the whole evidence base to fill
+            if any(m.startswith(THIN_TAGS) for m in msgs):   # ... and to know which of it is still unused
+                msgs = list(msgs) + [substance_hint(slides, facts)]
             try:
                 return n, _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
@@ -939,10 +1052,10 @@ choice or the number of items; never layout. Keep node and keep the point of the
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
     (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))
-    verdict = None
-    if reviews:
-        from engines.forge import review as RV
-        verdict = RV.deck_verdict(reviews[-1])
+    verdict = review_verdict(reviews)
+    if verdict is not None:                                  # the verdict travels with the QA record too
+        qa = json.loads((out / "qa.json").read_text())
+        (out / "qa.json").write_text(json.dumps(dict(qa, review=verdict), indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}, "review": verdict}
 
