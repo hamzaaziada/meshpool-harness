@@ -1461,7 +1461,7 @@ async function renderSection(sec) {
       <label class="field"><span>Default model for new threads</span><select id="sModel"></select><small>Each thread can use its own model, from any provider below, in the model picker in the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
       <h3 style="font-size:15px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run. Connect as many as you like; each one's models show in the model picker. Claude and Google sign-ins run only in Claude Code and Gemini CLI, as Anthropic's and Google's terms require.</p>
-      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool Code, Work and Codex.", "signin"], ["claude", "Claude subscription", "Your Claude plan. Runs in Claude Code.", "signin"], ["google", "Gemini (Google sign-in)", "Your Google AI plan. Runs in Gemini CLI.", "signin"], ["ANTHROPIC_API_KEY", "Anthropic API key", "Claude models for every agent except Codex and Gemini CLI.", "key"], ["GEMINI_API_KEY", "Gemini API key", "Gemini models for every agent except Codex and Claude Code. Free at aistudio.google.com.", "key"]].map(([id, name, desc, kind]) => {
+      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for every agent except Claude Code and Gemini CLI.", "signin"], ["claude", "Claude subscription", "Your Claude plan. Runs in Claude Code.", "signin"], ["google", "Gemini (Google sign-in)", "Your Google AI plan. Runs in Gemini CLI.", "signin"], ["ANTHROPIC_API_KEY", "Anthropic API key", "Claude models for every agent except Codex and Gemini CLI.", "key"], ["GEMINI_API_KEY", "Gemini API key", "Gemini models for every agent except Codex and Claude Code. Free at aistudio.google.com.", "key"]].map(([id, name, desc, kind]) => {
         if (kind === "signin") return `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`;
         const f = (S.settings.fields || []).find(x => x.key === id) || {};
         return `<li><span class="tg"><b>${name}</b><small>${desc}</small><span class="keyrow" style="margin-top:6px"><input data-pkey="${id}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) + ". Paste a new key to replace it." : "Paste the key"}"><button class="btn" data-pkeysave="${id}" type="button">Save</button></span></span>${f.set ? `<span class="badge added">Saved</span>` : ""}</li>`;
@@ -1825,7 +1825,7 @@ const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 
 // Providers: what the models run on. Agents (harnesses) are picked separately; the default agent follows the provider.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
   ["custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool Code, Work and Codex. No API key needed."],
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."],
   ["claude", "Claude subscription, runs Claude Code", "Your Claude Pro or Max plan. Anthropic allows it for Claude Code only."]];
 const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}, claude: {name: "Claude", harness: "claude-code"}};
 function showOnboarding() {
@@ -1851,7 +1851,7 @@ function showOnboarding() {
   const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
-    const what = prov === "claude" ? " It runs Claude Code, Anthropic's own agent: Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or ChatGPT." : " Meshpool Code, Meshpool Work and Codex all run on it.";
+    const what = prov === "claude" ? " It runs Claude Code, Anthropic's own agent: Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or ChatGPT." : " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
     $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;

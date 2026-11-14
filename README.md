@@ -45,7 +45,7 @@ There are three ways to run Meshpool.
 The message box has two choices. The **agent** pill picks who does the work (Meshpool Code, Meshpool Work, Pi, Hermes, Codex, Claude Code, Gemini CLI, or Meshpool Auto). The **model** pill picks where inference runs: a tab per provider, then the model. See [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 - **Meshpool**, or any OpenAI-compatible endpoint, with your API key.
-- **ChatGPT:** your ChatGPT Plus, Pro or Business plan, for Meshpool Code, Meshpool Work and Codex. No API key needed.
+- **ChatGPT:** your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed.
 - **Claude:** an Anthropic API key for any agent, or your Claude Pro or Max plan in Claude Code.
 - **Gemini:** a Gemini API key for any agent, or your Google sign-in in Gemini CLI.
 
@@ -66,7 +66,7 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
   - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
 - **Harnesses (the agent behind a thread), switchable per thread:**
   - **Meshpool Auto** picks the best harness for each task, based on benchmark results. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-  - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key, another API key, an Anthropic or Gemini key, or (Meshpool Code and Work) your ChatGPT sign-in.
+  - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key, another API key, an Anthropic or Gemini key, or your ChatGPT sign-in.
   - **Codex** runs on your Meshpool key, another API key, or your ChatGPT sign-in.
   - **Claude Code** runs on your Claude sign-in or an Anthropic API key.
   - **Gemini CLI** runs on your Google sign-in or a Gemini API key.

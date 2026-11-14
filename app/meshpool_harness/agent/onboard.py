@@ -236,8 +236,8 @@ def provider_step(st, n: int = 1) -> bool:
     from meshpool_harness import harnesses as HR
     opts = [("meshpool", "Meshpool API key", "recommended: every model on one key, 20% cheaper"),
             ("custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider"),
-            ("chatgpt", "ChatGPT subscription", "your ChatGPT Plus, Pro or Business plan, for Meshpool Code, Work "
-                                                "and Codex"),
+            ("chatgpt", "ChatGPT subscription", "your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, "
+                                                "Pi, Hermes and Codex"),
             ("claude", "Claude subscription, runs Claude Code", "your Claude Pro or Max plan; only Claude Code "
                                                                 "can use it")]
     cur = HR.provider()

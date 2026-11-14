@@ -175,7 +175,8 @@ def test_the_threads_model_decides_codex_credentials(home):
     cx = HR.get("codex", "chatgpt:gpt-6.1-sol")                               # the thread picked a ChatGPT model
     assert cx["provider"] == "chatgpt" and cx["env"]["CODEX_HOME"] == str(home / "codex") and "prepare" not in cx
     assert HR.get("meshpool-code", "chatgpt:gpt-6.1-sol")["provider"] == "chatgpt"
-    assert HR.credentials("pi", "chatgpt:gpt-6.1-sol")["provider"] == "key"  # Pi cannot: it stays on the key
+    assert HR.credentials("pi", "chatgpt:gpt-6.1-sol")["provider"] == "chatgpt"   # through the local relay
+    assert HR.credentials("pi", "claude:default")["provider"] == "key"         # a Claude sign-in: never
 
 
 def test_gemini_key_and_google_sign_in(home):

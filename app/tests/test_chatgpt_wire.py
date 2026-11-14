@@ -240,3 +240,101 @@ def test_no_claude_code_token_in_any_request(mock, tmp_path, monkeypatch):
     CG.models()
     for _method, _path, headers, raw in mock.seen:
         assert CLAUDE_SECRET not in json.dumps(headers) and CLAUDE_SECRET.encode() not in raw
+
+
+# ---------- the local relay (core/chatgpt_relay.py): Pi and Hermes reach the sign-in through it -------------------
+
+def _relay_call(path, body=None, token=None, stream=False):
+    import urllib.error
+    import urllib.request
+    from meshpool_harness.core import chatgpt_relay as R
+    url, tok = R.ensure()
+    req = urllib.request.Request(url.removesuffix("/v1") + path, method="POST" if body is not None else "GET",
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {token if token is not None else tok}",
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read()
+            return r.status, (raw.decode() if stream else json.loads(raw))
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_relay_answers_chat_completions_without_exposing_the_sign_in(mock, tmp_path):
+    tok = next(iter(mock.valid))
+    write_auth(tmp_path, tok)
+    code, r = _relay_call("/v1/chat/completions", body())
+    assert code == 200 and r["object"] == "chat.completion"
+    assert r["choices"][0]["message"]["content"] == "hello" and r["usage"]["prompt_tokens"] == 50
+    from meshpool_harness.core import chatgpt_relay as R
+    assert tok not in json.dumps(r) and R.ensure()[1] != tok              # agents get the relay token, not ChatGPT's
+
+
+def test_relay_streams_text_then_tool_calls_and_usage(mock, tmp_path):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    b = dict(body(), stream=True, stream_options={"include_usage": True})
+    code, raw = _relay_call("/v1/chat/completions", b, stream=True)
+    evs = [json.loads(line[5:]) for line in raw.splitlines() if line.startswith("data:") and "[DONE]" not in line]
+    assert code == 200 and raw.rstrip().endswith("data: [DONE]")
+    text = "".join((c["choices"][0]["delta"].get("content") or "") for c in evs if c["choices"])
+    assert text == "hello"
+    assert [c["choices"][0]["finish_reason"] for c in evs if c["choices"]][-1] == "stop"
+    assert evs[-1]["usage"]["completion_tokens"] == 5
+    tb = dict(body(tools=True), stream=True)
+    _, raw = _relay_call("/v1/chat/completions", tb, stream=True)
+    evs = [json.loads(line[5:]) for line in raw.splitlines() if line.startswith("data:") and "[DONE]" not in line]
+    calls = [tc for c in evs if c["choices"] for tc in c["choices"][0]["delta"].get("tool_calls") or []]
+    assert calls == [{"index": 0, "id": "c1", "type": "function",
+                      "function": {"name": "bash", "arguments": '{"command": "ls"}'}}]
+    assert [c["choices"][0]["finish_reason"] for c in evs if c["choices"]][-1] == "tool_calls"
+
+
+def test_relay_refuses_without_its_token_and_lists_models(mock, tmp_path):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    code, r = _relay_call("/v1/chat/completions", body(), token="wrong")
+    assert code == 401 and r["error"]["type"] == "authentication_error"
+    assert not [s for s in mock.seen if s[1] == "/codex/responses"]      # nothing went to ChatGPT
+    code, r = _relay_call("/v1/models")
+    assert code == 200 and "gpt-6-luna" in [m["id"] for m in r["data"]]
+
+
+def test_relay_says_sign_in_again_when_the_sign_in_is_gone(mock, tmp_path):
+    (tmp_path / "codex").mkdir()                                          # no auth.json
+    code, r = _relay_call("/v1/chat/completions", body())
+    assert code == 401 and "Sign in" in r["error"]["message"]
+
+
+def test_pi_and_hermes_point_at_the_relay(mock, tmp_path, monkeypatch):
+    write_auth(tmp_path, next(iter(mock.valid)))
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    (tmp_path / "mh").mkdir()
+    monkeypatch.setenv("MESHPOOL_API_KEY", "")
+    from meshpool_harness import providers as PV
+    from meshpool_harness.core import chatgpt_relay as R
+    from meshpool_harness.harnesses import pi_rpc
+    assert "chatgpt" in PV.SUPPORTS["pi"] and "chatgpt" in PV.SUPPORTS["hermes"]
+    url, tok = R.ensure()
+    assert PV.endpoint("chatgpt") == (url, tok)
+    home = pi_rpc.prepare(tmp_path)
+    prov = json.loads((home / "models.json").read_text())["providers"]["chatgpt"]
+    assert prov["baseUrl"] == url and prov["apiKey"] == "$MESHPOOL_CHATGPT_RELAY_KEY"
+    assert "gpt-6.1-sol" in [m["id"] for m in prov["models"]]
+    assert pi_rpc._pi_model("chatgpt:gpt-6-luna") == ("chatgpt", "gpt-6-luna")
+    assert next(iter(mock.valid)) not in (home / "models.json").read_text()   # no ChatGPT token in Pi's files
+
+
+def test_hermes_config_points_at_the_relay(mock, tmp_path, monkeypatch):
+    pytest.importorskip("yaml")
+    import yaml
+    write_auth(tmp_path, next(iter(mock.valid)))
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    (tmp_path / "mh").mkdir()
+    from meshpool_harness import harnesses as HR
+    from meshpool_harness.core import chatgpt_relay as R
+    HR.prepare_hermes("chatgpt:gpt-6-luna")
+    cfg = yaml.safe_load((HR.hermes_home() / "config.yaml").read_text())
+    url, tok = R.ensure()
+    assert cfg["model"]["base_url"] == url and cfg["model"]["api_key"] == tok
+    assert cfg["model"]["default"] == "gpt-6-luna"
+    assert cfg["auth"]["adopt_external_logins"] is False

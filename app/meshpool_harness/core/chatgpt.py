@@ -37,12 +37,7 @@ CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"        # the public Codex CLI OAuth c
 REFRESH_SKEW_S = 120                               # refresh this long before the access token expires
 REFRESH_EVERY_S = 8 * 24 * 3600                    # Codex also refreshes a token this old, whatever its expiry
 DEFAULT_MODEL = "gpt-6.1-sol"
-# Meshpool's own agents that cannot run on a ChatGPT sign-in yet, and why (shown in the pickers).
-UNSUPPORTED = {
-    "pi": ("Pi cannot use a ChatGPT sign-in yet: it would need its own copy of the sign-in, and two programs "
-           "refreshing one ChatGPT sign-in sign each other out. Use Meshpool Code, Codex, or an API key."),
-    "hermes": ("Hermes cannot use a ChatGPT sign-in in Meshpool yet. Use Meshpool Work, or an API key."),
-}
+# Pi and Hermes reach the sign-in through the local relay (chatgpt_relay.py), so this process stays its only refresher.
 
 
 class NotSignedIn(RuntimeError):

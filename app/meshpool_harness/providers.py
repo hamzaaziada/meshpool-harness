@@ -36,15 +36,13 @@ SUPPORTS = {
     "meshpool-code": ["key", "chatgpt", "anthropic", "gemini"],
     "meshpool-work": ["key", "chatgpt", "anthropic", "gemini"],
     "meshpool-auto": ["key", "chatgpt", "anthropic", "gemini"],
-    "pi": ["key", "anthropic", "gemini"],
-    "hermes": ["key", "anthropic", "gemini"],
+    "pi": ["key", "chatgpt", "anthropic", "gemini"],         # ChatGPT through the local relay (chatgpt_relay.py)
+    "hermes": ["key", "chatgpt", "anthropic", "gemini"],
     "codex": ["key", "chatgpt"],
     "claude-code": ["claude", "anthropic"],
     "gemini-cli": ["google", "gemini"],
 }
 WHY_NOT = {
-    ("pi", "chatgpt"): "Pi cannot use a ChatGPT sign-in yet (two programs refreshing one sign-in sign each other out).",
-    ("hermes", "chatgpt"): "Hermes cannot use a ChatGPT sign-in in Meshpool yet.",
     ("codex", "anthropic"): "Codex runs on OpenAI-style endpoints only.",
     ("codex", "gemini"): "Codex runs on OpenAI-style endpoints only.",
 }
@@ -122,7 +120,11 @@ def setup(prov: str) -> str:
 
 
 def endpoint(prov: str) -> tuple[str, str]:
-    """(base URL, key) of an OpenAI-compatible provider."""
+    """(base URL, key) of an OpenAI-compatible provider. ChatGPT: this process's local relay, for agents that speak
+    chat completions; the sign-in itself never leaves Meshpool."""
+    if prov == "chatgpt":
+        from meshpool_harness.core import chatgpt_relay
+        return chatgpt_relay.ensure()
     if prov == "anthropic":
         return ANTHROPIC_BASE, anthropic_key()
     if prov == "gemini":

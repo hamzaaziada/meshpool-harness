@@ -24,7 +24,7 @@ Sign-up asks for one provider, and that provider sets the defaults. You can conn
 | Provider | Credentials | Agents that can use it | Model id |
 |---|---|---|---|
 | Meshpool (or another OpenAI-compatible endpoint) | `MESHPOOL_API_KEY`, `MESHPOOL_BASE_URL` | all except Claude Code and Gemini CLI | `deepseek-v4.1-flash` |
-| ChatGPT subscription | The Codex sign-in in `~/.codex/auth.json` | Meshpool Code, Work, Auto, Codex | `chatgpt:<model>` |
+| ChatGPT subscription | The Codex sign-in in `~/.codex/auth.json` | all except Claude Code and Gemini CLI (Pi and Hermes through the local relay) | `chatgpt:<model>` |
 | Claude, Anthropic API key | `ANTHROPIC_API_KEY` | Meshpool Code, Work, Auto, Pi, Hermes, Claude Code | `anthropic:<model>` |
 | Claude subscription | Claude Code's own sign-in | Claude Code only | `claude:default` |
 | Gemini, API key | `GEMINI_API_KEY` (Google AI Studio) | Meshpool Code, Work, Auto, Pi, Hermes, Gemini CLI | `gemini:<model>` |
@@ -32,7 +32,7 @@ Sign-up asks for one provider, and that provider sets the defaults. You can conn
 
 A model's provider is a prefix on its id. An id with no prefix runs on the API key endpoint. `app/meshpool_harness/providers.py` turns the id into the endpoint, key and wire to use. It also lists each provider's models for the picker and records which agents can use which provider (`SUPPORTS`). `harnesses.credentials()` gives each agent the environment and config its process starts with, for the provider of the thread's model.
 
-If you pick a model the current agent can't run, Meshpool switches the thread to an agent that can and says so. For example, a Claude-subscription model switches to Claude Code, and a ChatGPT model picked while Pi is the agent switches to Meshpool Code. In a running Codex, Claude Code or Gemini CLI thread, a model from another provider starts a new thread, because those agents sign in once when they start.
+If you pick a model the current agent can't run, Meshpool switches the thread to an agent that can and says so. For example, a Claude-subscription model switches to Claude Code, and a Claude-key model picked while Codex is the agent switches to Meshpool Code. In a running Codex, Claude Code or Gemini CLI thread, a model from another provider starts a new thread, because those agents sign in once when they start.
 
 ## ChatGPT subscription for Meshpool's own agents
 
@@ -49,7 +49,17 @@ A `chatgpt:` model sends Meshpool Code, Meshpool Work and the engines to `app/me
   - The new tokens are written back to `auth.json`, so Codex keeps working.
 - **Models:** the list comes from the plan's Codex model list.
 
-Pi and Hermes don't use the ChatGPT sign-in yet. Each would need its own copy of the single-use refresh token, and two programs refreshing one sign-in log each other out.
+### The local relay for Pi and Hermes
+
+Pi and Hermes speak OpenAI-style chat completions, so they reach the ChatGPT sign-in through a local relay (`app/meshpool_harness/core/chatgpt_relay.py`). The relay runs inside the Meshpool process:
+
+- **Address:** an OpenAI-compatible server on `127.0.0.1`, on a random port, with `/v1/chat/completions` (streamed or not, tools included) and `/v1/models`.
+- **Access:** each request needs a random bearer token made per Meshpool process. Meshpool hands the address and token to the agents it starts: Pi through its `models.json` and environment, Hermes through its config.
+- **Inside:** the relay forwards each request to `core/chatgpt.py`, so it uses the same wire, headers and token refresh as Meshpool's own agents.
+
+Pi and Hermes never see the ChatGPT token. Meshpool stays the only program that refreshes it, which matters because refresh tokens are single-use: two programs refreshing one sign-in log each other out. The relay stops with the Meshpool process.
+
+Tested with a real Pi 1.5.2 in RPC mode against a mock ChatGPT endpoint: text streamed, and a tool call went from ChatGPT to Pi and its result came back. The relay itself is tested in `tests/test_chatgpt_wire.py`. Hermes is covered only by a test that checks the config Meshpool writes for it.
 
 **Terms.** OpenAI allows this sign-in route for local and open-source apps that run on the user's own computer, and has never allowed it for hosted or commercial services. OpenAI recommends its official [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source) program, which registers the app as its own client and calls `api.openai.com/v1/responses`. Meshpool should move to that once it is registered.
 
