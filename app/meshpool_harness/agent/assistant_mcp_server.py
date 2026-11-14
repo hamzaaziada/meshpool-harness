@@ -59,8 +59,10 @@ def run_subtasks(tasks: list, max_parallel: int = 4) -> str:
 TOOLS = {
     "memory_save": Tool(_wrap(memory_save), "Save one lasting fact or preference about the user or their work to "
                         "Meshpool memory, shared by all future chats and harnesses. Use it when the user asks you to "
-                        "remember something or states something durable (role, company, clients, tools, style). One "
-                        "short sentence per call. Never save secrets, passwords or keys.",
+                        "remember something or states something durable about themselves (role, company, clients, tools, "
+                        "style). Never save tasks, to-dos, bugs, feature requests, release plans or work in progress: "
+                        "those stay in the chat. One short sentence per call, no dashes. Never save secrets, "
+                        "passwords or keys.",
                         {"fact": {"type": "string"}}, ["fact"]),
     "memory_view": Tool(memory_view, "Show everything in Meshpool memory."),
     "memory_forget": Tool(_wrap(memory_forget), "Remove memory lines that contain the given text. Use it when the "

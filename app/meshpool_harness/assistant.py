@@ -39,6 +39,25 @@ from pathlib import Path
 
 from meshpool_harness import config as C
 
+# House writing rule for every agent and every file Meshpool writes: no dashes as punctuation.
+PLAIN = ("Write in plain sentences. Never use an em dash or an en dash as punctuation; use a comma, a colon, "
+         "brackets or a full stop instead.")
+
+
+def dashless(text: str) -> str:
+    """Text without em or en dashes used as punctuation: "a — b" reads "a, b"; a range "2025–2029" keeps a hyphen."""
+    t = re.sub(r"(?<=\d)\s*[\u2013\u2014]\s*(?=\d)", "-", text or "")
+    t = re.sub(r"\s*[\u2014\u2013]\s*$", "", t, flags=re.M)
+    t = re.sub(r"\s*[\u2014\u2013]\s*", ", ", t)
+    return re.sub(r",\s*,", ",", t)
+
+
+# What memory is not for: the user's tasks, to-dos, bugs, feature requests and plans for a product they are building.
+# Those belong in the chat, an issue tracker or a file in the project; saved as "facts" they surfaced in every new chat.
+WORK_ITEM = re.compile(r"(?i)\b(to-?do|todo list|backlog|feature request|bug to fix|bugs? to fix|ui idea|slash commands? to|"
+                       r"roadmap|ships? (?:in|under|with)|next release|new version|release notes|pull request|"
+                       r"add(?:ed)? (?:this |it )?to (?:the |my )?(?:list|to-?do)|after the .{0,80} task is done)\b")
+
 MAX_MEMORY = 12000
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 WHEN = ("once", "hourly", "daily", "weekdays", "weekly", "every")
@@ -137,7 +156,17 @@ def set_instructions(text: str):
 
 
 def memory() -> str:
-    return _read(_dir() / "memory.md").strip()
+    """Saved facts. Lines that are tasks or plans rather than facts about the user (saved before memory refused
+    them) and dashes are cleaned out the first time they are read."""
+    raw = _read(_dir() / "memory.md").strip()
+    keep = [dashless(x) for x in raw.splitlines() if x.strip() and not WORK_ITEM.search(x)]
+    text = "\n".join(keep)
+    if text != raw and raw:
+        try:
+            set_memory(text)
+        except OSError:
+            pass
+    return text
 
 
 def set_memory(text: str):
@@ -152,6 +181,10 @@ def remember(fact: str) -> str:
         raise ValueError("Keep it under 400 characters: one fact per call.")
     if BAD.search(fact):
         raise ValueError("Memory does not store secrets or instructions about the system.")
+    if WORK_ITEM.search(fact):
+        raise ValueError("Memory keeps lasting facts about the user (role, company, preferences), not tasks, to-dos, "
+                         "bugs, feature requests or release plans. Keep those in the chat or in a file in the project.")
+    fact = dashless(fact)
     with _memory_lock():
         cur = memory()
         lines = [x for x in cur.splitlines() if x.strip()]
@@ -199,7 +232,7 @@ def context_block() -> str:
     st = settings()
     now = datetime.now().astimezone()
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY]
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY, PLAIN]
     ins = instructions() if st["instructions_on"] else ""
     mem = memory() if st["memory_on"] else ""
     if ins:
@@ -210,7 +243,8 @@ def context_block() -> str:
     parts.append("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser. "
                  "Cite sources with links. "
                  + ("If the user asks you to remember something, or states a lasting fact or preference about "
-                    "themselves or their work, save it with memory_save. " if st["memory_on"] else "")
+                    "themselves or their work, save it with memory_save (facts about the user, never tasks, "
+                    "to-dos, bugs, feature requests or plans). " if st["memory_on"] else "")
                  + "If the user asks for something to happen later or on a schedule, use schedule_task. "
                  "For a large job with independent parts (research many companies, review many files), use "
                  "run_subtasks to work on the parts in parallel. " + ENGINES)

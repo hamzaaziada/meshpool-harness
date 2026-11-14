@@ -153,8 +153,9 @@ _CTRL = re.compile(r"[\x00-\x08\x0b\x0e-\x1f]")
 
 def _clean(text: str | None) -> str:
     """Text without the control characters Word refuses (PDF extracts carry form feeds): a form feed becomes a
-    paragraph break, the rest are dropped."""
-    return _CTRL.sub("", (text or "").replace("\x0c", "\n\n"))
+    paragraph break, the rest are dropped. Dashes used as punctuation go too (the house rule)."""
+    from meshpool_harness.assistant import dashless
+    return dashless(_CTRL.sub("", (text or "").replace("\x0c", "\n\n")))
 
 
 def _safe_name(filename: str, default: str, ext: str) -> str:
