@@ -809,10 +809,10 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         P = stats_plan(_stat_items(part), iw, LOOKS[look]["card"])
         return oh + P["total"], oh + P["total"], oh + P["total"] * (STAT_GROW if LOOKS[look]["card"] else 3.0)
     if t == "text":
-        need = R._need(_text_blocks(dict(part, _bump=bump)), iw) + 0.04
-        return oh + need, oh + need, oh + need
+        need = R._need(_text_blocks(dict(part, _bump=bump)), iw) * 1.08 + 0.06     # LibreOffice sets the house face
+        return oh + need, oh + need, oh + need                                    # a little looser than measured
     if t == "callout":
-        need = R._need(_text_blocks(dict(part, _bump=bump), TC.BACKGROUND_1, R.bump(16), R.bump(13)), iw - 0.5) + 0.32
+        need = R._need(_text_blocks(dict(part, _bump=bump), TC.BACKGROUND_1, R.bump(16), R.bump(13)), iw - 0.5) * 1.08 + 0.34
         return oh + need, oh + need, oh + need
     if t == "table":
         tb = dict(part.get("table") if isinstance(part.get("table"), dict) else part)
