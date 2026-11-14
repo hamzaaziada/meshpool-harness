@@ -52,7 +52,7 @@ SNAPSHOT_JS = r"""() => {
           scroll: Math.round(scrollY), height: document.documentElement.scrollHeight, vh: innerHeight};
 }"""
 from meshpool_harness.core.webfix import STATES_JS  # noqa: E402
-# The app's browser runs with the fixes measured on MiniWoB++ (harness-lab/findings/004): read-only picker fields,
+# The app's browser runs with the fixes measured on MiniWoB++: read-only picker fields,
 # late menus, invalid/disabled/read-only markers, key-driven widgets. An explicit "0" in the environment turns one off.
 for _flag in ("MH_BROWSER_READONLY", "MH_BROWSER_SETTLE", "MH_BROWSER_STATES", "MH_BROWSER_KEYTYPE"):
     os.environ.setdefault(_flag, "1")

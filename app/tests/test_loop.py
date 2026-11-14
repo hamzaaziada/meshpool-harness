@@ -35,7 +35,8 @@ def test_happy_path(tmp_path):
     assert r.ok and "a + b" in (d / "calc.py").read_text()
 
 
-def test_finish_without_check_rejected(tmp_path):
+def test_finish_without_check_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # finish_check is off by default
     d = repo(tmp_path)
     r, c, ws = go(d, [tool_call("read_file", {"path": "calc.py"}),
                       tool_call("edit", {"path": "calc.py", "old": "a - b", "new": "a + b"}),
@@ -88,7 +89,8 @@ def test_repeat_failure_guard(tmp_path):
     assert any("repeat_failure" in m["content"] for m in c.requests[3]["messages"] if m["role"] == "user")
 
 
-def test_error_not_quoted_guard(tmp_path):
+def test_error_not_quoted_guard(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # error_quote is off by default
     d = repo(tmp_path)
     r, c, ws = go(d, [tool_call("run_tests", {"command": T}),
                       tool_call("glob", {"pattern": "*.py"}),

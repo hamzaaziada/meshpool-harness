@@ -159,7 +159,7 @@ main() {
   fi
   [ -n "$SRC" ] || die "The download was incomplete. Run this again."
   rm -rf "$DIR/app.new" && cp -R "$SRC/app" "$DIR/app.new"
-  cp "$SRC/LICENSE" "$SRC/NOTICE" "$SRC/THIRD_PARTY_NOTICES.md" "$DIR/app.new/"
+  cp "$SRC/THIRD_PARTY_NOTICES.md" "$DIR/app.new/"
   # The package list this copy is installed from: the in-app update compares it with a new release's list.
   cp "$SRC/packaging/requirements-cli.txt" "$DIR/app.new/requirements-cli.txt"
   # The command runs this file rather than `python -m`: Python then puts the app folder first on sys.path, never the

@@ -82,9 +82,9 @@ from .finishing import scope_report as _scope_report  # noqa: E402,F401  (shared
 
 class _KeepWarm:
     """MH_KEEPWARM_S=<seconds> (default off). While tools run longer than that, re-send the conversation so far with
-    max_tokens=24 every <seconds> (the gateway sends max_tokens=1 requests to a backend without this cache: findings
-    006), so the serving side keeps its prompt cache warm. Run C showed almost all avoidable
-    cache misses come after gaps over 40 s between calls (harness-lab/findings/001). A ping reads the prefix at the
+    max_tokens=24 every <seconds> (the gateway sends max_tokens=1 requests to a backend without this cache), so the
+    serving side keeps its prompt cache warm. Run C showed almost all avoidable
+    cache misses come after gaps over 40 s between calls. A ping reads the prefix at the
     cached price (about 50 times cheaper than a miss). The prefix ends before the latest assistant message, so the
     request stays valid (no tool call without its result) and is an exact prefix of the next real request. It keeps the
     real task_id so it carries the same prompt_cache_key and session header (same backend); role="keepwarm" marks it."""
@@ -169,7 +169,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_OBSERVE") == "1" and "bash" in tool_names and "probe" not in tool_names:
         i = tool_names.index("bash") + 1                                     # see the bug before editing it
         tool_names = tool_names[:i] + ["probe", "trace"] + tool_names[i:]
-    if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # v3: required todo list (ForgeCode)
+    if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
     messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": task_text}]

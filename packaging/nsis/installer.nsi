@@ -15,7 +15,7 @@ VIAddVersionKey "FileDescription" "Meshpool Setup"
 VIAddVersionKey "FileVersion" "@VERSION@"
 VIAddVersionKey "ProductVersion" "@VERSION@"
 VIAddVersionKey "CompanyName" "Meshpool"
-VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool. Apache License 2.0."
+VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 
 !define MUI_ICON "Meshpool\Meshpool.ico"
 !define MUI_UNICON "Meshpool\Meshpool.ico"

@@ -1,6 +1,6 @@
 """Observability tools (MH_OBSERVE=1): see the bug before editing it.
 
-Measured on 47 of our Verified transcripts (harness-lab/findings/007): the model made 5 calls before its first edit,
+Measured on 47 of our Verified transcripts: the model made 5 calls before its first edit,
 with 0.5 runs of a test or repro, then 27 calls after it (7.2 edits, 3.4 failing test runs, 9.7 re-reads). It edits
 nearly blind and then iterates. These tools put the failure in front of it in one call:
 

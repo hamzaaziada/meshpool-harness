@@ -94,7 +94,7 @@ class Guards:
         return "\n".join(msgs) or None
 
     def stall(self, turn: int) -> str | None:
-        """v3 loop breaker (MH_STALL=1): progress = a file change or a passing command not run before. After 12 turns
+        """Loop breaker (MH_STALL=1): progress = a file change or a passing command not run before. After 12 turns
         without progress, nudge once to change approach; again at 24. Never blocks anything."""
         if os.environ.get("MH_STALL") != "1":
             return None
@@ -116,7 +116,7 @@ class Guards:
         return None
 
     def repeat_calls(self, calls: list) -> str | None:
-        """v3 (MH_DOOM=1): 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
+        """MH_DOOM=1: 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
         if os.environ.get("MH_DOOM") != "1" or not calls:
             return None
         hist = getattr(self, "_call_hist", [])

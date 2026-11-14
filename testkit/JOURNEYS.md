@@ -57,8 +57,9 @@ Not testable in this Linux container, so checked by other means:
 2. Install Pi and Hermes as `docs/BUILDING.md` describes, then link them as `app/vendor/pi/node_modules` and
    `app/vendor/hermes`. Install `packaging/requirements-cli.txt` plus Hermes' own dependencies into the Python that
    runs the app.
-3. Make a fake home with one skill and one MCP server for each app the importer reads. Its layout is in
-   `harness-lab/notes/QA.md`.
+3. Make a fake home with one skill and one MCP server for each app the importer reads, at `$QA_DIR/fakehome`
+   (`run_all.sh` sets it as `HOME`). `e2e_full.py` expects the skills `claude-skill` and `codex-skill` and the MCP
+   servers `desk-server`, `cursor-server` and `codex-server`.
 4. Remove every credential variable (`OPENAI_*`, `CODEX_*`, any other provider's, cloud and GitHub tokens) from the
    app's environment. Otherwise a subscription harness signs in with your own account and makes real, paid calls,
    and it can write that sign-in into the fake home. `run_all.sh` does this.

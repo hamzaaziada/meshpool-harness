@@ -190,7 +190,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     import time as _time
     t0 = _time.time()
-    if os.environ.get("MH_ENV_SNAPSHOT") == "1":            # v3: saves the first exploration turns (Meta-Harness, Droid)
+    if os.environ.get("MH_ENV_SNAPSHOT") == "1":            # saves the first exploration turns (Meta-Harness, Droid)
         try:
             snap, _ = ws._run("pwd; ls -la 2>/dev/null | head -40; echo '---'; "
                               "(python3 --version; pip --version; node --version; gcc --version | head -1; go version; "
@@ -205,10 +205,10 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     if os.environ.get("MH_MULTI_CMD") == "1":
         system += ("\nTurns are limited. When you need several independent facts (file ranges, greps, versions, listings), "
                    "get them in ONE bash_many call instead of one command per turn.")
-    if os.environ.get("MH_TERSE") == "1":              # v4: output tokens cost 4x input; keep prose between calls short
+    if os.environ.get("MH_TERSE") == "1":              # output tokens cost 4x input; keep prose between calls short
         system += ("\nBetween tool calls write at most one short sentence. Put the work in tool arguments, not in "
                    "prose, and do not repeat file contents or command output back.")
-    if os.environ.get("MH_OBSERVE") == "1":               # see the bug before editing it (findings 007)
+    if os.environ.get("MH_OBSERVE") == "1":               # see the bug before editing it (core/observe.py)
         system += ("\nBefore your first edit, reproduce the problem with probe (a failing test or a short script) "
                    "and read its diagnosis. If the cause is not clear, run trace on the same command to see which "
                    "project functions run. After an edit, use probe to see what still fails.")

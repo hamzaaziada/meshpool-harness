@@ -54,8 +54,8 @@ def classify(text: str, t: dict | None = None) -> tuple[str, list[str]]:
 def _ready(kind: str) -> dict:
     """Harnesses Auto may pick: installed, set up on a provider, and not a subscription the user kept for itself."""
     from meshpool_harness import harnesses as HR
-    # A harness on a Claude or ChatGPT sign-in spends the user's own plan. Auto uses that plan freely when it is the
-    # provider the user chose, and any other plan only after the user allowed it.
+    # A harness on a ChatGPT sign-in spends the user's own plan. Auto uses that plan freely when ChatGPT is the
+    # provider the user chose, and otherwise only after the user allowed it.
     subs_ok = (C.read().get("MH_AUTO_SUBSCRIPTIONS") or os.environ.get("MH_AUTO_SUBSCRIPTIONS", "0")) == "1"
     chosen = HR.provider()
     return {h["id"]: h for h in HR.load_all()

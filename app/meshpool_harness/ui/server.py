@@ -298,8 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                         except OSError:
                             continue
                     return ""
-                return self._send(200, {"version": MH.__version__, "author": MH.__author__, "notice": rd("NOTICE"),
-                                        "license": rd("LICENSE"), "third_party": rd("THIRD_PARTY_NOTICES.md")})
+                return self._send(200, {"version": MH.__version__, "author": MH.__author__,
+                                        "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
                 return self._send(200, {"sessions": A.listing()})
             if u.path == "/api/mcp":

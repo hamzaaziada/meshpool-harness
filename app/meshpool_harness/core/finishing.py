@@ -7,7 +7,7 @@ from .guards import TEST_PATH
 def scope_report(ws, done: str = "finish") -> str | None:
     """MH_SCOPE_CHECK=1: at the first finish, if the change spreads past a minimal fix (more than one non-test source
     file, or more than 30 changed non-test lines), show the per-file diff size once and ask to drop what the task
-    does not need. Rule fixed in advance (harness-lab LOG cycle 5), not tuned on any task. None = nothing to show."""
+    does not need. Rule fixed in advance, not tuned on any task. None = nothing to show."""
     try:
         out, _ = ws._run("git diff --numstat HEAD -- . ':!.run' ':!.junie' 2>/dev/null", 30, "bash", record=False)
     except Exception:                                 # noqa: BLE001 - a report must never break a run

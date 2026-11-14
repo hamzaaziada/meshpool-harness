@@ -1,4 +1,4 @@
-"""v2 minimal profile: guard switches, additive test guard, feature defaults, timing log. No model calls."""
+"""Guard switches, additive test guard, feature defaults, timing log. No model calls."""
 import json
 import subprocess
 import sys
@@ -29,9 +29,7 @@ def _serve_dir(d) -> str:
 
 def test_guard_defaults_and_overrides(monkeypatch):
     monkeypatch.delenv("MH_GUARDS", raising=False)
-    monkeypatch.delenv("MH_HARNESS_PROFILE", raising=False)
-    assert all(G.enabled(g) for g in G.ALL_GUARDS)                 # v1: everything on
-    monkeypatch.setenv("MH_HARNESS_PROFILE", "minimal")
+    monkeypatch.delenv("MH_TEST_GUARD", raising=False)
     assert G.enabled("repeat_failure") and G.enabled("test_guard") and G.enabled("deliverables")
     assert not G.enabled("progress") and not G.enabled("explore_lock") and not G.enabled("finish_check")
     assert G.test_guard_mode() == "additive"
@@ -39,6 +37,8 @@ def test_guard_defaults_and_overrides(monkeypatch):
     assert G.enabled("progress") and not G.enabled("repeat_failure")
     monkeypatch.setenv("MH_GUARDS", "none")
     assert not G.enabled("test_guard")
+    monkeypatch.setenv("MH_GUARDS", "all")
+    assert all(G.enabled(g) for g in G.ALL_GUARDS)
 
 
 def _repo():
@@ -70,10 +70,9 @@ def test_test_guard_modes(monkeypatch, mode, change, blocked):
 
 def test_feature_defaults(monkeypatch):
     from engines.code.engine import feature
-    monkeypatch.delenv("MH_HARNESS_PROFILE", raising=False)
     monkeypatch.delenv("MH_ESCALATE", raising=False)
-    assert feature("MH_ESCALATE") and feature("MH_REGRESSION_GATE")
-    monkeypatch.setenv("MH_HARNESS_PROFILE", "minimal")
+    monkeypatch.delenv("MH_REGRESSION_GATE", raising=False)
+    monkeypatch.delenv("MH_TESTCMD", raising=False)
     assert not feature("MH_ESCALATE") and not feature("MH_REGRESSION_GATE") and feature("MH_TESTCMD")
     monkeypatch.setenv("MH_ESCALATE", "1")                          # each feature can be added back on its own
     assert feature("MH_ESCALATE")
@@ -82,7 +81,6 @@ def test_feature_defaults(monkeypatch):
 def test_timing_log(monkeypatch, tmp_path):
     log = tmp_path / "timing.jsonl"
     monkeypatch.setenv("MH_TIMING_LOG", str(log))
-    monkeypatch.setenv("MH_HARNESS_PROFILE", "minimal")
     d = tmp_path / "w"
     d.mkdir()
     (d / "f.txt").write_text("hello\n")
@@ -93,7 +91,7 @@ def test_timing_log(monkeypatch, tmp_path):
             require_check=False)
     assert r.ok
     row = json.loads(log.read_text().splitlines()[-1])
-    assert row["task_id"] == "tt" and row["model_calls"] == 2 and row["profile"] == "minimal"
+    assert row["task_id"] == "tt" and row["model_calls"] == 2
     assert row["model_s"] >= 0 and row["tool_s"] >= 0 and row["wall_s"] >= row["model_s"]
 
 

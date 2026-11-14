@@ -70,7 +70,7 @@ mid = m["models"][0]["id"]
 check("model favorite", mid in call("/api/models/favorite", {"id": mid, "on": True}).get("favorites", []))
 check("model default", call("/api/models/default", {"id": mid}).get("default") == mid)
 a = call("/api/about")
-check("about page has version, credit and license", a.get("version") and "Meshpool" in a.get("notice", "") and "Apache" in a.get("license", "") and "Hamza" not in json.dumps(a), a)
+check("about page has version, credit and third-party notices", a.get("version") and a.get("author") == "Meshpool" and a.get("third_party") and "notice" not in a and "license" not in a and "Hamza" not in json.dumps(a), a)
 check("usage", "total" in call("/api/usage"))
 check("permissions", "rows" in call("/api/permissions", {}))
 

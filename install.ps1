@@ -92,7 +92,7 @@ $Src = Get-ChildItem $Tmp -Directory | Where-Object Name -like "meshpool-harness
 if (-not $Src) { Die "The download was incomplete. Run this again." }
 if (Test-Path "$Dir\app") { Remove-Item -Recurse -Force "$Dir\app" }
 Copy-Item -Recurse "$($Src.FullName)\app" "$Dir\app"
-Copy-Item "$($Src.FullName)\LICENSE", "$($Src.FullName)\NOTICE", "$($Src.FullName)\THIRD_PARTY_NOTICES.md" "$Dir\app\"
+Copy-Item "$($Src.FullName)\THIRD_PARTY_NOTICES.md" "$Dir\app\"
 # The package list this copy is installed from: the in-app update compares it with a new release's list.
 Copy-Item "$($Src.FullName)\packaging\requirements-cli.txt" "$Dir\app\requirements-cli.txt"
 # The command runs this file rather than `python -m`: Python then puts the app folder first on sys.path, never the

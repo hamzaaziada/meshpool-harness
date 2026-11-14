@@ -17,6 +17,7 @@ def _ws():
 
 
 def test_progress_nudge_off_in_terminal_mode(monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # these guards are off by default
     g = Guards({"task_id": "t"}, _ws())
     monkeypatch.delenv("MH_MODE", raising=False)
     assert g.progress(12, 60, 0, True)
@@ -26,6 +27,7 @@ def test_progress_nudge_off_in_terminal_mode(monkeypatch):
 
 
 def test_exploration_lock_off_in_terminal_mode(monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # these guards are off by default
     monkeypatch.setenv("MH_MODE", "terminal")
     script = [tool_call("bash", {"command": f"echo step{i}"}) for i in range(28)]
     script += [tool_call("finish", {"answer": "done", "evidence": ["echo step27"]})] * 3
@@ -44,6 +46,7 @@ def test_timeout_cap_terminal(monkeypatch):
 
 
 def test_light_mode_turns_off_nudges(monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # these guards are off by default
     monkeypatch.setenv("MH_MODE", "light")
     g = Guards({"task_id": "t"}, _ws())
     assert g.progress(12, 60, 0, True) is None

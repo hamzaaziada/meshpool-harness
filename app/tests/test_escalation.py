@@ -20,6 +20,7 @@ def _repo(tmp_path, monkeypatch):
     (tmp_path / "notes.py").write_text("TODO = 'keep me'\n")
     (tmp_path / "data.bin").write_bytes(BIN[::-1])
     monkeypatch.setenv("MH_TESTCMD", "0"); monkeypatch.setenv("MH_MAX_SECONDS", "3600")
+    monkeypatch.setenv("MH_ESCALATE", "1")                          # off by default; this tests the escalation itself
     return tmp_path
 
 
