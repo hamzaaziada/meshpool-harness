@@ -1874,8 +1874,17 @@ def football_fallback(s: dict) -> dict:
     if len(se) == 2:
         for cat, lo, hi in zip(c.get("categories") or [], se[0].get("values") or [], se[1].get("values") or []):
             if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
-                items.append({"value": f"{fmt_value(lo, unit, dec)}–{fmt_value(hi, unit, dec)}", "label": str(cat),
-                              "prov": c.get("prov")})
+                val = fmt_value(lo, unit, dec) if abs(hi - lo) < 1e-9 else \
+                    f"{fmt_value(min(lo, hi), unit, dec)}–{fmt_value(max(lo, hi), unit, dec)}"    # never "$48.42–$48.42"
+                items.append({"value": val, "label": str(cat), "prov": c.get("prov")})
+    seen, uniq = set(), []                                     # one figure per thing: a price drawn both as a marker
+    for it in items:                                           # and as a "range" shows once (the marker's value)
+        key = re.sub(r"[^a-z]", "", it["label"].lower().replace("price", ""))
+        if key in seen or any(it["value"] == u["value"] for u in uniq):
+            continue
+        seen.add(key)
+        uniq.append(it)
+    items = uniq
     tk = s.get("takeaway") or {}
     text = {"type": "text", "lead": tk.get("text", ""), "prov": tk.get("prov"),
             "bullets": [b if isinstance(b, dict) else {"text": str(b)} for b in s.get("bullets") or []]}

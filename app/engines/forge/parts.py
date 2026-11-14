@@ -306,7 +306,7 @@ def stats_plan(items, w, boxed, h=None) -> dict:
                          None)
             if vsize is None:
                 continue
-            vw = max(_head_w(it.get("value", ""), vsize) for it in items) + 0.15
+            vw = max(_head_w(it.get("value", ""), vsize) for it in items) * 1.15 + 0.3   # a figure never wraps
             lab = R.bump(12) + (2 if style == "row" else 0)
             if style == "stack":
                 th = max(R._pitch(vsize, 1.0) / 72 + R._need(_stat_rest(it, lab), tw - 2 * pad) for it in items) + 0.2
@@ -426,10 +426,12 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
     k = max(1, len(steps))
     hl = part.get("highlight")
     surf = _surface(look)
-    if w / k >= 1.25 and w > h * 0.9:                    # wide: interlocking chevrons, text inside
-        d, g = 0.2, 0.05
-        sw = (w + (k - 1) * (d - g)) / k
-        tw = sw - 2 * d - 0.14
+    d, g = 0.2, 0.05
+    sw = (w + (k - 1) * (d - g)) / k
+    tw = sw - 2 * d - 0.14
+    words = [wd for st in steps for wd in re.findall(r"\S+", _txt(st.get("title")) + " " + _txt(st.get("text")))]
+    fits = all(R._need_w(wd, R.bump(12), True) * 1.15 <= tw for wd in words)   # else a word breaks mid-word
+    if w / k >= 1.25 and w > h * 0.9 and fits:          # wide: interlocking chevrons, text inside
         need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},
                                       {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
                              for st in steps)
