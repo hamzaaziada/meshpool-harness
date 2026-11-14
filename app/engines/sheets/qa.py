@@ -26,7 +26,7 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
         subprocess.run([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
                         "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(out), xlsx_path],
                        check=True, capture_output=True, timeout=180)
-    return str(out / Path(xlsx_path).name)
+    return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
 
 
 def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcoded: bool = False) -> dict:
@@ -40,6 +40,10 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
         if "not installed" not in str(e):
             raise
         recalced, wb_v = None, None                  # no LibreOffice: structure checks only
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        recalced, wb_v = None, None                  # recalculation failed: structure checks, and say so
+        issues.append(f"Could not recalculate the workbook to check its values ({type(e).__name__}); formulas and "
+                      "structure were checked, values were not.")
     n_formula = n_numeric_const = 0
     for ws in wb_f.worksheets:
         wv = wb_v[ws.title] if wb_v is not None else None

@@ -371,7 +371,12 @@ class ACPAgent:
             if m == "session/request_permission":
                 return self._respond(rid, {"outcome": self._permission(p)})
             if m == "fs/read_text_file":
-                path = Path(p["path"])
+                path = Path(p["path"]).resolve()
+                from meshpool_harness import config as C
+                ups = (C.runs_dir() / "_uploads").resolve()
+                if not any(path == r or r in path.parents for r in (self.root, ups)):
+                    return self._respond(rid, error={"code": -32602, "message": "reads through Meshpool are limited "
+                                                     "to the project folder and attached files"})
                 lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
                 start = max(0, int(p.get("line") or 1) - 1)
                 lim = p.get("limit")
