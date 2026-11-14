@@ -585,3 +585,37 @@ def test_long_decks_get_an_agenda_and_section_tracker_built_from_the_storyline(t
     tracker = names(prs.slides[4])
     assert "ov_Current2" in tracker and "ov_Current1" not in tracker      # the divider lights its own section
     assert all("TitleRule" not in names(sl) for sl in list(prs.slides)[1:2])  # no line under a title with no subtitle
+
+
+def test_storyboard_variety_is_sent_back_like_a_partner_would():
+    from engines.forge.build import story_variety
+    same = [{"archetype": "cover"}] + [{"archetype": "bar_takeaway", "visual": "bar chart"} for _ in range(8)]
+    msgs = " | ".join(story_variety(same, "Should we open 40 stores?"))
+    assert "executive_summary" in msgs and "same visual" in msgs and "three chart-plus-side-panel" in msgs
+    assert "different visuals" in msgs and "options against criteria" in msgs
+    good = [{"archetype": "cover"}, {"archetype": "executive_summary", "visual": "summary"},
+            {"archetype": "column_trend", "visual": "column chart"}, {"archetype": "grid", "visual": "big numbers"},
+            {"archetype": "benchmark", "visual": "benchmark bars"}, {"archetype": "grid", "visual": "options vs criteria"},
+            {"archetype": "challenge_matrix", "visual": "icon rows"}, {"archetype": "grid", "visual": "roadmap"},
+            {"archetype": "closing", "visual": "next steps"}]
+    assert story_variety(good, "Should we open 40 stores?") == []
+
+
+def test_executive_summary_and_band_composition(tmp_path):
+    from engines.forge.render import render
+    from pptx import Presentation as P2
+    chart = {"kind": "bar", "categories": ["North", "South", "East"], "series": [{"name": "Revenue", "values": [420, 310, 220]}],
+             "unit": "$m"}
+    side = lambda t: {"archetype": "bar_takeaway", "title": t, "subtitle": "Revenue, $m, 2025", "chart": chart,  # noqa: E731
+                      "takeaway": {"text": "North carries the growth"}, "bullets": ["North grew 18%", "West is flat"],
+                      "source": {"text": "Company accounts"}}
+    out = tmp_path / "d.pptx"
+    render([{"archetype": "executive_summary", "title": "Open 40 stores weighted to Cairo",
+             "points": [{"lead": "The market grows 11% a year", "bullets": ["$1.4bn in 2025"]},
+                        {"lead": "Payback is 3.1 years in Cairo", "bullets": ["$0.9m capex per store"]},
+                        {"lead": "Price decides the win", "bullets": ["62% switch on price"]}],
+             "decision": "Approve the $36m programme"}, side("North drives revenue"), side("South is second")], str(out))
+    s = [{sh.name: sh for sh in sl.shapes} for sl in P2(str(out)).slides]
+    assert "Claim3" in s[0] and "ov_Decision" in s[0]
+    assert "ov_PanelCol1" not in s[1] and "ov_PanelCol1" in s[2]          # the second chart page changes composition
+    assert "West is flat" in s[2]["ov_PanelCol1"].text_frame.text           # nothing dropped from the band

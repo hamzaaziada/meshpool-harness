@@ -39,6 +39,9 @@ renderer applies a strict consulting design; you only fill fields.
   timeline {"milestones": [{"date", "label"}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
   harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"}.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
+- executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
+  answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
+  1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, what the reader must decide.
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
@@ -111,6 +114,48 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - Steps, options, drivers and pillars get a one-word "icon" meaning so the renderer can draw a line icon.
 - Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
 
+# The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
+SIDE_PANEL = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "table_focus",
+              "table_highlight", "benchmark"}
+VISUALS = """Visual plan: give every slide a "visual" naming its exhibit form, chosen from the message, the way a senior
+partner storyboards: ranking -> "bar chart"; change over time -> "column chart" or "line chart"; parts of a whole or
+a bridge -> "waterfall"; peers -> "benchmark bars"; a choice between options -> "options vs criteria" (grid with a
+harvey part, options as rows) or "2x2 matrix" (grid matrix2x2); a sequence or plan -> "roadmap" (grid timeline) or
+"process steps" (grid process); a few headline numbers -> "big numbers" (grid stats beside a chart or text); issues or
+drivers with evidence -> "icon rows" (challenge_matrix); a chart and its argument -> "exhibit + argument"
+(exhibit_argument); lookup values -> "table". Rules: slide 2 (after the cover) is the executive_summary; never the same
+visual on two slides in a row; at most two chart-plus-side-panel slides (bar_takeaway, column_trend, line_trend,
+waterfall_bridge, table_focus, benchmark) in a row; in 8 or more slides use at least 5 different visuals; when the
+brief asks a question or a decision, one slide weighs the options against criteria; when it ends on action, the
+plan is a roadmap or process (or the closing steps), not bullets."""
+
+
+def story_variety(slides: list, brief: str = "") -> list[str]:
+    """What a senior partner would send back about the storyboard's visual plan, slide numbers 1-based."""
+    body = [x for x in slides if isinstance(x, dict) and x.get("archetype") not in ("cover", "agenda", "section_divider")]
+    msgs = []
+    if len(slides) >= 6 and not any(x.get("archetype") == "executive_summary" for x in slides[:3]):
+        msgs.append("slide 2 must be the executive_summary (the answer and the 3-5 claims that prove it)")
+    vis = [(x.get("visual") or x.get("archetype") or "").strip().lower() for x in slides]
+    arch = [x.get("archetype") for x in slides]
+    for i in range(1, len(slides)):
+        if vis[i] and vis[i] == vis[i - 1] and arch[i] not in ("cover", "agenda", "section_divider"):
+            msgs.append(f"slides {i} and {i + 1} use the same visual ({vis[i]}); change one")
+    run = 0
+    for i, a in enumerate(arch, 1):
+        run = run + 1 if a in SIDE_PANEL else 0
+        if run == 3:
+            msgs.append(f"slides {i - 2}-{i} are three chart-plus-side-panel pages in a row; make slide {i - 1} "
+                        "another form (big numbers, 2x2, options vs criteria, roadmap, icon rows, exhibit + argument)")
+    if len(body) >= 7 and len({v for v in vis if v}) < 5:
+        msgs.append(f"only {len({v for v in vis if v})} different visuals in {len(slides)} slides; use at least 5")
+    if re.search(r"\?|\bshould\b|\bwhether\b|\boptions?\b|\bdecide\b|\bchoose\b", brief or "", re.I) and len(body) >= 6 \
+            and not any(re.search(r"option|criteria|2x2|matrix|harvey", v) for v in vis):
+        msgs.append("the brief asks for a decision: add one slide that weighs the options against criteria "
+                    "(options vs criteria or a 2x2 matrix)")
+    return msgs
+
+
 _AGENDA_RE = re.compile(r"(?i)\bagenda\b|\btable of contents\b|\bcontents (?:slide|page)\b")
 
 
@@ -123,6 +168,8 @@ def wants_agenda(brief: str, slides_wanted: int, insert: bool = False) -> bool:
 def add_agenda(plan: list) -> list:
     """The agenda slide goes right after the cover; it is built from the storyline's sections, not by a model."""
     at = 1 if plan and plan[0].get("archetype") == "cover" else 0
+    if len(plan) > at and plan[at].get("archetype") == "executive_summary":
+        at += 1                                  # answer first, then the map of the deck
     return plan[:at] + [{"node": "0.1", "section": "", "title": "Agenda", "archetype": "agenda", "evidence": []}] + plan[at:]
 
 
@@ -454,12 +501,13 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     story = _call(client, STORY_MODEL, f"""You are an engagement manager at a top strategy firm. Plan the storyline
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "section_icon": "one-word meaning", "title": str,
-"archetype": str, "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
+"archetype": str, "visual": str, "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
 Section names are 2-5 plain words in sentence case ("Where the market is going"); they label the agenda. Do NOT
 plan an agenda slide: the engine adds it from your sections.
 Exactly {narrative_n} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.{fixed_txt}
 {STORY[density]}
 {CONSULTING}
+{VISUALS}
 Each slide must have the evidence its point needs. Plan ONLY slides whose evidence
 is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
@@ -467,6 +515,20 @@ make the same point. Titles: one sentence with a verb, <= 15 words, stating the 
 supports it. Choose varied archetypes that prove each title.
 {help_}""", f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}", task_id + "-story", 6000)
     calls += 1
+    notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
+    if notes and len(story.get("slides") or []) >= 4:
+        try:                                     # the partner's read of the storyboard, sent back once
+            again = _call(client, STORY_MODEL, "You revise a consulting storyboard's visual plan. Keep the governing "
+                          "thought, the number of slides, the order of the argument and the evidence; change archetypes, "
+                          "visuals and, where needed, titles so every point below is fixed. Return the same JSON shape.\n"
+                          + VISUALS + "\n" + help_, "Fix:\n- " + "\n- ".join(notes) + "\n\nStoryboard:\n"
+                          + json.dumps(story), task_id + "-story2", 6000)
+            calls += 1
+            if isinstance(again.get("slides"), list) and abs(len(again["slides"]) - len(story["slides"])) <= 1 and \
+                    len(story_variety(again["slides"], brief)) < len(notes):
+                story = again
+        except Exception:
+            pass
     (out / "storyline.json").write_text(json.dumps(story, indent=1))
     nodes = [{"id": s.get("node"), "title": s.get("title")} for s in story.get("slides", [])]
 

@@ -449,6 +449,7 @@ class Ctx:
     def __init__(self, prov):
         self.prov = prov
         self.overflow = []
+        self.last_side = -9          # last slide whose chart had its text in a side panel (composition variety)
 
     def miss(self, n, where, words):
         self.overflow.append(f"slide {n}: {where} does not fit at the minimum size; cut about {words} words")
@@ -1403,7 +1404,7 @@ def normalize(s: dict) -> dict:
 REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
             "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "football_field": ["chart"],
-            "benchmark": ["benchmark"],
+            "benchmark": ["benchmark"], "executive_summary": ["points"],
             "grid": ["parts"]}
 
 
@@ -2146,7 +2147,15 @@ def a_chart_takeaway(ctx, s, sl, n):
     body_h = BODY_B - BODY_Y
     bx, bw = span(8, 11)
     long_series = len((s["chart"] or {}).get("categories") or []) >= 8
-    if not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl):
+    # Composition variety: a chart slide straight after another side-panel chart slide takes the full width with its
+    # so-what in a band underneath (when the text fits a band), so a run of chart pages never reads as one template.
+    lx_, lw_ = span(0, 3)
+    cw_ = (RIGHT - colx(4) - GUT * (1 if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
+    halves = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
+    band_fits = bool(lead) and max([_need(lead, lw_)] + [_need(c, cw_) for c in halves]) + 0.04 <= 0.4 * body_h
+    vary = (s.get("layout") == "band" or ctx.last_side == n - 1) and band_fits and s.get("layout") != "side"
+    if not vary and (not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl)):
+        ctx.last_side = n
         # The split follows the text: a narrower column for less text (the chart gains the width), then a step up
         # the type scale; the renderer never adds gaps to fake fullness.
         import copy
@@ -2173,14 +2182,77 @@ def a_chart_takeaway(ctx, s, sl, n):
             b["size"] = T["head"] if b.get("bold") and not b.get("bullet") else T["body"]
         _panel(ctx, s, sl, n, bx, BODY_Y, bw, body_h, [], blocks_)
         return
-    lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
+    # band under a full-width chart: the takeaway on the left, the bullets beside it in one or two columns
+    lx, lw = LEFT + PANEL_PAD, span(0, 3)[1] - PANEL_PAD
     cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
-    cw = (RIGHT - colx(4) - GUT * (len(cols) - 1)) / len(cols)
-    band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.04
-    band = min(band, 0.45 * body_h)
-    cy = BODY_B - band - 0.1
-    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.12)
-    _panel(ctx, s, sl, n, LEFT, cy, RIGHT - LEFT, BODY_B - cy, lead, bl)
+    cx0 = colx(4)
+    cw = (RIGHT - PANEL_PAD - cx0 - GUT * (len(cols) - 1)) / len(cols)
+    lead = [dict(b, size=T["head"] + 1) for b in lead]
+    for b in bl:
+        b["size"] = T["body"] + 1
+    need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    if need > 0.4 * body_h:
+        for b in bl:
+            b["size"] = T["body"]
+        need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    band = min(need + 0.3, 0.45 * body_h)
+    cy = BODY_B - band
+    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.15)
+    box = _fill(sl, LEFT, cy, RIGHT - LEFT, band, TC.BACKGROUND_2, "ov_Panel")
+    _shape_text(box, lead, ctx, n, (lx, cy + 0.12, lw, band - 0.24), MSO_ANCHOR.MIDDLE)
+    for i, c in enumerate(cols):
+        if c:
+            _write(_box(sl, cx0 + i * (cw + GUT), cy + 0.12, cw, band - 0.24, f"ov_PanelCol{i + 1}",
+                        MSO_ANCHOR.MIDDLE), c, ctx, n)
+
+
+def a_executive_summary(ctx, s, sl, n):
+    """Executive summary: the answer first. Numbered rows, each a bold claim on the left (the section's message) and
+    its evidence on the right, hairlines between rows; an optional dark band at the foot with what to decide."""
+    _header(ctx, s, sl, n)
+    pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
+    ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
+    top, bottom = BODY_Y + 0.1, BODY_B
+    if ask:
+        ab = [{"text": ask, "size": T["head"] + 2, "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
+        ah = min(1.1, _need(ab, RIGHT - LEFT - 0.6) + 0.3)
+        band = _fill(sl, LEFT, bottom - ah, RIGHT - LEFT, ah, TC.TEXT_2, "ov_Decision")
+        _shape_text(band, ab, ctx, n, (LEFT + 0.3, bottom - ah + 0.05, RIGHT - LEFT - 0.6, ah - 0.1), MSO_ANCHOR.MIDDLE)
+        bottom -= ah + 0.2
+    if not pts:
+        return
+    lx, lw = span24(1, 9)
+    dx, dw = span24(10, 23)
+    size = T["body"] + 2
+
+    def rows(z):
+        out = []
+        for p in pts:
+            a = [{"text": p.get("lead", ""), "size": z + 3, "bold": True, "numbers": False}]
+            d = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": z, "bullet": True, "space_before": 3,
+                  "prov": (b.get("prov") if isinstance(b, dict) else None) or p.get("prov")}
+                 for b in (p.get("bullets") or [])[:3]]
+            out.append((a, d, max(_need(a, lw), _need(d, dw) if d else 0) + 0.2))
+        return out
+    laid = rows(size)
+    while sum(h for *_, h in laid) > bottom - top and size > 11:
+        size -= 1
+        laid = rows(size)
+    if sum(h for *_, h in laid) > bottom - top:
+        ctx.miss(n, "the executive summary", int((sum(h for *_, h in laid) - (bottom - top)) * 30))
+    gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / len(laid))
+    y = top
+    for i, (a, d, h) in enumerate(laid):
+        rh = h + gap
+        _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
+               [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
+                 "color": TC.ACCENT_1}])
+        _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
+        if d:
+            _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
+        y += rh
+        if i < len(laid) - 1:
+            _rule(sl, LEFT, y, RIGHT - LEFT, TC.ACCENT_5, 0.5, f"SummaryRule{i + 1}")
 
 
 def a_waterfall_bridge(ctx, s, sl, n):
@@ -2404,7 +2476,7 @@ def agenda_sections(slides: list[dict]) -> list[dict]:
     out, seen = [], {}
     for i, s in enumerate(slides, 1):
         name = (s.get("section") or "").strip()
-        if not name or s.get("archetype") in ("cover", "agenda", "section_divider", "end"):
+        if not name or s.get("archetype") in ("cover", "agenda", "section_divider", "end", "executive_summary"):
             continue
         key = name.lower()
         if key in seen:
@@ -2427,7 +2499,8 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
               "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "benchmark": a_benchmark, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
-              "grid": a_grid, "agenda": a_agenda}
+              "grid": a_grid, "agenda": a_agenda,
+              "executive_summary": a_executive_summary}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
