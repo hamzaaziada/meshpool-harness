@@ -27,7 +27,8 @@ async function watch(p) {
     await p.click("#oGo"); await p.waitForTimeout(300);
     check("empty key shows a message", /Paste your API key/.test(await p.textContent("#oRes")));
     await p.fill("#oKey", "test-key-1234");
-    await p.click("#oAdv summary"); await p.fill("#oBase", "http://127.0.0.1:8911/v1");
+    await p.click("[data-prov=custom]"); await p.fill("#oBase", "http://127.0.0.1:8911/v1");   // another API key: the mock
+    await p.fill("#oModel", "deepseek-v4.1-flash");
     await p.click("#oGo");
     await p.waitForSelector("#onbPerm:not([hidden])", {timeout: 30000});
     check("key accepted, permissions step shown", true);
