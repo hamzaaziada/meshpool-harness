@@ -36,7 +36,8 @@ from meshpool_harness import config as C
 
 REPO = os.environ.get("MESHPOOL_REPO", "hamzaaziada/meshpool-harness")
 API = os.environ.get("MESHPOOL_UPDATE_API") or f"https://api.github.com/repos/{REPO}/releases?per_page=30"
-SRC = os.environ.get("MESHPOOL_UPDATE_SRC") or f"https://codeload.github.com/{REPO}/tar.gz/refs/tags/{{tag}}"
+SRC = os.environ.get("MESHPOOL_UPDATE_SRC") or ""   # tests only: a local archive, not checked
+SRC_ASSET = "Meshpool-src.tar.gz"     # the code update, published with each release and listed in SHA256SUMS.txt
 APP = C.APP                                  # the folder that holds meshpool_harness/
 CODE_DIRS = ("meshpool_harness", "engines", "profiles", "defaults")   # what a code update replaces; vendor/ is kept
 CLI_REQ = "requirements-cli.txt"     # the package list the command line and the bundled runtimes are installed from
@@ -189,7 +190,10 @@ def _installer(v: dict, why: str) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"Could not read the release's checksums ({type(e).__name__}). Try again, or "
                                       "download it from the release page.", "url": v["url"]}
-    if sums is not None and a["name"] not in sums:
+    if sums is None:
+        return {"ok": False, "error": "This release has no checksums, so its download cannot be checked. Download it "
+                                      "from the release page.", "url": v["url"]}
+    if a["name"] not in sums:
         return {"ok": False, "error": f"The release's checksums do not list {a['name']}. Download it from the release "
                                       "page.", "url": v["url"]}
     dl = Path.home() / "Downloads"
@@ -202,7 +206,7 @@ def _installer(v: dict, why: str) -> dict:
             p = Path(tempfile.gettempdir()) / a["name"]
             part = p.with_name(p.name + ".part")
             _download(a["url"], part)
-        if sums is not None and _sha256(part) != sums[a["name"]]:
+        if _sha256(part) != sums[a["name"]]:
             part.unlink()
             return {"ok": False, "error": f"The download of {a['name']} did not match the release's checksum, so it "
                                           "was deleted. Try again.", "url": v["url"]}
@@ -281,9 +285,27 @@ def install() -> dict:
     if not os.access(APP, os.W_OK):
         return _installer(v, "This copy's folder is read-only.") if k == "win-app" else \
             {"ok": False, "error": f"Meshpool cannot write to {APP}. Run the installer again to update."}
+    src_url, want = SRC.replace("{tag}", v["tag"]) if SRC else "", None
+    if not SRC:
+        # The code comes from the release's own archive, checked against the release's checksums: an archive
+        # that is missing, unlisted or different is never installed.
+        a = next((a for a in v.get("assets") or [] if a.get("name") == SRC_ASSET and a.get("url")), None)
+        try:
+            sums = _sums(v) or {}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"Could not read the release's checksums ({type(e).__name__}). Nothing was "
+                                          "changed. Try again."}
+        if not a or SRC_ASSET not in sums:
+            return _installer(v, "This release cannot be checked for a code update.") if k == "win-app" else \
+                {"ok": False, "error": "This release cannot be checked, so it was not installed. Download it from the "
+                                       "release page.", "url": v.get("url", "")}
+        src_url, want = a["url"], sums[SRC_ASSET]
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
-        tgz = _download(SRC.replace("{tag}", v["tag"]), t / "src.tgz")
+        tgz = _download(src_url, t / "src.tgz")
+        if want and _sha256(tgz) != want:
+            return {"ok": False, "error": "The update did not match the release's checksum, so nothing was changed. "
+                                          "Try again."}
         with tarfile.open(tgz) as tf:
             try:
                 tf.extractall(t, filter="data")

@@ -272,7 +272,8 @@ def test_server(spec: dict, timeout: float = 30) -> dict:
 
 def _plain(err: str) -> str:
     """A server's error without its HTML page: tags removed, spaces collapsed, short."""
-    t = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", err or "")).strip()
+    t = re.sub(r"(?is)<(style|script|head)\b.*?</\1>", " ", err or "")      # their contents are not the message
+    t = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", t)).strip()
     return t if len(t) <= 200 else t[:199].rstrip() + "…"
 
 

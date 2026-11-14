@@ -42,12 +42,26 @@ def projects() -> list[dict]:
     return out
 
 
+_PROJ_LOCK = threading.RLock()                 # add, remove and rename read, change and write the list
+
+
+def _projects_locked(fn):
+    def run(*a, **kw):
+        with _PROJ_LOCK:
+            return fn(*a, **kw)
+    run.__name__, run.__doc__ = fn.__name__, fn.__doc__
+    return run
+
+
 def _save_projects(rows: list[dict]):
-    _projects_file().parent.mkdir(parents=True, exist_ok=True)
-    _projects_file().write_text(json.dumps([{k: r[k] for k in ("path", "name", "added")} for r in rows], indent=1),
-                                encoding="utf-8")
+    f = _projects_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f".{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps([{k: r[k] for k in ("path", "name", "added")} for r in rows], indent=1), encoding="utf-8")
+    C.replace_file(tmp, f)                       # never a half-written file: one was left as invalid JSON
 
 
+@_projects_locked
 def add_project(path: str, name: str = "") -> dict:
     p = Path(path.strip().strip('"')).expanduser()
     if not p.is_dir():
@@ -63,10 +77,12 @@ def add_project(path: str, name: str = "") -> dict:
     return r
 
 
+@_projects_locked
 def remove_project(path: str):
     _save_projects([r for r in projects() if r["path"] != path])
 
 
+@_projects_locked
 def rename_project(path: str, name: str):
     rows = projects()
     for r in rows:
@@ -276,10 +292,11 @@ def attach(root: str, name: str, data: bytes) -> dict:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     p = r / name
     stem, suf, i = p.stem, p.suffix, 2
-    while p.exists():
+    while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
         p = r / f"{stem} ({i}){suf}"
         i += 1
-    p.write_bytes(data)
+    with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
+        f.write(data)
     return {"path": p.name}
 
 
@@ -304,7 +321,11 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     g = git_exe()
     if not g:
         raise ValueError("Git is not installed." + (" On a Mac, run: xcode-select --install" if sys.platform == "darwin" else ""))
-    r = subprocess.run([g, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
+    # A project's own .git/config must not run programs when Meshpool merely looks at it (status on opening a
+    # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
+    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false",
+            "--no-pager"]
+    r = subprocess.run([g, *safe, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=timeout, creationflags=NO_WINDOW, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
     if check and r.returncode != 0:
         raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
@@ -350,9 +371,16 @@ def git_action(root: str, body: dict) -> dict:
         name = body.get("branch", "").strip()
         if not name:
             raise ValueError("Give a branch name.")
-        if name.startswith("-") or subprocess.run(["git", "check-ref-format", "--branch", name], cwd=str(r),
-                                                  capture_output=True, creationflags=NO_WINDOW).returncode:
+        if name.startswith("-") or not git_exe() or subprocess.run(
+                [git_exe(), "check-ref-format", "--branch", name], cwd=str(r), capture_output=True,
+                creationflags=NO_WINDOW).returncode:
             raise ValueError(f"\"{name}\" is not a valid branch name.")
+        if not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
+                not _git(r, "for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/heads",
+                         check=False).strip():
+            # detached, with commits on no branch: switching away would leave them only in the reflog
+            raise ValueError("You have commits that are on no branch (a detached HEAD). Create a branch for them "
+                             "first (type a name and press Create), then switch.")
         if body.get("create"):
             _git(r, "switch", "-c", name)
         else:
@@ -361,7 +389,11 @@ def git_action(root: str, body: dict) -> dict:
         msg = (body.get("message") or "").strip()
         if not msg:
             raise ValueError("Write a commit message.")
-        _git(r, "add", "-A")
+        top = Path(_git(r, "rev-parse", "--show-toplevel").strip())
+        if _git(r, "diff", "--name-only", "--diff-filter=U", check=False).strip() or (top / ".git" / "MERGE_HEAD").exists():
+            raise ValueError("This repository is in the middle of a merge with conflicts. Resolve the conflicts "
+                             "(look for <<<<<<< in the files), then commit.")
+        _git(r, "add", "-A", "--", ".")          # this project's folder only, not the rest of a larger repository
         _git(r, "-c", "user.name=" + (_git(r, "config", "user.name", check=False).strip() or "Meshpool"),
              "-c", "user.email=" + (_git(r, "config", "user.email", check=False).strip() or "meshpool@localhost"),
              "commit", "-m", msg)
@@ -585,23 +617,31 @@ def branch_changes(root: str, base: str = "") -> dict:
     remote's default branch): each file added, changed, renamed or deleted, with its lines added and removed. Plain
     git on this computer, so it needs no GitHub sign-in and shows before a pull request exists."""
     r = check_root(root)
+    if not base:                                         # the open pull request's base is the best guess; GitHub only
+        try:
+            base = (git_ci_pr(root) or {}).get("base", "")
+        except Exception:  # noqa: BLE001
+            base = ""
     cands = [f"origin/{base}", base] if base else []
     head = _git(r, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", check=False).strip()
     cands += [head, "origin/main", "origin/master", "main", "master"]
     ref = next((c for c in cands if c and _git(r, "rev-parse", "-q", "--verify", c + "^{commit}", check=False).strip()), "")
     if not ref:
         return {"base": base, "files": [], "added": 0, "removed": 0, "note": "No base branch to compare with."}
+    branch = _git(r, "rev-parse", "--abbrev-ref", "HEAD", check=False).strip()
+    if branch and branch == re.sub(r"^origin/", "", ref):
+        return {"base": ref, "same": True, "files": [], "added": 0, "removed": 0}    # on the base branch itself
     mb = _git(r, "merge-base", ref, "HEAD", check=False).strip()
     if not mb:
         return {"base": ref, "files": [], "added": 0, "removed": 0, "note": f"This branch shares no history with {ref}."}
     kinds = {"A": "added", "D": "deleted", "M": "changed", "R": "renamed", "C": "copied", "T": "changed"}
     status = {}
-    for line in _git(r, "diff", "--name-status", "-M", mb, "HEAD").splitlines():
+    for line in _git(r, "-c", "core.quotePath=false", "diff", "--name-status", "-M", mb, "HEAD").splitlines():
         parts = line.split("\t")
         if len(parts) >= 2:
             status[parts[-1]] = (kinds.get(parts[0][:1], "changed"), parts[1] if len(parts) == 3 else "")
     files, plus, minus = [], 0, 0
-    for line in _git(r, "diff", "--numstat", "-M", mb, "HEAD").splitlines():
+    for line in _git(r, "-c", "core.quotePath=false", "diff", "--numstat", "-M", mb, "HEAD").splitlines():
         a_, d_, path = (line.split("\t", 2) + ["", "", ""])[:3]
         if " => " in path:                                 # a rename: "dir/{old => new}.py" or "old => new"
             m = re.match(r"(.*)\{(.*) => (.*)\}(.*)", path)
@@ -614,6 +654,14 @@ def branch_changes(root: str, base: str = "") -> dict:
                       **({"from": old} if old else {})})
     files.sort(key=lambda f: (-(f["added"] + f["removed"]), f["path"]))
     return {"base": ref, "files": files[:300], "count": len(files), "added": plus, "removed": minus}
+
+
+_PR_BASE: dict = {}
+
+
+def git_ci_pr(root: str) -> dict | None:
+    """The current branch's pull request as git_ci last saw it (no network call)."""
+    return _PR_BASE.get(root)
 
 
 def git_ci(root: str) -> dict:
@@ -643,6 +691,7 @@ def git_ci(root: str) -> dict:
                      "state": "merged" if p.get("merged_at") else p["state"], "draft": p.get("draft", False),
                      "base": p["base"]["ref"], "author": (p.get("user") or {}).get("login", "")}
         sha = p["head"]["sha"] or sha
+        _PR_BASE[root] = out["pr"]
     if sha:
         try:
             cr = _gh_api(f"/repos/{slug}/commits/{sha}/check-runs?per_page=50", token)
@@ -679,10 +728,6 @@ def git_ci(root: str) -> dict:
                                        "url": url, "created": d.get("created_at"), "sha": (d.get("sha") or "")[:7]})
     except ValueError:
         pass
-    try:
-        out["changes"] = branch_changes(root, (out["pr"] or {}).get("base", ""))
-    except (ValueError, OSError, subprocess.SubprocessError) as e:
-        out["changes"] = {"files": [], "added": 0, "removed": 0, "note": str(e)}
     fails = [c for c in out["checks"] if c["conclusion"] in ("failure", "timed_out", "cancelled", "action_required")]
     running = [c for c in out["checks"] if c["status"] != "completed"]
     out["summary"] = "failing" if fails else "running" if running else "passing" if out["checks"] else "none"

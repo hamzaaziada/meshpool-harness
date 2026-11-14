@@ -230,6 +230,9 @@ class ACPAgent:
         if self._p and self._p.poll() is None:
             return False
         m = self.manifest
+        from meshpool_harness.harnesses import unsupported
+        if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode on macOS 10.15: Node needs 11
+            raise ACPError(unsupported(m["id"]))
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
             prepare_hermes(self.model)
@@ -541,6 +544,8 @@ class ACPAgent:
         ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
         self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
         want = (self.manifest.get("modes") or {}).get(self.mode)        # e.g. Codex: a mode per Meshpool setting
+        if getattr(self, "plan", False) and "read-only" in ids:
+            want = "read-only"           # Plan changes nothing: Codex's own modes never ask, so Plan could not block
         pick = want if want in ids else next((i for w in ("default", "ask", "untrusted") for i in ids
                                               if i.lower() == w), None)
         if pick and pick != modes.get("currentModeId"):

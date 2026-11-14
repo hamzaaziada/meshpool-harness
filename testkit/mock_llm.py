@@ -20,6 +20,20 @@ def plan(messages, tools):
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": f"goal{n}.txt", "content": f"part {n}\n"})
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
+    if "remember that" in u:                              # memory: shared by every agent through meshpool-assistant
+        mem = next((n for n in names if n.endswith("memory_save")), None)
+        if step == 0 and mem:
+            fact = utext[utext.lower().index("remember that") + 14:].split("\n")[0].split("\u200b")[0].strip(" .")
+            return ("tool", mem, {"fact": fact})
+        return ("text", "Saved to memory: " + (done[-1]["content"][:120] if done else "no memory tool"))
+    if "schedule a daily" in u:                           # scheduled tasks through meshpool-assistant
+        sch = next((n for n in names if n.endswith("schedule_task")), None)
+        if step == 0 and sch:
+            return ("tool", sch, {"prompt": "Write a one-line market brief.", "when": "daily", "time": "08:30",
+                                  "name": "Morning brief"})
+        return ("text", "Scheduled: " + (done[-1]["content"][:160] if done else "no schedule tool"))
+    if "what do you remember" in u:                       # the first message of a new chat carries memory
+        return ("text", "Memory in my context: " + ("yes" if "prefers eur" in u else "no"))
     if "ok" == u.strip(" .") or "single word" in u:
         return ("text", "ok")
     if "word doc" in u:

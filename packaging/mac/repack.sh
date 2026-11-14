@@ -25,7 +25,9 @@ for a in arm64 x64; do
   cp "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$REPO/packaging/requirements-cli.txt" "$R/app/"
   cp "$REPO/packaging/hermes-NOTICE-MESHPOOL.txt" "$R/app/vendor/hermes/NOTICE-MESHPOOL.txt"
   (cd "$R/app/vendor/hermes" && patch -p1 -N -s < "$REPO/packaging/hermes-acp-server.patch" >/dev/null 2>&1 || true)
-  sed -e "s/@VERSION_NUM@/$NUM/g" -e "s/@VERSION@/$VER/g" "$REPO/packaging/mac/Info.plist" > "$APP/Contents/Info.plist"
+  # The oldest macOS the app opens on: 11 on Apple silicon, 10.15 on Intel (MIN_MACOS in packaging/build_all.py)
+  MIN=11.0; [ $a = x64 ] && MIN=10.15
+  sed -e "s/@VERSION_NUM@/$NUM/g" -e "s/@VERSION@/$VER/g" -e "s/@MIN_MACOS@/$MIN/g" "$REPO/packaging/mac/Info.plist" > "$APP/Contents/Info.plist"
   for d in meshpool_harness engines profiles vendor/hermes/acp_adapter; do
     PYTHONPATH= "$PY" -m compileall -q -j0 --invalidation-mode unchecked-hash -x 'tests?/|test_' \
       -s "$R" -p /Applications/Meshpool.app/Contents/Resources "$R/app/$d" >/dev/null 2>&1

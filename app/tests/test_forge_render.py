@@ -106,3 +106,33 @@ def test_benchmark_without_median_aligns_bars_with_labels(tmp_path):
     assert len(list(ch.plots[0].categories)) == 4          # three companies + the Median label row
     bad = dict(s, benchmark={"companies": ["A", "B", "C"], "panels": [{"title": "EV/EBITDA", "values": [10, 12]}]})
     assert any("one value per company" in e for e in R.schema_errors(bad))
+
+
+def test_gap_marker_in_bold_leaves_no_empty_markup():
+    """A model wrote 'implies roughly **[GAP: implied upside %]** upside'; the gap was removed but '****' reached the
+    slide. The gap goes into the notes and nothing of it is shown."""
+    from engines.forge.render import normalize
+    s = normalize({"archetype": "grid", "bullets": [
+        "Closing the gap implies roughly **[GAP: implied upside %]** upside to the price.",
+        "Margin is **28.9%**, net debt [GAP: net debt]."]})
+    assert [b["text"] for b in s["bullets"]] == ["Closing the gap implies roughly upside to the price.",
+                                                 "Margin is **28.9%**, net debt."]
+    assert "implied upside %" in s["notes"] and "net debt" in s["notes"]
+
+
+def test_benchmark_names_never_wrap_into_the_next_row(tmp_path):
+    """'Meridian Gauges (Apex Capital, 2025)' wrapped onto three lines in the label column and overlapped the rows
+    above and below (P1 render_collision). A name that needs more than two lines is cut with an ellipsis at full size;
+    the full name stays in the shape's alt text."""
+    long = ["Meridian Gauges (Apex Capital, 2025)", "Lumen Optics (Keystone Measurement, 2024)", "Keystone Measurement"]
+    s = {"archetype": "benchmark", "title": "Precedent deals paid a median 12.7x EV/EBITDA in the last three years",
+         "benchmark": {"companies": long + ["Ridge Sensors", "Polar Test"], "panels": [
+             {"title": "EV / EBITDA (x)", "unit": "x", "values": [12.3, 13.2, 12.7, 12.7, 12.5], "median": 12.7}]},
+         "takeaway": {"text": "Deals cluster at 12.5-13.2x"}, "bullets": ["Lumen Optics paid the most"]}
+    p = tmp_path / "b.pptx"
+    R.render([s], str(p))
+    names = {sh.name: sh for sh in Presentation(str(p)).slides[0].shapes if sh.name.startswith("ov_BenchName")}
+    txt = [names[f"ov_BenchName{i}"].text_frame.text for i in range(1, 4)]
+    assert txt[2] == "Keystone Measurement"                          # two lines fit a row: left as written
+    assert txt[1].endswith("…") and long[1].startswith(txt[1][:-1])  # three lines do not: cut
+    assert names["ov_BenchName2"]._element.find(".//{*}cNvPr").get("descr") == long[1]

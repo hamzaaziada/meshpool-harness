@@ -156,7 +156,8 @@ def read(path: Path | None = None) -> dict:
     out = {}
     if not path.exists():
         return out
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # utf-8-sig: a byte-order mark (Notepad) hid the first key; errors=replace: an ANSI "é" broke every save
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -168,10 +169,19 @@ def read(path: Path | None = None) -> dict:
     return out
 
 
+_WRITE_LOCK = __import__("threading").Lock()
+
+
 def write(values: dict, path: Path | None = None) -> Path:
-    """Update keys in place, keeping comments and unknown keys."""
+    """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
+    step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    with _WRITE_LOCK:
+        return _write(values, path)
+
+
+def _write(values: dict, path: Path) -> Path:
+    lines = path.read_text(encoding="utf-8-sig", errors="replace").splitlines() if path.exists() else []
     done = set()
     for i, line in enumerate(lines):
         s = line.strip()
@@ -183,7 +193,14 @@ def write(values: dict, path: Path | None = None) -> Path:
     for k, v in values.items():
         if k not in done:
             lines.append(f"{k}={v}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)                     # it holds API keys: readable by this user only
+    except OSError:
+        pass
+    replace_file(tmp, path)
     return path
 
 
@@ -252,20 +269,19 @@ def system_check() -> list[dict]:
         pw = True
     except ImportError:
         pw = False
-    rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
-                 "fix": "Run: meshpool install-browser"})
+    from meshpool_harness import macos
+    if macos.too_old():                     # the Intel app opens on 10.15; Chromium needs macOS 11
+        rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 11 or later",
+                     "fix": macos.note("Browser use", "Web search and page reading work without it.")})
+    else:
+        rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
+                     "fix": "Run: meshpool install-browser"})
     so = find_soffice()
     rows.append({"name": "LibreOffice", "optional": True, "ok": bool(so), "detail": so or "not installed (optional)",
                  "fix": "Optional. With it, Meshpool also checks spreadsheet formula results and renders slides to "
                         "review them. Files are complete without it."})
-    try:
-        import cairosvg  # noqa: F401
-        cairosvg.svg2png(bytestring=b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>')
-        cs = True
-    except Exception:
-        cs = False
-    rows.append({"name": "Slide icons", "optional": True, "ok": cs, "detail": "cairo available" if cs else "cairo not available",
-                 "fix": "Optional. Decks still build; icons are left out without the Cairo library."})
+    rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
+                 "fix": "Not needed: icons ship pre-rendered with Meshpool."})
     return rows
 
 

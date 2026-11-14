@@ -26,7 +26,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
    python packaging/build_all.py
    ```
 
-   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).
+   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and the oldest macOS each Mac app opens on into `Info.plist` (`MIN_MACOS`: 11.0 for Apple silicon, 10.15 for Intel; the release build compiles the launcher for the same and checks every bundled file with `packaging/mac/check_minos.py`), and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).
 
    In the Windows tree, the terminal command is `bin\meshpool.cmd` (from `packaging/win/meshpool.cmd`). The installer puts only that `bin` folder on PATH: next to `Meshpool.exe`, typing `meshpool` would start the app, because Windows tries `.exe` before `.cmd`.
 

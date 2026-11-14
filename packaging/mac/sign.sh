@@ -27,7 +27,7 @@ missing=()
 for v in "${need[@]}"; do [ -n "${!v:-}" ] || missing+=("$v"); done
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "sign.sh: signing is off, no Apple Developer secrets set (${missing[*]})."
-  echo "sign.sh: the apps stay ad hoc-signed, as before. See docs/TRUSTED_INSTALL_PROMPT.md."
+  echo "sign.sh: the apps stay ad hoc-signed, as before (set the Apple Developer secrets to sign and notarize)."
   exit 0
 fi
 

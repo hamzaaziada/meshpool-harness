@@ -47,7 +47,8 @@ Valuation and deal work (investment-bank standard):
 - Every input goes in the assumption book on Inputs with its Source (document, page, date), Evidence / rationale (the
   fact it rests on and why this value) and a Low / High range. The engine refuses a valuation workbook (a Comps,
   Precedents, DCF or Valuation tab) while any input has an empty Source. Never invent a figure: if it is not public,
-  mark it as an illustrative assumption in Source and say who would confirm it.
+  mark it as an illustrative assumption in Source and say who would confirm it; if it is unknown and cannot be
+  assumed, leave the cell N/A and say so in your answer. Say "I don't know" rather than guess.
 - Trading comps and precedents: 5-10 peers / deals on the same date basis, each row sourced; use the median and the
   interquartile range (25th-75th percentile) of the most relevant multiple, never the mean alone. Loss-making peers show
   "NM" and drop out of the statistics.
@@ -97,6 +98,7 @@ Finance kit (all live formulas; raw numbers are blue inputs; results are workboo
         [{{"key":"mw","label":"Active capacity (MW)","start":"mw_start","growth":"mw_growth"}},
          {{"key":"rev_mw","label":"Revenue per MW ($m)","start":"rev_per_mw","growth":"price_growth","fmt":"usd2"}}],
         revenue="{{mw}}*{{rev_mw}}", margin=("margin_start","margin_end"), names={{}})
+      # here "start" is the first FORECAST year's value (three_statement's "start" is the last actual)
       Needs these named inputs (rename via names={{role: your_name}}): risk_free, beta_unlevered,
       equity_risk_premium, cost_of_debt, tax_rate, debt_weight, terminal_growth, exit_multiple, da_pct, capex_pct,
       nwc_pct, revenue_base (last actual revenue), mid_year (1 = mid-year discounting), total_debt, cash,

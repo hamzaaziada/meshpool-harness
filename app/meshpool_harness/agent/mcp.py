@@ -247,6 +247,13 @@ class _SessionLost(MCPError):
 
 # ---------- transports --------------------------------------------------------------------------------------------
 
+_SECRET_RE = __import__("re").compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY)$", 2)
+
+
+def _secret_name(k: str) -> bool:
+    return k in C.SECRET or bool(_SECRET_RE.search(k)) or k in ("OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
+
+
 class _Stdio:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         cmd = spec["command"]
@@ -255,6 +262,10 @@ class _Stdio:
         exe = shutil.which(cmd) or cmd                    # Windows: npx -> npx.cmd
         args = [exe, *[str(a) for a in spec.get("args", [])]]
         env = dict(os.environ)
+        if exe != sys.executable:
+            # Someone else's server (often an unpinned npx package) gets no keys it was not given: only the ones its
+            # own "env" names. Meshpool's settings are all in this process's environment.
+            env = {k: v for k, v in env.items() if not _secret_name(k)}
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
         env.setdefault("PYTHONUTF8", "1")
         if exe == sys.executable:

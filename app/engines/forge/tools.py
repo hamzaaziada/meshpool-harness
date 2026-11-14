@@ -109,8 +109,13 @@ def qa_summary(files: list[str]) -> str:
             else:
                 continue
             bad = [k for k, v in r["rules"].items() if v == "fail"]
+            unverified = ""
+            if f.endswith(".xlsx"):
+                from meshpool_harness.config import find_soffice
+                if not find_soffice():
+                    unverified = "; values not recalculated: LibreOffice is not installed here, so formula results (errors, checks that do not tie) are unverified. Open the file in Excel to check"
             lines.append(f"- {Path(f).name}: forge rules failing: {', '.join(bad) or 'none'} "
-                         f"(run check_deck/check_workbook for the repair list)")
+                         f"(run check_deck/check_workbook for the repair list){unverified}")
         except Exception as e:  # QA must never break a finished job
             lines.append(f"- {Path(f).name}: forge QA could not run ({type(e).__name__})")
     return "\n".join(lines)

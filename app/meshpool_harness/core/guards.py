@@ -246,7 +246,7 @@ class Guards:
 
     def _git_test_changes(self) -> list[str] | None:
         try:
-            r = subprocess.run(["git", "status", "--porcelain"], cwd=self.ws.root, capture_output=True,
+            r = subprocess.run(["git", "-c", "core.fsmonitor=false", "status", "--porcelain"], cwd=self.ws.root, capture_output=True,
                                text=True, timeout=30)
             if r.returncode != 0:
                 return None
@@ -257,7 +257,7 @@ class Guards:
             if test_guard_mode() == "additive":         # only removed or changed existing lines count as tampering
                 kept = []
                 for n in tests:
-                    d = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", n], cwd=self.ws.root,
+                    d = subprocess.run(["git", "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--numstat", "HEAD", "--", n], cwd=self.ws.root,
                                        capture_output=True, text=True, timeout=30).stdout.split()
                     if not d or d[1] == "-" or int(d[1]) > 0:   # deleted lines (or binary/unknown): tampering
                         kept.append(n)

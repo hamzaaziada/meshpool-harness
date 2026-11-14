@@ -21,7 +21,10 @@ def _inputs(workdir: str, files: list[str] | None) -> list[str]:
 
 
 def _brief(task: str, workdir: str, files: list[str] | None) -> str:
-    parts = [task]
+    import time
+    # the model does not know the date: without this a cover reads "March 2026" in November
+    parts = [task, f"(Today is {time.strftime('%d %B %Y')}. Date the cover {time.strftime('%B %Y')} unless the brief "
+                   "gives another date.)"]
     for f in _inputs(workdir, files):
         p = Path(f)
         try:
@@ -92,8 +95,67 @@ def density_from(task: str, options: dict | None = None, density: str | None = N
     return detect(task, density or (options or {}).get("density"))
 
 
+ADD_RE = re.compile(r"^\[add to deck: ([^\]]+)\]\s*", re.S)
+
+
+def _plain_office(deck: str) -> bool:
+    """True for a deck in PowerPoint's stock look: the Office theme and colours, stock fonts, no logo in the master."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(deck) as z:
+            theme = z.read("ppt/theme/theme1.xml").decode("utf-8", "replace")
+            pics = [n for n in z.namelist() if n.startswith(("ppt/slideMasters/_rels", "ppt/slideLayouts/_rels"))
+                    and b"relationships/image" in z.read(n)]
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
+    fonts = set(re.findall(r'<a:latin typeface="([^"]*)"', theme)[:2])
+    stock = {"Calibri", "Calibri Light", "Aptos", "Aptos Display", "Arial", "Times New Roman", ""}
+    return bool(re.search(r'<a:clrScheme name="Office', theme)) and fonts <= stock and not pics
+
+
+def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
+                model: str | None = None, density: str | None = None) -> dict:
+    """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
+    when it is 16:9, else its colours and fonts), then they are appended to a copy of the deck. The original is never
+    changed; the copy is saved next to it as "<name> (updated).pptx"."""
+    from engines.forge.brief import slide_count
+    from engines.forge.build import build
+    from engines.forge.merge import append
+    if model:
+        os.environ.setdefault("FORGE_MODEL", model)
+    n = min(max(slide_count(task) or 1, 1), 12)
+    # A real brand (its own colours, fonts or logo) is followed; PowerPoint's stock Office theme is not a brand, and
+    # copying it gave Calibri and stock colours: those decks get the forge design system instead.
+    look = {} if _plain_office(deck) else brand_from("same style as the attached deck", [deck])[0]
+    res = build(_brief(task, workdir, files), workdir, n, client=client, task_id=task_id,
+                density=density_from(task, None, density), insert=True, **look)
+    src = Path(deck)
+    # the job works on a copy in "Meshpool outputs/<job>/": save next to the user's own deck when it is there
+    orig = src.parent.parent.parent / src.name
+    home = orig.parent if src.parent.parent.name == "Meshpool outputs" and orig.is_file() else src.parent
+    out = home / f"{src.stem} (updated){src.suffix}"
+    i = 2
+    while out.exists():
+        out = home / f"{src.stem} (updated {i}){src.suffix}"
+        i += 1
+    added = append(str(src), res["pptx"], str(out))
+    left = sum(len(v) for v in (res.get("unresolved") or {}).values())
+    return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
+            "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name} and saved it as {out.name} "
+                       f"(the original is unchanged). They follow the deck's look and were checked after rendering"
+                       + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
+    m = ADD_RE.match(task or "")
+    if m:                                                       # add_slides: into the user's own deck
+        name = m.group(1).strip()
+        deck = next((f for f in files or [] if Path(f).name == Path(name).name), None) or str(Path(workdir) / name)
+        if not Path(deck).is_file():
+            return {"ok": False, "answer": f"The deck {name} was not found.", "artifacts": [], "reason": "error"}
+        return add_to_deck(task[m.end():], deck, workdir=workdir, task_id=task_id, client=client,
+                           files=[f for f in files or [] if f != deck] + [deck], model=model, density=density)
     from engines.forge.build import build
     from engines.forge.brief import complete, slide_count
     attached = _inputs(workdir, files)                          # the CLI passes no files: the work folder's inputs
@@ -113,13 +175,23 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
             fixed, extra = pages_from_workbook(wbk)
         except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
             print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    # The computed pages count inside the slides asked for: the model writes the rest (at least 3: cover, argument,
+    # next steps). Asked for fewer than that leaves room for, the first pages (football field, DCF, comps) stay.
+    if fixed and len(fixed) > slides - 3:
+        keep = {id(p) for p in sorted(fixed, key=lambda p: p.get("rank", 99))[:max(2, slides - 3)]}
+        fixed = [p for p in fixed if id(p) in keep]               # the most useful pages, still in deck order
     look, prof = brand_from(task, attached)
-    res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
+    res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client, task_id=task_id,
                 density=mode, fixed_pages=fixed, extra_facts=extra, **look)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
-    answer = (f"Built {Path(pptx).name}: {slides + len(fixed)} slides in the forge design system ({mode} density), "
+    try:
+        from pptx import Presentation
+        made = len(Presentation(pptx).slides)               # what is in the file, not what was planned
+    except Exception:  # noqa: BLE001
+        made = max(slides, len(fixed) + 3)
+    answer = (f"Built {Path(pptx).name}: {made} slides in the forge design system ({mode} density), "
               + (f"{len(fixed)} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
                  if fixed else "")
               + (f"in the {prof.get('name') or 'company'} look ("

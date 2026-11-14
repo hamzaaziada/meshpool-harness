@@ -153,6 +153,8 @@ code,pre,kbd{font-family:var(--mono)}
 button.chip:hover{background:var(--hover);color:var(--ink)}
 .chip svg{width:14px;height:14px;flex:none}
 .topbar .chip{flex:0 1 auto;min-width:0}
+.chip .cl{overflow:hidden;text-overflow:ellipsis;min-width:0}   /* inline-flex ignores text-overflow on itself */
+.topbar #projChip{flex-shrink:1}.topbar #branchChip{flex-shrink:4}
 .tbtn{border:0;background:none;border-radius:var(--r-s);padding:5px 8px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-s);white-space:nowrap;flex:none}
 .tbtn:hover{background:var(--hover);color:var(--ink)}
 .tbtn[aria-pressed="true"]{background:var(--sel);color:var(--ink)}
@@ -386,7 +388,16 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .chip.ci.passing .cidot,.cidot.ok{background:var(--add)} .chip.ci.failing .cidot,.cidot.bad{background:var(--del)}
 .chip.ci.running .cidot,.cidot.run{background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
 .chg summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}.chg summary::-webkit-details-marker{display:none}
-.chg ul{max-height:240px;overflow:auto}.chg li .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.chg ul{max-height:320px;overflow:auto}.chg li .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.chg .badge{min-width:68px;text-align:center;flex:none}.chg .dir{color:var(--ink-3);font-size:var(--fs-xs)}.nw{white-space:nowrap}.zero{color:var(--ink-3)}
+.chg summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:rotate(-45deg);transition:transform .15s ease;margin-right:4px;flex:none;align-self:center}
+.chg[open] summary::before{transform:rotate(45deg)}
+.goalturn{display:flex;align-items:center;gap:6px;color:var(--ink-3);font-size:var(--fs-s);margin:8px 0}
+#pframe{background:var(--surface)}
+.sugg{max-width:760px;margin:0 auto 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.schip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;padding:5px 12px;font-size:var(--fs-s);min-height:30px;transition:border-color .12s ease,color .12s ease,transform .12s ease}
+.schip:hover{border-color:var(--pool);color:var(--ink);transform:translateY(-1px)}.schip svg{flex:none}
+.sugg .sx{margin-left:auto;opacity:.6}.sugg .sx:hover{opacity:1}
 .goalh{color:var(--ink-2)}.goalh b{font-weight:600;color:var(--ink)}.goalh .linkbtn{font-size:inherit}
 .plus{color:var(--add)}.minus{color:var(--del)}
 .prcard{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
@@ -400,7 +411,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .cw{padding:16px;display:flex;flex-direction:column;gap:24px;overflow:auto}
 .cw h4{margin:0 0 8px;font-size:var(--fs-xs);font-weight:500;color:var(--ink-3);display:flex;align-items:center;gap:8px}
 .cwbusy,.cwdone{font-weight:500;font-size:var(--fs-xs)}
-.cwbusy{color:var(--pool-text)} .cwdone{color:var(--add)}
+.cwbusy{color:var(--pool-text)} .cwdone{color:var(--add)} .cwstop{color:var(--ink-3);font-weight:500;font-size:var(--fs-xs)}
 .stepl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .stepl li{display:flex;gap:8px;align-items:flex-start;padding:4px 2px;font-size:var(--fs-s);line-height:1.4;color:var(--ink)}
 .stepl li.completed span:last-child{color:var(--ink-2)}
@@ -543,7 +554,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb-steps span{width:20px;height:3px;border-radius:3px;background:var(--line);transition:background-color .2s ease}
 .onb-steps span.on{background:var(--pool)}
 .onb-steps small{margin-left:6px;color:var(--ink-3);font-size:var(--fs-xs)}
-.onb-go{display:flex;align-items:center;gap:16px;position:sticky;bottom:0;background:var(--bg);padding:12px 0 4px;margin-top:8px}
+.onb-go{display:flex;align-items:center;gap:16px;position:sticky;bottom:0;background:var(--bg);padding:12px 0 4px;margin-top:8px;box-shadow:0 -12px 12px -4px var(--bg);z-index:2}
 .onb-go .sp{flex:1}
 .onb .res:empty{display:none}
 .onb #oRes{margin:8px 0 4px}.onb details summary.linkbtn{margin-left:0}
@@ -570,7 +581,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide */
 @media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),max(340px,32vw))}}
 @media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow);width:min(var(--pw,460px),100vw)}}
-@media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:264px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 12px 12px}
+@media (max-width:760px){.chg ul{max-height:none;overflow:visible}.app.sideopen::after{content:"";position:fixed;inset:0;background:var(--scrim);z-index:34}.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:264px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 12px 12px}
   /* settings on a phone: full screen, sections in a scrolling row on top */
   .scrim:not(.dlg-scrim){padding:0}.modal{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:100%;border-radius:0;border:0}
   .mnav{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px;gap:4px}
