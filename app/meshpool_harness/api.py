@@ -6,13 +6,13 @@ call sys.exit, and it writes only inside `workdir` (its .run/ folder) unless the
 MH_USAGE_LOG.
 
     from meshpool_harness import run_task
-    result = run_task("Fix the failing test in tests/test_api.py", workdir="/path/to/repo", preset="v4")
+    result = run_task("Fix the failing test in tests/test_api.py", workdir="/path/to/repo")
     if not result["ok"]:
         show(result["error"])
 
 Notes for app authors:
-- Settings are environment variables and are process-wide. `preset=` fills in unset MH_* variables for the whole
-  process (explicit variables win). Run tasks that need different presets in separate processes.
+- Settings are environment variables and are process-wide. Run tasks that need different settings in separate
+  processes.
 - The browser engine starts a Chromium daemon (engines/browser/ctl.py) that outlives the call. Stop it with
   `python -m engines.browser.ctl stop` when the app shuts down.
 - KeyboardInterrupt and SystemExit are not swallowed, so the app can still shut down normally.
@@ -28,7 +28,7 @@ ENGINES = ("code", "browser", "data", "sheets", "slides", "forge", "agent", "age
 
 
 def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | None = None,
-             preset: str | None = None, client=None, **kw) -> dict:
+             client=None, **kw) -> dict:
     """Run one task with the chosen engine and always return a dict: ok, answer, reason, turns, usage, error."""
     t0 = time.time()
     base = {"ok": False, "answer": "", "reason": "error", "turns": 0, "usage": {}, "error": None, "wall_s": 0.0}
@@ -39,11 +39,6 @@ def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | No
             raise ValueError(f"unknown engine {engine!r}; choose one of {', '.join(ENGINES)}")
         if not workdir or not os.path.isdir(workdir):
             raise ValueError(f"workdir does not exist: {workdir!r}")
-        if preset:
-            from .presets import PRESETS, apply
-            if preset not in PRESETS:
-                raise ValueError(f"unknown preset {preset!r}; choose one of {', '.join(PRESETS)}")
-            apply(preset)
         if engine in ("agent", "agent-work"):           # the app's own chat agent, headless (what users run)
             out = _run_agent(task, workdir, "work" if engine == "agent-work" else "code", **kw)
         else:

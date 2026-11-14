@@ -22,11 +22,6 @@ FIELDS = [
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
-    ("MH_HARNESS_PROFILE", "Agent setup", "minimal", "The tuned setup Meshpool uses by default. Leave it as is."),
-    ("MH_STREAM", "Show replies as they are written", "1", "On is faster and lets you see progress. Leave it on."),
-    ("MH_CACHE_KEY", "Reuse context between messages", "1", "Saves cost on long chats. Leave it on."),
-    ("MH_WIRE", "Connection type", "chat", "How Meshpool talks to the endpoint. Leave it on Standard unless "
-                                           "your provider says otherwise."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",

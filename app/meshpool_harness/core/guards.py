@@ -40,27 +40,23 @@ def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
         pass
 
 
-# Every guard can be switched off for ablation. MH_GUARDS=all|none|comma list overrides the profile default.
+# Every guard can be switched on or off for ablation. MH_GUARDS=all|none|comma list overrides the default set.
 ALL_GUARDS = {"progress", "repeat_search", "repeat_failure", "error_quote", "finish_check", "test_guard", "deliverables",
               "explore_lock"}
-MINIMAL_GUARDS = {"repeat_failure", "test_guard", "deliverables"}     # v2 minimal profile: safety and deliverables only
-
-
-def minimal() -> bool:
-    return os.environ.get("MH_HARNESS_PROFILE") == "minimal"
+DEFAULT_GUARDS = {"repeat_failure", "test_guard", "deliverables"}     # safety and deliverables only
 
 
 def enabled(name: str) -> bool:
     g = os.environ.get("MH_GUARDS")
     if g:
         return g == "all" or (g != "none" and name in g.split(","))
-    return name in (MINIMAL_GUARDS if minimal() else ALL_GUARDS)
+    return name in DEFAULT_GUARDS
 
 
 def test_guard_mode() -> str:
-    """strict (v1): any change to a tracked test file is rejected. additive (v2 default): new tests, even inside an
-    existing test file, are allowed; changed or deleted existing test lines are rejected. off: no check."""
-    return os.environ.get("MH_TEST_GUARD") or ("additive" if minimal() else "strict")
+    """additive (default): new tests, even inside an existing test file, are allowed; changed or deleted existing test
+    lines are rejected. strict: any change to a tracked test file is rejected. off: no check."""
+    return os.environ.get("MH_TEST_GUARD") or "additive"
 
 
 def key_error_line(output: str) -> str | None:

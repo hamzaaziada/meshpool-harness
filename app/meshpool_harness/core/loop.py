@@ -136,8 +136,8 @@ def run(*a, **kw):
                 ctx = kw.get("ctx") or {}
                 path = Path(os.environ["MH_TIMING_LOG"])
                 with open(path, "a") as f:
-                    f.write(json.dumps({"task_id": ctx.get("task_id", ""), "profile": os.environ.get("MH_HARNESS_PROFILE", "v1"),
-                                        "turns": res.turns, "wall_s": round(time.time() - t0, 1),
+                    f.write(json.dumps({"task_id": ctx.get("task_id", ""), "turns": res.turns,
+                                        "wall_s": round(time.time() - t0, 1),
                                         "model_s": round(res.usage.get("model_s", 0.0), 1),
                                         "tool_s": round(res.usage.get("tool_s", 0.0), 1),
                                         "model_calls": res.usage.get("model_calls", 0), "reason": res.reason}) + "\n")

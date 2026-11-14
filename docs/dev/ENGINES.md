@@ -4,9 +4,10 @@ A small, cheap, model-agnostic agent harness. One command routes a request to an
 sheets, slides, browser) and runs it on any OpenAI-compatible model. Built and measured on DeepSeek V4.1 Flash
 against Junie, Claude Code, Codex and a plain bash-only agent on the same tasks: see `results.md`.
 
-## v2 in one line
+## Benchmarked settings
 
-The benchmarked v2 configuration is the minimal profile with streaming: set `MH_HARNESS_PROFILE=minimal MH_STREAM=1 MH_CACHE_KEY=1`. Results: results.md (section 0a). New here? Read HANDOVER.md, then docs/IMPROVEMENT_PLAN.md.
+`meshpool run` turns on the benchmarked flag set for code and browser tasks (`ENGINE_FLAGS` in
+`meshpool_harness/cli.py`); explicit `MH_*` settings win. Results: `docs/BENCHMARKS.md`.
 
 ## Quickstart (your computer)
 

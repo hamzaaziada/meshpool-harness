@@ -16,53 +16,25 @@ from meshpool_harness.core.client import LiveClient  # noqa: E402
 from meshpool_harness.core.loop import Caps, run  # noqa: E402
 from meshpool_harness.core.tools import Workspace  # noqa: E402
 
-# Byte-stable system prompt (no task-specific text, no timestamps): shared prefix across all code tasks.
-SYSTEM = """You are a senior software engineer fixing issues in an existing repository with a few precise tool calls.
-
-Method (follow in order, keep each step short):
-1. Locate: grep for the identifiers, error text, or behaviour named in the task. Read only the relevant line ranges.
-2. Reproduce: run the most specific existing test, or write a tiny script/test that shows the bug. Note the failing line.
-3. Fix the root cause, not the symptom. The entry point named in the task is often a thin wrapper: follow the call
-   path to the shared function where the wrong behaviour originates, and fix it there so every caller (sibling APIs,
-   other formats/backends) gets the correct behaviour. Grep other call sites of anything you change. Keep the diff
-   minimal and match the surrounding style and the project's existing error types.
-   If a value has the wrong type or format where it crashes, trace it back to where that value is PRODUCED
-   (serializer, parser, constructor, config loader) and fix it there; patching the consumer that crashed leaves every
-   other consumer broken.
-4. Verify: rerun the reproduction and the closest existing tests. If something fails, quote the key error line and
-   reason about it before changing anything else.
-5. Finish: call finish with a two-sentence answer and the exact commands that passed after your last edit.
-
-Rules:
-- Do not modify or delete existing tests. You may add a new test file.
-- Use edit for changes to existing files; copy `old` exactly from read_file output without line numbers.
-- Never guess APIs: read the definition first.
-- Keep tool output small: use grep with a path, read_file with start/end, and targeted test selections.
-- Batch independent calls: when you need several reads or greps, issue them together in one turn.
-- If a command needs a container or special environment, use exactly the command form given in the task."""
-
-
-# v2 minimal profile (MH_HARNESS_PROFILE=minimal): a short prompt and a bare loop, the shape of the plain-DeepSeek baseline
-# that out-solved v1. Every v1 extra keeps its own flag, so the ablation can add each one back and measure it.
-SYSTEM_MIN = """You are a software engineer working in an existing repository or terminal environment. Use the tools.
+# Byte-stable system prompt (no task-specific text, no timestamps): shared prefix across all code tasks. A short prompt
+# and a bare loop, the shape of the plain-DeepSeek baseline; each extra below keeps its own flag for ablation.
+SYSTEM = """You are a software engineer working in an existing repository or terminal environment. Use the tools.
 Find the relevant code, reproduce the problem when you can, make the smallest correct change at the root cause, and
 run the relevant tests or commands to check it. Batch independent reads and searches in one turn. Keep tool output
 small (grep with a path, read_file with start/end, targeted tests). Do not modify or delete existing tests; you may
 add new tests. When the task is done and checked, call finish with a short answer and the commands that passed."""
 
-# feature flag -> (v1 default, minimal default)
-FEATURES = {"MH_TESTCMD": ("1", "1"), "MH_CODE_HINTS": ("1", "0"), "MH_ISSUE_REPRO": ("1", "0"),
-            "MH_NEAREST_TEST": ("1", "0"), "MH_REGRESSION_GATE": ("1", "0"), "MH_SCOPE_GATE": ("1", "0"),
-            "MH_RELATED_SITES": ("1", "0"), "MH_ESCALATE": ("1", "0")}
+# feature flag -> default (each can be turned on or off with its environment variable)
+FEATURES = {"MH_TESTCMD": "1", "MH_CODE_HINTS": "0", "MH_ISSUE_REPRO": "0", "MH_NEAREST_TEST": "0",
+            "MH_REGRESSION_GATE": "0", "MH_SCOPE_GATE": "0", "MH_RELATED_SITES": "0", "MH_ESCALATE": "0"}
 
 
 def feature(name: str) -> bool:
-    v1, mini = FEATURES[name]
-    return os.environ.get(name, mini if os.environ.get("MH_HARNESS_PROFILE") == "minimal" else v1) == "1"
+    return os.environ.get(name, FEATURES[name]) == "1"
 
 
 def checks_green(ws) -> bool:
-    """v2: attempt 1 ran out of budget but its last check after the last edit passed: keep it, do not restart."""
+    """Attempt 1 ran out of budget but its last check after the last edit passed: keep it, do not restart."""
     if not getattr(ws, "edits", 0):
         return False
     after = [c for c in ws.commands if c.get("kind") == "check" and c.get("after_edit") == ws.edits]
@@ -148,7 +120,7 @@ def restore(workdir: str, snap: tuple[str, str]) -> bool:
 
 
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: str = "deepseek-v4.1-flash",
-          client=None, phase: str = "phase_2_build", temperature: float = 0.0) -> dict:
+          client=None, phase: str = "phase_2_build", temperature: float | None = None) -> dict:
     cont = cdir = None
     mounted = True
     m = re.search(r"docker exec -w (\S+) (\S+) bash -lc", task)
@@ -227,12 +199,9 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
             task += "\n\n<environment_snapshot>\n" + snap[-2500:] + "\n</environment_snapshot>"
         except Exception:
             pass
-    minimal = os.environ.get("MH_HARNESS_PROFILE") == "minimal"
-    if os.environ.get("MH_TEMPERATURE") is not None:          # "" = the model's own default
+    if os.environ.get("MH_TEMPERATURE") is not None:          # "" = the model's own default (the default)
         temperature = float(os.environ["MH_TEMPERATURE"]) if os.environ["MH_TEMPERATURE"] else None
-    elif minimal:
-        temperature = None                                      # minimal: model default, like the plain baseline
-    system = SYSTEM_MIN if (minimal and os.environ.get("MH_SYSTEM") != "full") or os.environ.get("MH_SYSTEM") == "short" else SYSTEM
+    system = SYSTEM
     if os.environ.get("MH_MULTI_CMD") == "1":
         system += ("\nTurns are limited. When you need several independent facts (file ranges, greps, versions, listings), "
                    "get them in ONE bash_many call instead of one command per turn.")

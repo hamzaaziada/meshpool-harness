@@ -28,6 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# The benchmarked flag set for the code and browser engines of `meshpool run` (run C in docs/BENCHMARKS.md).
+ENGINE_FLAGS = {"MH_STREAM": "1", "MH_CACHE_KEY": "1", "MH_STALL": "1", "MH_TURN_NOTE": "1", "MH_TODO": "1",
+                "MH_ENV_SNAPSHOT": "1", "MH_DOOM": "1", "MH_MULTI_CMD": "1", "MH_400_WITHHOLD": "1",
+                "MH_BROWSER_PREFETCH": "1", "MH_BROWSER_FINISH_SAME_TURN": "1"}
+
 from meshpool_harness import config as _config  # noqa: E402
 
 ENGINES = ("research", "credit", "code", "data", "sheets", "slides", "forge", "general", "browser")
@@ -83,9 +88,9 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
             kw["model"] = os.environ["MH_MODEL"]
         saved = dict(os.environ)
-        if name in ("code", "browser") and not os.environ.get("MH_PRESET"):
-            from meshpool_harness.presets import apply as _preset
-            _preset("v3")                         # the benchmarked harness for code and browser tasks (run C)
+        if name in ("code", "browser"):
+            for k, v in ENGINE_FLAGS.items():     # explicit MH_* settings win
+                os.environ.setdefault(k, v)
         try:
             res = _engine(name).solve(task, workdir=wd, task_id=f"{task_id}-{name}", client=client, **kw)
         except Exception as e:   # one clean message instead of a traceback
