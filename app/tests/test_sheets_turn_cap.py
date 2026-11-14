@@ -143,3 +143,24 @@ def test_cap_runs_the_real_finish_check_on_the_saved_model(tmp_path):
     assert r["artifacts"] == [str(tmp_path / "Synthetic_Model.xlsx")]
     assert "last saved, checked version" in r["answer"] and "X1=pass" in r["answer"]
     assert r["rules"] and all(v in ("pass", "not_run") for v in r["rules"].values())
+
+
+def test_gateway_error_after_the_workbook_was_saved_still_delivers_it(tmp_path, monkeypatch):
+    """A live run died on a gateway 502 at turn ~47 with a saved workbook: the exception must not lose it."""
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+
+    class Flaky(MockClient):
+        def chat(self, **kw):
+            if not self.script:
+                raise RuntimeError("meshpool HTTP 502: {'raw': 'upstream request failed'}")
+            return super().chat(**kw)
+    c = Flaky([tool_call("write_file", {"path": "build_workbook.py", "content": "x = 1\n"}),
+               tool_call("bash", {"command": SAVE}), tool_call("bash", {"command": "echo refine"})])
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["ok"] is True and r["turns"] == 4 and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert "HTTP 502" in r["reason"] and "stopped on an error" in r["answer"] and "checked version" in r["answer"]
+    assert not (tmp_path / "build_workbook.py").exists() and not (tmp_path / "conv").exists()
+    # with nothing saved, the error still surfaces as before
+    with pytest.raises(RuntimeError, match="502"):
+        E.solve("Build a model", workdir=str(tmp_path / "empty"), task_id="t", max_turns=20, client=Flaky([]),
+                model="mock")

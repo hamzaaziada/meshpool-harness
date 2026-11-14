@@ -251,6 +251,7 @@ class SheetsWorkspace(Workspace):
         self.started = time.time()
         self.nudged = False
         self.wrapped = False                  # the ~80% "wrap up and finish" note was sent
+        self.turn = 0                         # last turn whose tools ran (set by turn_budget)
         self.before = set(_files(self.root))  # files already in the folder: never moved or deleted by the tidy-up
 
     def _allowed(self, q: Path) -> bool:
@@ -330,6 +331,7 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
     - at ~60% with no workbook: BUILD NOW (build_first);
     - at ~80%: stop adding features, run the checks, fix only failures, finish;
     - on the last two turns: finish now."""
+    ws.turn = turn                                    # last completed turn (reported if the loop raises)
     left = max_turns - turn                           # turns still to come after this note
     notes = [n for n in [build_first(turn, max_turns, ws)] if n]
     if left <= 0:
@@ -387,7 +389,8 @@ def salvage(r, ws, max_turns: int) -> dict:
     except Exception:                          # noqa: BLE001
         pass
     head = (f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
-            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish.")
+            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish."
+            if r.reason.startswith(CAPS) else f"The run stopped on an error before the model called finish ({r.reason}).")
     what = f"{rel}" + (f" ({len(tabs)} tabs: {', '.join(tabs)})" if tabs else "")
     lines = [head]
     if not msg:
@@ -466,11 +469,20 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
-            caps=Caps(max_turns=n), temperature=0.0, finish_check=finish_check, turn_hook=turn_budget)
+    crashed = False
+    try:
+        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
+                caps=Caps(max_turns=n), temperature=0.0, finish_check=finish_check, turn_hook=turn_budget)
+    except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose
+        if not ws.saved_workbook():            # workbook was already saved: check and deliver it, do not lose it
+            raise
+        from types import SimpleNamespace
+        crashed = True
+        r = SimpleNamespace(ok=False, answer="", artifacts=[], evidence=[], usage={}, turns=ws.turn + 1,
+                            reason=f"{type(e).__name__}: {e}")
     out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
            "reason": r.reason, "usage": r.usage}
-    if not r.ok and r.reason.startswith(CAPS):
+    if not r.ok and (crashed or r.reason.startswith(CAPS)):
         out.update(salvage(r, ws, n))
     try:
         out["artifacts"] = tidy(ws, out["artifacts"])
