@@ -540,6 +540,7 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 .onb .res:empty{display:none}
 .onb #oRes{margin:8px 0 4px}.onb details summary.linkbtn{margin-left:0}
 .scope{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.scope.prov{grid-template-columns:repeat(2,1fr);margin:4px 0 12px}
 .scopeopt{display:flex;flex-direction:column;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font:inherit;cursor:pointer}
 .scopeopt b{font-size:var(--fs-s);font-weight:600}.scopeopt small{font-size:var(--fs-xs);color:var(--ink-3);line-height:1.35}
 .scopeopt:hover{background:var(--hover)}
@@ -603,3 +604,28 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 ::-webkit-scrollbar-thumb{background:var(--line-3);border-radius:10px;border:3px solid transparent;background-clip:padding-box}
 ::-webkit-scrollbar-thumb:hover{background-color:var(--ink-3)}
 ::-webkit-scrollbar-corner{background:transparent}
+
+/* Connectors: search, categories, own sign-in client (the same tokens and sizes as the rest of Settings) */
+.cnbar{display:flex;flex-direction:column;gap:8px;margin:4px 0 12px}
+.cnbar input{width:100%;padding:7px 10px;border:1px solid var(--line-3);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit;font-size:var(--fs-s)}
+.cnbar input:focus,.cform input:focus,#cnl .keyrow input:focus,details .keyrow input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}
+details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(--line-3);border-radius:var(--r-s);background:var(--surface);color:var(--ink)}
+.cnchips{display:flex;gap:6px;flex-wrap:wrap}
+.ownclient{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+.ownclient .keyrow input{min-width:0}
+
+/* Import chats and context: one card per way in */
+.ctx-steps{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-direction:column;gap:12px}
+.ctx-steps>li{border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);padding:14px 16px}
+.ctx-steps>li>b{display:block;font-size:var(--fs-m);font-weight:600;color:var(--ink)}
+.ctx-steps p{margin:4px 0 8px;color:var(--ink-2);font-size:var(--fs-s);line-height:1.5}
+.ctx-steps small.muted{display:block;margin:6px 0;font-size:var(--fs-xs);color:var(--ink-3);line-height:1.45}
+.ctx-steps .dropzone{margin:10px 0 6px;background:var(--bg)}
+.ctx-steps textarea,.ctx-steps input{display:block;width:100%;margin:8px 0 0;border:1px solid var(--line-3);border-radius:var(--r-s);padding:8px 10px;background:var(--bg);color:var(--ink);font:inherit;font-size:var(--fs-s);line-height:1.5}
+.ctx-steps textarea{resize:vertical;min-height:96px}
+.ctx-steps textarea:focus,.ctx-steps input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--pool-soft)}
+.ctx-acts{display:flex;gap:8px;margin-top:8px}.ctx-acts.end{justify-content:flex-end}
+.ctx-src{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line-2)}
+.ctx-src:first-of-type{border-top:0}
+.ctx-src small.muted{display:inline;margin:0 0 0 6px}
+#oContext>p.muted{font-size:var(--fs-s);color:var(--ink-2);line-height:1.5}

@@ -429,9 +429,13 @@ def cli_status() -> dict:
         installed = d.lower() in [x.strip().lower() for x in cur.split(";")]
     else:
         want = os.path.realpath(cli)
-        cands = [Path.home() / ".local" / "bin" / "meshpool", Path("/usr/local/bin/meshpool"),
-                 Path("/opt/homebrew/bin/meshpool")]
-        installed = any(c.exists() and os.path.realpath(c) == want for c in cands)
+        cands = [Path("/usr/local/bin/meshpool"), Path("/opt/homebrew/bin/meshpool"),
+                 Path.home() / ".local" / "bin" / "meshpool"]
+        hit = next((c for c in cands if c.exists() and os.path.realpath(c) == want), None)
+        installed = hit is not None
+        # In ~/.local/bin it works only in terminal windows opened after the PATH line was added.
+        return {"available": True, "installed": installed, "path": cli,
+                "new_window": bool(hit and hit.parent == Path.home() / ".local" / "bin")}
     return {"available": True, "installed": installed, "path": cli}
 
 
@@ -448,7 +452,7 @@ def ensure_cli() -> None:
         pass
 
 
-def install_cli() -> dict:
+def install_cli(admin: bool = False) -> dict:
     cli = os.environ.get("MESHPOOL_CLI", "")
     if not cli or not Path(cli).exists():
         raise ValueError("The terminal command is only available in the installed app.")
@@ -468,12 +472,26 @@ def install_cli() -> dict:
                 winreg.SetValueEx(k, "Path", 0, kind, ";".join(parts + [d]))
         ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None)
         return {"ok": True, "message": "Done. Open a new terminal, go to a project folder and type: meshpool"}
+    # 1. A folder every terminal already has on its PATH (macOS lists /usr/local/bin in /etc/paths), so the command
+    #    works at once, in windows that are already open too.
+    for d in (Path("/usr/local/bin"), Path("/opt/homebrew/bin")):
+        if d.is_dir() and os.access(d, os.W_OK) and (d != Path("/opt/homebrew/bin") or
+                                                     (Path.home() / ".zprofile").exists()):
+            _link(d / "meshpool", cli)
+            return {"ok": True, "message": "Done. In any terminal window, go to a project folder and type: meshpool"}
+    # 2. From the Settings button on a Mac: /usr/local/bin with the administrator password, like other apps do.
+    if admin and sys.platform == "darwin":
+        q = cli.replace("'", "'\\''")                                  # quoted for the shell...
+        sh = f"mkdir -p /usr/local/bin && ln -sf '{q}' /usr/local/bin/meshpool"
+        sh = sh.replace("\\", "\\\\").replace('"', '\\"')          # ...then for the AppleScript string
+        r = subprocess.run(["osascript", "-e", f'do shell script "{sh}" with administrator privileges'],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return {"ok": True, "message": "Done. In any terminal window, go to a project folder and type: meshpool"}
+    # 3. ~/.local/bin, added to PATH in the shell start-up files; new terminal windows pick it up.
     bindir = Path.home() / ".local" / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
-    link = bindir / "meshpool"
-    if link.exists() or link.is_symlink():
-        link.unlink()
-    link.symlink_to(cli)
+    _link(bindir / "meshpool", cli)
     added = []
     line = 'export PATH="$HOME/.local/bin:$PATH"  # added by Meshpool'
     for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc", Path.home() / ".bash_profile"):
@@ -484,8 +502,14 @@ def install_cli() -> dict:
             with open(rc, "a", encoding="utf-8") as f:
                 f.write(("\n" if txt and not txt.endswith("\n") else "") + line + "\n")
             added.append(rc.name)
-    return {"ok": True, "message": "Done. Open a new terminal, go to a project folder and type: meshpool"
+    return {"ok": True, "message": "Done. Open a new terminal window, go to a project folder and type: meshpool"
             + (f" (PATH added to {', '.join(added)})" if added else "")}
+
+
+def _link(link: Path, target: str) -> None:
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    link.symlink_to(target)
 
 
 # ---------- OS permissions ----------------------------------------------------------------------------------------
