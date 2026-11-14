@@ -91,7 +91,8 @@ def _models() -> list[dict]:
         rows = W.models().get("models") or []
     except Exception:  # noqa: BLE001
         rows = []
-    cur = os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    prov, cur = _pi_model(os.environ.get("MH_MODEL"))
+    cur = cur if prov == "meshpool" else "deepseek-v4.1-flash"
     if not any(r.get("id") == cur for r in rows):
         rows = [{"id": cur}] + rows
     out = []
@@ -122,14 +123,33 @@ def _mcp_for_pi(root: Path) -> dict:
     return {"mcpServers": servers, "autoEnableCodemode": False}
 
 
+def _pi_model(model: str | None) -> tuple[str, str]:
+    """(Pi provider name, model id) for a Meshpool model id; one Pi cannot use falls back to the key endpoint."""
+    from meshpool_harness import providers as PV
+    prov, bare = PV.split(model)
+    if prov in ("anthropic", "gemini") and bare:
+        return prov, bare
+    return "meshpool", (bare if prov == "key" and bare else "deepseek-v4.1-flash")
+
+
 def prepare(root: Path) -> Path:
     """Write Pi's config folder for this launch. Returns the folder."""
     h = pi_home()
     (h / "sessions").mkdir(parents=True, exist_ok=True)
-    base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
+    from meshpool_harness import providers as PV
+    base = PV.key_base()
     models = {"providers": {"meshpool": {
         "baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
         "compat": {"supportsDeveloperRole": False}, "models": _models()}}}
+    for prov, env in (("anthropic", "ANTHROPIC_API_KEY"), ("gemini", "GEMINI_API_KEY")):
+        if PV.ready(prov):                     # the other providers Pi can use, keys from its environment
+            ids, _ = PV.list_models(prov)
+            models["providers"][prov] = {
+                "baseUrl": PV.endpoint(prov)[0], "api": "openai-completions", "apiKey": "$" + env,
+                "compat": {"supportsDeveloperRole": False},
+                "models": [{"id": i, "name": i, "reasoning": False, "input": ["text", "image"],
+                            "contextWindow": 200000, "maxTokens": 16384,
+                            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}} for i in ids]}
     (h / "models.json").write_text(json.dumps(models, indent=1), encoding="utf-8")
     try:
         mcp = _mcp_for_pi(root)
@@ -146,7 +166,8 @@ def prepare(root: Path) -> Path:
         settings = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else {}
     except ValueError:
         settings = {}
-    settings.update({"defaultProvider": "meshpool", "defaultModel": os.environ.get("MH_MODEL") or "deepseek-v4.1-flash",
+    dp, dm = _pi_model(os.environ.get("MH_MODEL"))
+    settings.update({"defaultProvider": dp, "defaultModel": dm,
                      "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"]})
     if os.name == "nt" and os.environ.get("MH_BASH"):
         settings["shellPath"] = os.environ["MH_BASH"]
@@ -263,8 +284,10 @@ class PiAgent:
         env = dict(os.environ)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE"):
             env.pop(k, None)
+        from meshpool_harness import providers as PV
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
-                    "MESHPOOL_API_KEY": os.environ.get("MESHPOOL_API_KEY", "")})
+                    "MESHPOOL_API_KEY": PV.key(), "ANTHROPIC_API_KEY": PV.anthropic_key(),
+                    "GEMINI_API_KEY": PV.gemini_key()})
         nb = str(Path(node).parent)
         env["PATH"] = nb + os.pathsep + env.get("PATH", "")      # npx and node for MCP servers the user adds
         log_dir = C.runs_dir() / "harness-logs"
@@ -460,11 +483,11 @@ class PiAgent:
 
     # ---------- model ------------------------------------------------------------------------------------------
     def _apply_model(self, initial: str | None = None):
-        want = self.model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+        prov, want = _pi_model(self.model or os.environ.get("MH_MODEL"))
         if want == initial:
             return
         try:
-            self._request({"type": "set_model", "provider": "meshpool", "modelId": want}, timeout=30)
+            self._request({"type": "set_model", "provider": prov, "modelId": want}, timeout=30)
         except PiError as e:
             self._emit({"type": "status", "text": f"Pi could not switch to {want}: {e}"})
 
@@ -474,7 +497,9 @@ class PiAgent:
             self._apply_model()
 
     def current_model(self) -> str:
-        return self.model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+        prov, m = _pi_model(self.model or os.environ.get("MH_MODEL"))
+        from meshpool_harness import providers as PV
+        return PV.join("key" if prov == "meshpool" else prov, m)
 
     # ---------- turns ------------------------------------------------------------------------------------------
     def send(self, text: str, images: list | None = None) -> str:

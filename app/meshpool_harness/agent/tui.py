@@ -21,7 +21,7 @@ HELP = """Commands
   /help            this list
   /clear           start a new conversation (same folder)
   /auto            switch between asking before changes and allowing them
-  /model [id]      show or change the model for this session
+  /model [id]      show or change the model: an id from your key, or chatgpt:<id>, anthropic:<id>, gemini:<id>
   /mcp             MCP servers and their tools
   /connect [app]   connect an app (Notion, Gmail, Slack...) or an MCP server by URL; no app lists them
   /tokens          tokens used in this session
@@ -251,10 +251,9 @@ def logo_lines(color: bool) -> list[str]:
 
 def _banner(term: Terminal, agent, mcp, logo: bool = True):
     st = term.st
-    from meshpool_harness import harnesses as HR
     acp = hasattr(agent, "manifest")
     name = agent.manifest.get("name") if acp else "Meshpool Code"
-    runs_on = (agent.manifest.get("runs_on") if acp else HR.credentials("meshpool-code").get("runs_on")) or ""
+    runs_on = (agent.manifest.get("runs_on") or "") if acp else ""
     term.p("")
     if logo:
         for row in B.banner(st.depth):
@@ -262,11 +261,9 @@ def _banner(term: Terminal, agent, mcp, logo: bool = True):
         term.p("")
     term.p(f"  {st.dim('Agent')}   {name}" + (st.dim(f" on {runs_on}") if runs_on else ""))
     if not acp:
-        model = agent.current_model() if hasattr(agent, "current_model") else ""
-        if HR.provider() == "chatgpt":
-            from meshpool_harness.core import chatgpt as CG
-            model = CG.resolve_model(model)
-        term.p(f"  {st.dim('Model')}   {model}")
+        from meshpool_harness import providers as PV
+        prov, bare = PV.split(agent.current_model() if hasattr(agent, "current_model") else "")
+        term.p(f"  {st.dim('Model')}   {bare}" + st.dim(f" on {PV.name(prov)}"))
     term.p(f"  {st.dim('Folder')}  {agent.root}")
     if mcp:
         parts = []

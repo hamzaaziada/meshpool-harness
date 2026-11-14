@@ -19,8 +19,10 @@ FIELDS = [
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
      "provider's key), chatgpt (your ChatGPT sign-in) or claude (your Claude sign-in, for Claude Code only)."),
-    ("ANTHROPIC_API_KEY", "Anthropic API key", "", "Optional. Runs Claude Code on an Anthropic API key instead of a "
-     "Claude sign-in. Only Claude Code uses it."),
+    ("ANTHROPIC_API_KEY", "Anthropic API key", "", "Optional. Claude models on your own Anthropic key, for Meshpool's "
+     "agents, Pi, Hermes and Claude Code."),
+    ("GEMINI_API_KEY", "Gemini API key", "", "Optional. Gemini models on your own Google AI Studio key, for "
+     "Meshpool's agents, Pi, Hermes and Gemini CLI."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
@@ -42,7 +44,7 @@ FIELDS = [
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
 ]
-SECRET = {"MESHPOOL_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
+SECRET = {"MESHPOOL_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
 
 

@@ -26,9 +26,15 @@ function termShellPicker() {
   return `<select id="tshell" aria-label="Shell" onchange="store('term_shell', this.value)">${Object.entries(sh.shells).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
 }
 // "deepseek-v4.1-flash" reads as "DeepSeek V4.1 Flash"; unknown ids are tidied the same way.
+// A model id carries its provider (providers.py): "chatgpt:gpt-6.1-sol", "gemini:...", or no prefix for the key endpoint.
+const PROV_PREFIX = ["chatgpt", "anthropic", "gemini", "claude", "google"];
+function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
+function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", claude: "Claude", gemini: "Gemini", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
-  return String(id || "").split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
+  const p = provOf(id);
+  if ((p === "claude" || p === "google") && bareModel(id) === "default") return p === "claude" ? "Claude (your plan)" : "Gemini (your plan)";
+  return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
 }
 function connMsg(d) {
   d = String(d || "");
@@ -579,7 +585,8 @@ function cfg() { // the settings that apply to the next message: the open thread
 function renderBar() {
   const c = cfg(); const h = harness(c.harness);
   $("#app").classList.toggle("planning", !!c.plan);
-  const modelLabel = h.models === "meshpool" ? (c.model ? modelName(c.model) : "Model") : (S.cur && c.model ? modelName(c.model) : "Agent's own model");   // a new thread's draft model is a Meshpool id
+  const fits = c.model && (!h.providers || h.providers.includes(provOf(c.model)));
+  const modelLabel = fits ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : (h.runs_on ? "Default · " + h.runs_on : "Agent's own model");
   $("#cbar").innerHTML = `
     <button class="pill" id="hPill" title="Agent: who does the work in this thread">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
     <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
@@ -748,7 +755,7 @@ function harnessPop(anchor) {
   const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], [other, "Other agents"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && h.available !== false && h.mode === m); if (!hs.length) return "";
-    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.ready === false ? "style='opacity:.6'" : ""}><span class="ol">${esc(h.name)}${h.ready === false ? " · needs setup" : ""}<span class="od">${esc(h.ready === false ? (h.setup || "") : (h.runs_on ? "On " + h.runs_on + ". " : "") + (h.description || ""))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+    return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.ready === false ? "style='opacity:.6'" : ""}><span class="ol">${esc(h.name)}${h.ready === false ? " · needs setup" : ""}<span class="od">${esc(h.ready === false ? (h.setup || "") : (h.tagline || h.description || ""))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
   }).join("")}</div><div class="pf"><button class="opt" id="hManage">${ICON.plus}<span class="ol">Add or manage agents</span></button></div>`;
   const p = openPop(anchor, html, {width: 380});
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
@@ -759,35 +766,75 @@ function harnessPop(anchor) {
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
 }
+function agentFor(prov) {   // the agent to switch to for a model the current agent cannot run
+  const only = {claude: "claude-code", google: "gemini-cli"}[prov]; if (only) return only;
+  const mine = S.appMode === "code" ? "meshpool-code" : "meshpool-work";
+  return harness(mine).providers?.includes(prov) ? mine : (S.harnesses.find(h => h.providers?.includes(prov) && h.available !== false) || {}).id;
+}
+async function connectProvider(g) {   // a provider that is not set up yet: sign in, or add its key in Settings
+  closePop();
+  if (["chatgpt", "claude", "google"].includes(g.id)) {
+    try { const r = await post("/api/harness-login", {id: g.id}); toast(r.message); } catch (e) { return toast(e.message); }
+    const t0 = Date.now(); const tick = async () => { await loadModels(true); const ok = (S.models.groups || []).find(x => x.id === g.id)?.ready; if (ok) { await loadHarnesses(); await loadSettings(); renderBar(); toast(g.name + " is connected."); } else if (Date.now() - t0 < 600000) setTimeout(tick, 4000); };
+    setTimeout(tick, 4000); return;
+  }
+  openSettings("general");
+}
+async function pickModel(id) {
+  const c = cfg(); const h = harness(c.harness); const prov = provOf(id);
+  if (h.providers && !h.providers.includes(prov)) {
+    const to = agentFor(prov); if (!to) return toast("No agent here can run these models.");
+    const why = `${h.name} cannot run ${(S.models.groups || []).find(g => g.id === prov)?.name || "these"} models`;
+    if (S.cur) { toast(`${why}. Started a new thread with ${harness(to).name}.`); store("harness_" + S.appMode, to); newThread(); }
+    else toast(`${why}, so this thread uses ${harness(to).name}.`);
+    S.draft.harness = to; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
+  }
+  if (S.cur && h.type === "acp" && S.cur.view?.harness?.provider && prov !== S.cur.view.harness.provider) {
+    toast(`This thread runs ${h.name} on ${S.cur.view.harness.runs_on}. Started a new thread for this model.`);
+    newThread(); S.draft.harness = h.id; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
+  }
+  setModel(id);
+}
 function modelPop(anchor) {
   const c = cfg(); const h = harness(c.harness);
-  if (h.models !== "meshpool") {
-    const hm = S.cur?.view?.harness_models || [];
-    const html = `<div class="pl">${hm.length ? hm.map(m => `<button class="opt" data-id="${esc(m.id)}"><span class="ol">${esc(m.name)}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("") : `<div class="pe">${esc(h.name)} uses its own model and account. ${S.cur ? "It did not offer a list of models." : "Start the thread to see the models it offers."}</div>`}</div>`;
-    const p = openPop(anchor, html, {width: 320});
-    $$(".opt[data-id]", p).forEach(b => b.onclick = () => { closePop(); setModel(b.dataset.id); });
-    return;
-  }
-  const M = S.models || {models: [], favorites: []};
-  const p = openPop(anchor, `<div class="ph"><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
-    <div class="pf" style="display:flex;gap:4px"><button class="opt" id="mRefresh" style="flex:1">${ICON.refresh}<span class="ol">Refresh list</span></button><button class="opt" id="mManage" style="flex:1">${ICON.gear}<span class="ol">Endpoint and key</span></button></div>`, {width: 400});
+  const M = S.models || {models: [], favorites: [], groups: []};
+  const own = S.cur && h.models !== "meshpool" ? (S.cur.view?.harness_models || []) : [];   // models a running agent offers itself
+  // First choose where the model runs (a tab per provider), then the model.
+  const keyName = (M.groups || []).find(g => g.id === "key")?.name || "Meshpool";
+  const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]], ["claude", "Claude", ["anthropic", "claude"]], ["gemini", "Gemini", ["gemini", "google"]]];
+  let tab = (TABS.find(t => t[2].includes(provOf(c.model))) || TABS[0])[0];
+  const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:6px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
+  const p = openPop(anchor, `<div class="ph"><div role="tablist" aria-label="Where the model runs" id="mtabs" style="display:flex;gap:4px;margin-bottom:6px"></div><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
+    <div class="pf" style="display:flex;gap:4px"><button class="opt" id="mRefresh" style="flex:1">${ICON.refresh}<span class="ol">Refresh</span></button><button class="opt" id="mManage" style="flex:1">${ICON.gear}<span class="ol">Providers and keys</span></button></div>`, {width: 440});
   const draw = () => {
+    $("#mtabs").innerHTML = TABS.map(tabBtn).join("");
+    $$("#mtabs [data-tab]").forEach(x => x.onclick = () => { tab = x.dataset.tab; draw(); $("#mq").focus(); });
+    const shown = (TABS.find(t => t[0] === tab) || TABS[0])[2];
     const q = $("#mq").value.trim().toLowerCase();
-    const rows = M.models.filter(m => !q || m.id.toLowerCase().includes(q) || modelName(m.id).toLowerCase().includes(q) || m.provider.toLowerCase().includes(q));
-    const favs = rows.filter(m => M.favorites.includes(m.id));
-    const byP = {}; rows.forEach(m => (byP[m.provider] = byP[m.provider] || []).push(m));
-    const row = m => `<button class="opt" data-id="${esc(m.id)}"><span class="ol" title="${esc(m.id)}">${esc(modelName(m.id))}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span></button>`;
+    const hit = m => !q || m.id.toLowerCase().includes(q) || modelName(m.id).toLowerCase().includes(q) || (m.provider || "").toLowerCase().includes(q);
+    const row = (m, note) => `<button class="opt" data-id="${esc(m.id)}" ${note ? "style='opacity:.7'" : ""}><span class="ol" title="${esc(m.id)}">${esc(modelName(m.id))}${m.id === M.default ? ` <span class="cap">default</span>` : ""}${(m.caps || []).map(x => ` <span class="cap">${esc(x)}</span>`).join("")}${note ? `<span class="od">${esc(note)}</span>` : ""}</span>${m.id === c.model ? `<span class="on">${ICON.check}</span>` : ""}${provOf(m.id) === "key" ? `<span class="star ${M.favorites.includes(m.id) ? "f" : ""}" data-star="${esc(m.id)}" title="Favorite">${ICON.star}</span>` : ""}</button>`;
     let html = "";
-    if (M.error) html += `<div class="pe">${esc(M.error)}</div>`;
-    if (favs.length) html += `<div class="grp">Favorites</div>` + favs.map(row).join("");
-    for (const [prov, list] of Object.entries(byP)) html += `<div class="grp">${esc(prov)}</div>` + list.map(row).join("");
-    if (!rows.length && !M.error) html += `<div class="pe">No models match.</div>`;
+    if (own.length) html += `<div class="grp">${esc(h.name)} on ${esc(h.runs_on || "its account")}</div>` + own.filter(m => !q || (m.name || m.id).toLowerCase().includes(q)).map(m => `<button class="opt" data-own="${esc(m.id)}"><span class="ol">${esc(m.name)}</span>${m.id === c.model || bareModel(c.model) === m.id ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+    const favs = M.models.filter(m => M.favorites.includes(m.id) && hit(m) && shown.includes(provOf(m.id)));
+    if (favs.length && !own.length) html += `<div class="grp">Favorites</div>` + favs.map(m => row(m)).join("");
+    for (const g of (M.groups || []).filter(g => shown.includes(g.id))) {
+      const can = !h.providers || h.providers.includes(g.id);
+      const note = can ? "" : `Runs in ${harness(agentFor(g.id) || "").name || "another agent"}`;
+      html += `<div class="grp">${esc(g.name)}</div>`;
+      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${["chatgpt", "claude", "google"].includes(g.id) ? "Sign in" : "Add a key"}<span class="od">${esc(g.only ? `Runs in ${harness(g.only).name}. ` : "")}${esc(g.setup)}</span></span></button>`; continue; }
+      const rows = g.models.filter(hit);
+      if (g.error && !q) html += `<div class="pe">${esc(g.error)}</div>`;
+      html += rows.map(m => row(m, note || (g.only ? `Runs in ${harness(g.only).name}, which picks the model` : ""))).join("");
+    }
+    if (!html) html = `<div class="pe">No models match.</div>`;
     $("#ml").innerHTML = html; p._place();
-    $$("#ml .opt").forEach(b => b.onclick = async e => {
+    $$("#ml .opt[data-id]").forEach(b => b.onclick = async e => {
       const st = e.target.closest("[data-star]");
       if (st) { e.stopPropagation(); const on = !M.favorites.includes(st.dataset.star); try { S.models = await post("/api/models/favorite", {id: st.dataset.star, on}); Object.assign(M, S.models); draw(); } catch (err) { toast(err.message); } return; }
-      closePop(); setModel(b.dataset.id);
+      closePop(); pickModel(b.dataset.id);
     });
+    $$("#ml .opt[data-own]").forEach(b => b.onclick = () => { closePop(); setModel(b.dataset.own); });
+    $$("#ml .opt[data-connect]").forEach(b => b.onclick = () => connectProvider((M.groups || []).find(g => g.id === b.dataset.connect)));
   };
   $("#mq").oninput = draw; draw(); $("#mq").focus();
   $("#mq").onkeydown = e => { if (e.key === "Enter") { const first = $("#ml .opt"); if (first) first.click(); } };
@@ -1411,8 +1458,14 @@ async function renderSection(sec) {
       <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box. A Claude subscription runs Claude Code only.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
-      <label class="field"><span>Default model for new threads</span><select id="sModel"></select><small>Each thread can use its own model from the picker in the message box.</small></label>
-      <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>`;
+      <label class="field"><span>Default model for new threads</span><select id="sModel"></select><small>Each thread can use its own model, from any provider below, in the model picker in the message box.</small></label>
+      <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
+      <h3 style="font-size:15px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run. Connect as many as you like; each one's models show in the model picker. Claude and Google sign-ins run only in Claude Code and Gemini CLI, as Anthropic's and Google's terms require.</p>
+      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool Code, Work and Codex.", "signin"], ["claude", "Claude subscription", "Your Claude plan. Runs in Claude Code.", "signin"], ["google", "Gemini (Google sign-in)", "Your Google AI plan. Runs in Gemini CLI.", "signin"], ["ANTHROPIC_API_KEY", "Anthropic API key", "Claude models for every agent except Codex and Gemini CLI.", "key"], ["GEMINI_API_KEY", "Gemini API key", "Gemini models for every agent except Codex and Claude Code. Free at aistudio.google.com.", "key"]].map(([id, name, desc, kind]) => {
+        if (kind === "signin") return `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`;
+        const f = (S.settings.fields || []).find(x => x.key === id) || {};
+        return `<li><span class="tg"><b>${name}</b><small>${desc}</small><span class="keyrow" style="margin-top:6px"><input data-pkey="${id}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) + ". Paste a new key to replace it." : "Paste the key"}"><button class="btn" data-pkeysave="${id}" type="button">Save</button></span></span>${f.set ? `<span class="badge added">Saved</span>` : ""}</li>`;
+      }).join("")}</ul><div class="res" id="sProvRes"></div>`;
     const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sProv").onchange = async () => {
@@ -1421,6 +1474,15 @@ async function renderSection(sec) {
       try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New threads use " + harness(modeHarness()).name + " on " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
     };
     $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
+    $$("[data-psign]", b).forEach(x => x.onclick = async () => {
+      const id = x.dataset.psign; try { const r = await post("/api/harness-login", {id}); RES("sProvRes").className = "res" + (r.ok ? "" : " bad"); RES("sProvRes").textContent = r.message; } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; return; }
+      const t0 = Date.now(); const tick = async () => { if (!RES("sProvRes")) return; await loadSettings(); if (S.settings.signed_in?.[id]) { await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
+      setTimeout(tick, 3000);
+    });
+    $$("[data-pkeysave]", b).forEach(x => x.onclick = async () => {
+      const k = x.dataset.pkeysave, v = $(`[data-pkey="${k}"]`, b).value.trim(); if (!v) { $(`[data-pkey="${k}"]`, b).focus(); return; }
+      try { await post("/api/settings", {values: {[k]: v}}); await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Saved. Its models are in the model picker."); } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; }
+    });
     const save = async () => {
       const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();
       await post("/api/settings", {values}); if ($("#sModel").value) await post("/api/models/default", {id: $("#sModel").value});
@@ -1684,17 +1746,13 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Codex runs on an API key or a ChatGPT sign-in; Claude Code runs on a Claude sign-in or an Anthropic API key. Other agents can be added too.</p>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a thread. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: Codex on an API key or ChatGPT, Claude Code on a Claude sign-in or an Anthropic key, Gemini CLI on a Google sign-in or a Gemini key. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}${h.id === "claude-code" ? `<span class="keyrow" style="margin-top:6px"><input id="hAnth" type="password" autocomplete="off" spellcheck="false" placeholder="${S.settings.fields?.find(f => f.key === "ANTHROPIC_API_KEY")?.set ? "Anthropic API key saved. Paste a new one to replace it." : "Or paste an Anthropic API key"}"><button class="btn" id="hAnthSave" type="button">Save</button></span>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+      <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:15px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
     $$("[data-rm]", b).forEach(x => x.onclick = () => act({remove: x.dataset.rm}));
-    $("#hAnthSave")?.addEventListener("click", async () => {
-      const k = $("#hAnth").value.trim(); if (!k) { $("#hAnth").focus(); return; }
-      try { await post("/api/settings", {values: {ANTHROPIC_API_KEY: k}}); await loadSettings(); await loadHarnesses(); renderSection("harnesses"); renderBar(); toast("Claude Code runs on your Anthropic API key when Claude is not your provider."); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; }
-    });
     $$("[data-login]", b).forEach(x => x.onclick = async () => {
       try { const r = await post("/api/harness-login", {id: x.dataset.login}); RES("hRes").className = "res " + (r.ok ? "" : "bad"); RES("hRes").textContent = r.message; }
       catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; return; }

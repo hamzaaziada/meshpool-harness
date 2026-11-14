@@ -173,7 +173,7 @@ class Session:
             data = _saved(resume_id)
             if not data:
                 raise KeyError(resume_id)
-            self.harness = HR.get(data.get("harness") or "meshpool-code")
+            self.harness = HR.get(data.get("harness") or "meshpool-code", read_meta(resume_id).get("model") or None)
             self.kind = data.get("kind") or self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
                 cls = PiAgent if self.harness["type"] == "pi" else ACPAgent
@@ -195,7 +195,7 @@ class Session:
                 hid = "meshpool-code" if kind == "code" else "meshpool-work"
                 if not HR.get(hid).get("ready", True):     # e.g. a Claude subscription alone: Claude Code
                     hid = HR.PROVIDER_AGENT.get(HR.provider(), hid)
-            self.harness = HR.get(hid)
+            self.harness = HR.get(hid, model)               # credentials from the provider of the thread's model
             if not self.harness.get("ready", True):        # nothing to run on under the chosen provider
                 raise ValueError(f"{self.harness['name']} cannot run yet. {self.harness.get('setup') or ''}".strip())
             self.kind = kind if kind in HR.MODES else self.harness.get("mode", "code")
@@ -495,6 +495,16 @@ class Session:
 
     def set_model(self, model: str):
         model = (model or "").strip()
+        from meshpool_harness import providers as PV
+        sup = self.harness.get("providers") or []
+        prov = PV.split(model)[0] if model else None
+        if prov and sup and prov not in sup:
+            raise ValueError(f"{self.harness['name']} cannot run {PV.name(prov)} models. Start a new thread with an "
+                             "agent that can.")
+        if (prov and self.harness["type"] == "acp" and self.harness.get("provider")
+                and prov != self.harness["provider"] and self.agent.acp_session):
+            raise ValueError(f"This thread runs {self.harness['name']} on {self.harness.get('runs_on')}. To use "
+                             f"{PV.name(prov)}, start a new thread.")
         if hasattr(self.agent, "set_model"):
             self.agent.set_model(model)
         else:
@@ -575,7 +585,8 @@ class Session:
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
-                "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models")},
+                "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models", "provider",
+                                                             "providers", "runs_on")},
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan,
@@ -608,8 +619,10 @@ def create(body: dict) -> dict:
         harness = routed["harness"]
     model = body.get("model") or None
     try:
-        if HR.get(harness or HR.default_for(kind)).get("models") != "meshpool":
-            model = None                            # its own account picks the model; a Meshpool id would not exist
+        from meshpool_harness import providers as PV
+        h = HR.get(harness or HR.default_for(kind))
+        if model and h.get("providers") and PV.split(model)[0] not in h["providers"]:
+            model = None                            # a model this agent cannot run: it uses its own default
     except (KeyError, ValueError):
         pass
     s = Session(workdir=wd, mode=body.get("mode"), harness=harness,

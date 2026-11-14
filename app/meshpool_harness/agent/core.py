@@ -645,12 +645,21 @@ class Agent:
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
-        base = (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-                or "https://llm.meshpool.ai/v1").rstrip("/")
-        key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-        wire = "chatgpt" if os.environ.get("MH_PROVIDER") == "chatgpt" else os.environ.get("MH_WIRE", "chat")
+        # The model's provider decides where the call goes (providers.py): the key endpoint in settings, the
+        # ChatGPT sign-in, or an Anthropic or Gemini key.
+        from meshpool_harness import providers as PV
+        prov, body["model"] = PV.split(body["model"])
+        if prov in PV.SIGNIN_ONLY:
+            raise RuntimeError(f"{PV.name(prov)} models run only in {'Claude Code' if prov == 'claude' else 'Gemini CLI'}. "
+                               "Choose that agent, or another model.")
+        base, key = PV.endpoint(prov)
+        base = base if prov != "key" else (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+                                           or base).rstrip("/")
+        key = key if prov != "key" else (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or key)
+        wire = "chatgpt" if prov == "chatgpt" else ("chat" if prov != "key" else os.environ.get("MH_WIRE", "chat"))
         if not key and wire != "chatgpt":
-            raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
+            raise RuntimeError(PV.setup(prov) if prov != "key" else
+                               f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned = None, False, False
@@ -715,6 +724,7 @@ class Agent:
                     from meshpool_harness.core.client import _withhold_latest_output
                     if _withhold_latest_output(self.messages):   # content-tied gateway 400: drop the worst output
                         body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
                         continue
                 if attempt >= 5:
                     raise
@@ -723,6 +733,7 @@ class Agent:
                     if size > 150000:                      # shrink it instead of resending the same thing
                         _compact(self.messages, keep_recent=8)
                         body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
                         self.emit({"type": "status", "text": "The request was very large; older tool outputs were "
                                                              "shortened before trying again."})
                 self.emit({"type": "status", "text": _retry_text(msg, attempt)})

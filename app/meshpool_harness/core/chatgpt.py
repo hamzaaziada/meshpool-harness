@@ -321,6 +321,9 @@ def models() -> list[str]:
 
 def default_model() -> str:
     from meshpool_harness import config as C
+    m = (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip()
+    if m.startswith("chatgpt:") and m[8:]:
+        return m[8:]                                  # the default model chosen in the picker
     return (C.read().get("MH_CHATGPT_MODEL") or os.environ.get("MH_CHATGPT_MODEL") or DEFAULT_MODEL).strip()
 
 

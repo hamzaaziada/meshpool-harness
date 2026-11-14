@@ -133,16 +133,6 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
-    if os.environ.get("MH_PROVIDER") == "chatgpt":       # the models the user's ChatGPT plan offers
-        from meshpool_harness.core import chatgpt as CG
-        if refresh:
-            CG._MODELS.update(t=0.0)
-        ids = CG.models()
-        default = CG.default_model()
-        rows = [{"id": m, "name": m, "provider": "OpenAI", "caps": ["vision", "reasoning"], "context": None}
-                for m in dict.fromkeys(([default] if default not in ids else []) + ids)]
-        return {"models": rows, "favorites": [], "default": default, "base_url": CG.base_url(),
-                "error": "" if ids else "Could not list the models your ChatGPT plan offers; using the default."}
     base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
     key = os.environ.get("MESHPOOL_API_KEY") or ""
     cache_key = base + "|" + key[-6:]
@@ -183,11 +173,17 @@ def models(refresh: bool = False) -> dict:
                 " Check your API key." if e.code in (401, 403) else "")
         except Exception as e:  # noqa: BLE001
             err = f"Could not list models: {e}"
+    from meshpool_harness import providers as PV
+    dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}
-    if default not in ids:
-        rows = [{"id": default, "name": default, "provider": _provider_of(default, ""), "caps": [],
+    if dprov == "key" and dbare not in ids and key:
+        rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
-    return {"models": rows, "favorites": fav, "default": default, "error": err, "base_url": base}
+    # One section per provider (the key endpoint, ChatGPT, Claude, Gemini), ready or with what to set up.
+    groups = PV.groups(rows, err, refresh=refresh)
+    flat = [m for g in groups for m in g["models"]]
+    return {"models": flat, "groups": groups, "favorites": fav, "default": default,
+            "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
 def set_favorite(mid: str, on: bool) -> dict:
