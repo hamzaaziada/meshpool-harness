@@ -135,3 +135,20 @@ def test_work_never_builds_slides_or_workbooks_by_hand(tmp_path):
     assert "make_spreadsheet" in w._engine_only("write_file", {"path": "m.py", "content": "from openpyxl import Workbook\nwb = Workbook()"})
     assert w._engine_only("bash", {"command": "python -c 'import openpyxl; openpyxl.load_workbook(\"a.xlsx\")'"}) == ""
     assert Agent(str(tmp_path))._engine_only("bash", {"command": "python -c 'Presentation()'"}) == ""   # Code: free
+
+
+def test_memory_keeps_facts_not_work_items_and_no_dashes(tmp_path, monkeypatch):
+    """Notes about building Meshpool (to-dos, bugs, release plans) were saved as 'facts' and shown in every chat."""
+    import pytest as _pt
+    from meshpool_harness import assistant as A
+    monkeypatch.setattr(A, "_dir", lambda: tmp_path)
+    (tmp_path / "memory.md").write_text("- Meshpool TODO list item: fix the agent stopping after ~80 steps\n"
+                                        "- Meshpool feature request: an in-app update flow — Update and Relaunch\n"
+                                        "- Prefers concise answers — no fluff\n")
+    assert A.memory() == "- Prefers concise answers, no fluff"                  # cleaned on first read
+    assert "TODO" not in (tmp_path / "memory.md").read_text()
+    with _pt.raises(ValueError, match="not tasks"):
+        A.remember("Meshpool bug to fix in the new version: the agent stops after 80 steps")
+    assert A.remember("Runs a consulting firm — mostly banks") == "Saved to memory."
+    assert "Runs a consulting firm, mostly banks" in A.memory()
+    assert A.PLAIN in A.context_block()
