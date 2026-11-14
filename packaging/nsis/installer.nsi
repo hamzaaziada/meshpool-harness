@@ -21,7 +21,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 !define MUI_UNICON "Meshpool\Meshpool.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Install Meshpool"
-!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, three agents (Meshpool, Pi and Hermes), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
+!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, the Meshpool Code, Meshpool Work, Pi and Hermes agents (Codex and OpenCode download on first use), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Meshpool.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Meshpool now"
 !insertmacro MUI_PAGE_WELCOME

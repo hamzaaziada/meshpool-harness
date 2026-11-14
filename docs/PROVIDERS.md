@@ -25,7 +25,7 @@ Sign-up asks for one provider, and that provider sets the defaults. You can conn
 | Provider | Credentials | Agents that can use it | Model id |
 |---|---|---|---|
 | Meshpool (or another OpenAI-compatible endpoint) | `MESHPOOL_API_KEY`, `MESHPOOL_BASE_URL` | every agent | `deepseek-v4.1-flash` |
-| ChatGPT subscription | The Codex sign-in in `~/.codex/auth.json` | every agent (Pi and Hermes through the local relay) | `chatgpt:<model>` |
+| ChatGPT subscription | The Codex sign-in in `~/.codex/auth.json` | every agent (Pi, Hermes and OpenCode through the local relay) | `chatgpt:<model>` |
 
 Meshpool does not support Claude or Gemini accounts: their makers' terms let a subscription sign-in run only their own agents, so Meshpool keeps to providers every agent can use.
 
