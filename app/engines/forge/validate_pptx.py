@@ -682,8 +682,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 failures.append(F("P13", "source_position", f"Slide {n}: the source line is not at the bottom of the "
                                   "slide.", slide=n, fix_scope="renderer"))
 
-        # ---------------- P14 text agrees with chart
-        if s["charts"]:
+        # ---------------- P14 text agrees with chart (pages computed from a model are traced cell by cell instead)
+        if s["charts"] and "computed:1" not in (s.get("name") or ""):
             vals = [v for c in s["charts"] for se in c["series"] for v in se["values"]]
             derived = set(vals)
             if R["agreement"]["allow_derived"]:

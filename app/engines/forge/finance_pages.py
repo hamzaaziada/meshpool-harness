@@ -163,7 +163,8 @@ def football_field(bk: Book) -> dict | None:
                                "Gordon / exit-multiple pair for the DCF", "prov": prov}}
 
 
-def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables") -> dict | None:
+def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", style: str = "benchmark",
+          logos: dict | None = None) -> dict | None:
     med = bk.names.get(f"{prefix}ev_ebitda_median")
     if not med:
         return None
@@ -219,6 +220,35 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables") -
         bullets.append({"text": "Loss-making rows show NM and drop out of the statistics"})
     notes = ["NM: not meaningful (negative or zero denominator); excluded from the statistics"] if nm else []
     first = len(table_rows)
+    if style == "benchmark":                            # peers lined up, one panel per multiple, median lines
+        def raw(lab):
+            c = dict(cols).get(lab)
+            return [(_num(ws.cell(row=r, column=c).value) if c else None) for r in rows]
+        if is_prec:
+            yr = dict(cols).get("Date")
+            names = [f"{ws.cell(row=r, column=dict(cols)['Target']).value} ({ws.cell(row=r, column=dict(cols)['Acquirer']).value}"
+                     + (f", {str(ws.cell(row=r, column=yr).value)[:4]})" if yr else ")") for r in rows]
+            spec = [("EV / EBITDA", "ev_ebitda", "x"), ("EV / Revenue", "ev_rev", "x"), ("Premium", "premium", "%")]
+        else:
+            names = [str(ws.cell(row=r, column=1).value) for r in rows]
+            spec = [("EV / EBITDA", "ev_ebitda", "x"), ("EV / Revenue", "ev_rev", "x"), ("EBITDA margin", "margin", "%")]
+        panels = []
+        for lab, key, unit in spec:
+            vals = raw(lab)
+            k_ = 100.0 if unit == "%" else 1.0
+            st = {q: _num(bk.name(f"{prefix}{key}_{q}")) for q in ("median", "p25", "p75")}
+            panels.append({"title": {"Premium": "Premium paid (%)", "EBITDA margin": "EBITDA margin (%)"}.get(
+                lab, f"{lab} (x)"), "unit": unit, "decimals": 1,
+                "values": [None if v is None else v * k_ for v in vals],
+                **{q: (None if v is None else v * k_) for q, v in st.items()}})
+        bullets = [b for b in bullets if not b["text"].startswith("Loss-making")]
+        if nm:
+            bullets.append({"text": "NM: not meaningful (a loss); the company drops out of that median"})
+        return {"archetype": "benchmark", "fixed": True, "title": title, "title_prov": prov,
+                "benchmark": {"companies": names, "panels": panels, "logos": logos or {}},
+                "takeaway": {"text": "Dashed line: median; dotted lines: 25th and 75th percentiles"},
+                "bullets": bullets[:4], "source": {"text": bk.sources(ws, hr) or f"{FIRM_SRC} ({ws.title} tab)",
+                                                   "prov": prov}}
     return {"archetype": "table_focus", "fixed": True, "title": title, "title_prov": prov,
             "bullets": bullets,
             "table": {"columns": [lab for lab, _ in cols], "rows": table_rows + stats,
@@ -251,25 +281,28 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
                lambda v: fmt_value(v, "$")),
               ("Implied exit multiple from Gordon value (x)", "Implied EV / EBITDA at exit (x)", _x)]
     rows = [[short, f(lab[k])] for k, short, f in bridge if k in lab and lab[k] is not None]
-    rows.append(["WACC", _pct(g["wacc"])])
+    steps = [("Sum of PV of free cash flow ($m)", "PV of free cash flow"), ("PV of terminal value ($m)",
+             "PV of terminal value"), ("Less: total debt ($m)", "Debt"), ("Plus: cash ($m)", "Cash")]
+    steps += [(k, k.split(": ", 1)[1].replace(" ($m)", "").capitalize()) for k in lab
+              if k.startswith(("Less: minorit", "Less: preferred", "Less: lease", "Less: unfunded", "Plus: equity inv"))]
+    cats = [c_ for k, c_ in steps if lab.get(k) is not None] + ["Equity value"]
+    vals = [lab[k] for k, _ in steps if lab.get(k) is not None] + [lab.get("Equity value ($m)")]
     prov = [bk.fact(f"DCF value per share {fmt_value(ps, '$')} (Gordon growth) and "
                     f"{fmt_value(_num(g['per_share_exit']), '$')} (exit multiple) at a {_pct(g['wacc'])} WACC; "
                     f"terminal value {_pct(g['tv_share'])} of EV", f"{prefix}per_share, {prefix}per_share_exit")]
-    gap = (_num(g["per_share_exit"]) or 0) - ps
-    return {"archetype": "table_focus", "fixed": True,
+    if None in vals:
+        return None
+    return {"archetype": "waterfall_bridge", "fixed": True,
             "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at a {_pct(g['wacc'])} WACC",
             "title_prov": prov,
-            "table": {"columns": ["Enterprise value to equity value", "$m"], "rows": rows,
-                      "highlight_rows": [next(i for i, r in enumerate(rows) if r[0] == "Value per share ($)")],
-                      "keep_table": True},
-            "takeaway": {"text": "Free cash flow comes from the integrated statements"},
-            "bullets": [{"text": f"Gordon growth gives {fmt_value(ps, '$')} per share"},
-                        {"text": f"The exit-multiple cross-check gives {fmt_value(_num(g['per_share_exit']), '$')}, "
-                                 f"{'above' if gap > 0 else 'below'} the Gordon value"},
-                        {"text": f"Enterprise value of ${_usd(g['ev'])}m on a {_pct(g['wacc'])} WACC"}],
-            "footnotes": [f"Terminal value is {_pct(g['tv_share'])} of the Gordon enterprise value"],
-            "source": {"text": f"{FIRM_SRC} (DCF tab, unlevered free cash flow from the integrated statements)",
-                       "prov": prov}}
+            "chart": {"kind": "waterfall", "categories": cats, "unit": "", "decimals": 0,
+                      "series": [{"name": "$m", "values": vals}]},
+            "subtitle": "From discounted cash flows to equity value, $m",
+            "takeaway": {"text": f"{fmt_value(ps, '$')} per share on {_usd(lab.get('Diluted shares (m)'), 1)}m diluted shares"},
+            "bullets": [{"text": f"Terminal value is {_pct(g['tv_share'])} of enterprise value"},
+                        {"text": f"Exit-multiple cross-check: {fmt_value(_num(g['per_share_exit']), '$')} per share"},
+                        {"text": f"WACC {_pct(g['wacc'])}; free cash flow from the integrated statements"}],
+            "source": {"text": f"{FIRM_SRC} (DCF tab)", "prov": prov}}
 
 
 def dcf_sensitivity(bk: Book, prefix: str = "dcf_") -> dict | None:
@@ -296,10 +329,11 @@ def dcf_sensitivity(bk: Book, prefix: str = "dcf_") -> dict | None:
                     "terminal growth", f"{ws.title}!B{gr + 1}:F{gr + 5}")]
     return {"archetype": "table_focus", "fixed": True,
             "title": f"Value per share runs {fmt_value(lo, '$')}-{fmt_value(hi, '$')} across WACC and growth",
-            "title_prov": prov, "table": {"columns": cols, "rows": rows, "highlight_rows": [2] + ([8] if xh else []),
-                                          "italic_rows": [5] if xh else [], "keep_table": True},
-            "takeaway": {"text": "Value per share ($): WACC down the side; terminal growth, then exit multiple, "
-                                 "across"},
+            "title_prov": prov, "table": {"columns": cols, "rows": rows, "italic_rows": [5] if xh else [], "keep_table": True,
+                                          "heat_grid": [{"rows": list(range(5)), "center": ps, "base": [2, 3]}] + (
+                                              [{"rows": list(range(6, 11)), "center": _num(bk.name(f"{prefix}per_share_exit")),
+                                                "base": [8, 3]}] if xh else [])},
+            "takeaway": {"text": "Heat map around the base case (boxed): darker = further from it"},
             "bullets": [{"text": f"Base case in the centre: {fmt_value(vals[2][2], '$')}"},
                         {"text": f"Highest WACC and lowest growth: {fmt_value(vals[4][0], '$')}"},
                         {"text": f"Lowest WACC and highest growth: {fmt_value(vals[0][4], '$')}"}],
@@ -362,11 +396,25 @@ def financial_summary(bk: Book, sheet: str = "Model") -> dict | None:
             a, b = _num(ws.cell(row=r, column=2).value), _num(ws.cell(row=r, column=last).value)
             if a is not None and b is not None:
                 bullets.append({"text": f"{txt} goes from ${_usd(a)}m to ${_usd(b)}m"})
-    return {"archetype": "table_focus", "fixed": True, "title": title, "title_prov": prov,
-            "table": {"columns": ["$m"] + [str(y) for y in years], "rows": rows},
-            "bullets": bullets, "source": {"text": f"{FIRM_SRC} ({sheet} tab: integrated income statement, balance "
-                                                  "sheet and cash flow); historical year from company filings",
-                                          "prov": prov}}
+    keyl = ("Revenue", "Growth", "EBITDA", "EBITDA margin", "Net income", "Operating cash flow")
+    rev = [_num(ws.cell(row=where["Revenue ($m)"], column=c).value) for c in range(2, 2 + len(years))]
+    ebd = [_num(ws.cell(row=where["EBITDA ($m)"], column=c).value) for c in range(2, 2 + len(years))] \
+        if "EBITDA ($m)" in where else []
+    yrs, rv, eb = zip(*[(str(y), a, b) for y, a, b in zip(years, rev, ebd or [None] * len(years))
+                        if a is not None and b is not None]) if ebd else ([], [], [])
+    parts = []
+    if len(yrs) >= 3:
+        parts.append({"type": "chart", "heading": "Revenue and EBITDA, $m",
+                      "chart": {"kind": "column", "categories": list(yrs), "unit": "", "decimals": 0,
+                                "series": [{"name": "Revenue", "values": [round(v) for v in rv]},
+                                           {"name": "EBITDA", "values": [round(v) for v in eb]}]}})
+    parts.append({"type": "table", "heading": "Key lines, $m",
+                  "table": {"columns": ["$m"] + [str(y) for y in years], "rows": [r_ for r_ in rows if r_[0] in keyl]}})
+    return {"archetype": "grid", "fixed": True, "layout": "halves_v" if len(parts) == 2 else "full",
+            "title": title, "title_prov": prov, "parts": parts,
+            "footnotes": [b["text"] for b in bullets],
+            "source": {"text": f"{FIRM_SRC} ({sheet} tab: integrated income statement, balance sheet and cash flow); "
+                               "historical year from company filings", "prov": prov}}
 
 
 def scenario_chart(bk: Book) -> dict | None:
@@ -410,18 +458,22 @@ def weighting_table(bk: Book) -> dict | None:
         return None
     lead = max(rows, key=lambda r: _num(ws.cell(row=r, column=12).value) or 0)
     prov = [bk.fact(f"Weighted value per share {fmt_value(wv, '$')}", "weighted_value_per_share")]
-    return {"archetype": "table_focus", "fixed": True,
-            "title": f"Weighting the methods gives {fmt_value(wv, '$')} per share, led by "
-                     f"{str(ws.cell(row=lead, column=1).value).split(' (')[0].lower()}",
+    short = lambda r: str(ws.cell(row=r, column=1).value).split(" (")[0]  # noqa: E731
+    harvey = [{"label": short(r), "scores": [round((_num(ws.cell(row=r, column=c).value) or 0) * 4, 2)
+                                             for c in range(5, 10)]} for r in rows]
+    weights = [round((_num(ws.cell(row=r, column=12).value) or 0) * 100, 1) for r in rows]
+    return {"archetype": "grid", "fixed": True, "layout": "halves",
+            "title": f"Weighting the methods gives {fmt_value(wv, '$')} per share, led by {short(lead).lower()}",
             "title_prov": prov,
-            "table": {"columns": ["Method", "Low ($)", "High ($)", "Rule-based weight", "Weight used"], "rows": out +
-                      [["Weighted value", fmt_value(_num(bk.name("weighted_value_low")), "$"),
-                        fmt_value(_num(bk.name("weighted_value_high")), "$"), "", "100.0%"]],
-                      "highlight_rows": [len(out)], "keep_table": True},
-            "bullets": [{"text": f"{row[0].split(' (')[0]}: {row[4]} of the weight" + (f"; {why}" if why else "")}
-                        for row, why in zip(out, [_why(bk, ws, r) for r in rows])][:3] + _not_used(ws, hr),
-            "footnotes": ["Weights score data quality, peer comparability, terminal-value dependence, stage and "
-                          "control vs minority context; the justification for each is in the model"],
+            "parts": [{"type": "harvey", "heading": "How well each method fits (full ball = strong)",
+                       "criteria": ["Data quality", "Peer fit", "Terminal value", "Stage", "Deal context"],
+                       "rows": harvey},
+                      {"type": "chart", "heading": "Weight used (%)",
+                       "chart": {"kind": "bar", "categories": [short(r) for r in rows], "unit": "%", "decimals": 0,
+                                 "series": [{"name": "Weight used (%)", "values": weights}],
+                                 "highlight_categories": [short(lead)]}}],
+            "footnotes": ["Scores 0-1 per factor (quarter balls); weight = normalised product, rounded to 5%; "
+                          "the reason for each score is in the model"] + [x["text"] for x in _not_used(ws, hr)],
             "source": {"text": f"{FIRM_SRC} ({ws.title} tab)", "prov": prov}}
 
 
@@ -464,15 +516,38 @@ def lbo_page(bk: Book) -> dict | None:
     rows.append(["Price a sponsor could pay ($ per share)", f"{fmt_value(_num(lo), '$')}-{fmt_value(_num(hi), '$')}"])
     prov = [bk.fact(f"LBO: IRR {_pct(irr)}, money multiple {_x(moic)}; a sponsor could pay "
                     f"{fmt_value(_num(lo), '$')}-{fmt_value(_num(hi), '$')} per share", "lbo_irr, lbo_floor_low/high")]
-    return {"archetype": "table_focus", "fixed": True,
+    hdr = next((rr for rr in range(r, ws.max_row + 1) if ws.cell(row=rr, column=2).value == "Entry"), None)
+    series = []
+    if hdr:
+        years = ["Entry"] + [str(ws.cell(row=hdr, column=c).value) for c in range(3, ws.max_column + 1)
+                             if ws.cell(row=hdr, column=c).value]
+        for rr in range(hdr + 1, ws.max_row + 1):
+            lab = ws.cell(row=rr, column=1).value
+            if isinstance(lab, str) and lab.endswith(": closing balance ($m)"):
+                tr = lab.split(":")[0]
+                entry = next((_num(ws.cell(row=q, column=2).value) for q in range(r0, hdr)
+                              if ws.cell(row=q, column=1).value == f"{tr} ($m)"), None)
+                vals = [entry] + [_num(ws.cell(row=rr, column=c).value) for c in range(3, 3 + len(years) - 1)]
+                if None not in vals:
+                    series.append({"name": tr, "values": [round(v, 1) for v in vals]})
+    uses = [x for x in rows if x[0] in ("Purchase enterprise value", "Transaction and financing fees", "Total uses")]
+    srcs = [x for x in rows if x not in uses and x[0] not in ("Total sources",)]
+    tiles = [{"value": _pct(irr), "label": "Sponsor IRR"}, {"value": _x(moic), "label": "Money multiple"},
+             {"value": _x(lev), "label": "Entry debt / LTM EBITDA"},
+             {"value": f"${_num(lo):,.0f}-{_num(hi):,.0f}", "label": "Price a sponsor could pay ($)"}]
+    parts = []
+    if len(series) >= 1 and len(series[0]["values"]) >= 3:
+        parts.append({"type": "chart", "heading": "Debt by tranche, $m: paid down from cash flow",
+                      "chart": {"kind": "stacked_column", "categories": years, "unit": "", "decimals": 0,
+                                "series": series}})
+    parts.append({"type": "stats", "heading": "Returns and the floor", "items": tiles})
+    parts.append({"type": "table", "heading": "Sources and uses, $m",
+                  "table": {"columns": ["Item", "$m"], "rows": [[a.replace("Purchase enterprise value", "Purchase EV")
+                                                                .replace("Transaction and financing fees", "Fees"), b]
+                                                               for a, b in uses + srcs]}})
+    return {"archetype": "grid", "fixed": True, "layout": "main_stack" if len(parts) == 3 else "halves",
             "title": f"A sponsor earns {_pct(irr)} at this price and could pay up to {fmt_value(_num(hi), '$')} per share",
-            "title_prov": prov, "table": {"columns": ["Sources and uses, returns", "$m"], "rows": rows,
-                                          "highlight_rows": [len(rows) - 1], "keep_table": True},
-            "takeaway": {"text": "The LBO sets the floor a financial buyer would pay"},
-            "bullets": [{"text": f"IRR {_pct(irr)} and a {_x(moic)} money multiple over the holding period"},
-                        {"text": f"At the hurdle returns a sponsor could pay {fmt_value(_num(lo), '$')}-"
-                                 f"{fmt_value(_num(hi), '$')} per share"},
-                        {"text": f"Entry leverage of {_x(lev)} LTM EBITDA, repaid from cash flow in seniority order"}],
+            "title_prov": prov, "parts": parts,
             "source": {"text": f"{FIRM_SRC} (LBO tab, operating forecast from the integrated statements)", "prov": prov}}
 
 

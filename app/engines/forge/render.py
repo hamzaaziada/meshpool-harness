@@ -937,7 +937,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     x, y, w, h = _chart_box(kind, len(cats), len(series), x, y, w, h)
     cd = CategoryChartData()
     cd.categories = cats
-    fmt = "0" if not c.get("decimals") else "0." + "0" * int(c["decimals"])
+    fmt = "#,##0" if not c.get("decimals") else "#,##0." + "0" * int(c["decimals"])
     if str(c.get("unit", "")).strip().lower() in ("%", "pp", "x"):          # the unit rides on the label: 38%
         u = str(c["unit"]).strip()
         fmt = f'{fmt}"{u if u != "pp" else " pp"}";-{fmt}"{u if u != "pp" else " pp"}"'
@@ -1133,6 +1133,26 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     hh = col_head_h(size_)
     tbl.rows[hdr - 1].height = Inches(hh)
     hl, it = set(t.get("highlight_rows") or []), set(t.get("italic_rows") or [])
+    hgs = t.get("heat_grid")                                # diverging scales, one per block of rows, around a base
+    hgs = [hgs] if isinstance(hgs, dict) else [h_ for h_ in hgs or [] if isinstance(h_, dict)]
+    blk_vals = []
+    for h_ in hgs:
+        rr = set(h_.get("rows") or range(len(rows)))
+        vv = []
+        for r_i_, row in enumerate(rows):
+            if r_i_ in rr:
+                for v in row[1:]:
+                    try:
+                        vv.append(float(re.sub(r"[^\d.\-]", "", str(v))))
+                    except ValueError:
+                        pass
+        blk_vals.append(vv)
+
+    def block(r_i_):
+        for h_, vv in zip(hgs, blk_vals):
+            if r_i_ in set(h_.get("rows") or range(len(rows))):
+                return h_, vv
+        return None, []
     heat = {}
     for k, v in (t.get("heat") or {}).items():                    # model-supplied heat values: numbers only
         try:
@@ -1176,6 +1196,30 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             cell = tbl.cell(ri, ci)
             on = r_i in hl
             color = TC.TEXT_1
+            hg, hg_vals = block(r_i)
+            if hg and ci > 0:
+                try:
+                    fv = float(re.sub(r"[^\d.\-]", "", str(v)))
+                except ValueError:
+                    fv = None
+                centre = float(hg.get("center", 0))
+                base = (r_i, ci) == tuple(hg.get("base") or (-1, -1))
+                if fv is not None and hg_vals:
+                    span_ = max(abs(max(hg_vals) - centre), abs(centre - min(hg_vals)), 1e-9)
+                    k_ = (fv - centre) / span_                          # -1 .. 1 around the base case
+                    cell.fill.solid()
+                    if abs(k_) < 0.02 or base:
+                        cell.fill.fore_color.theme_color = TC.BACKGROUND_2
+                    else:
+                        cell.fill.fore_color.theme_color = TC.ACCENT_4 if k_ > 0 else TC.ACCENT_2
+                        cell.fill.fore_color.brightness = round(0.8 - 0.8 * min(1.0, abs(k_)), 2)
+                    color = TC.BACKGROUND_1 if abs(k_) > 0.6 and not base else TC.TEXT_1
+                put(cell, v, base, False, PP_ALIGN.CENTER, color)
+                _borders(cell, bottom=("bg1", 1.5), top=("bg1", 1.5), left=("bg1", 1.5), right=("bg1", 1.5))
+                if base:
+                    _borders(cell, bottom=("tx1", 2.0), top=("tx1", 2.0), left=("tx1", 2.0), right=("tx1", 2.0))
+                ctx.track(n, str(v), t.get("prov"))
+                continue
             if on:
                 cell.fill.solid()
                 cell.fill.fore_color.theme_color = TC.ACCENT_2
@@ -1278,6 +1322,7 @@ def normalize(s: dict) -> dict:
 REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
             "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "football_field": ["chart"],
+            "benchmark": ["benchmark"],
             "grid": ["parts"]}
 
 
@@ -1845,12 +1890,11 @@ def _fill_text(blocks, w, h, max_bump=5):
     """Grow text to use its box: up to max_bump points, then more space between paragraphs, while it fits 92%."""
     import copy
     best = copy.deepcopy(blocks)
-    steps = sorted({0} | {T[k] - T["body"] for k in ("head", "lead", "sub") if 0 < T[k] - T["body"] <= max_bump})
-    for bump in steps:                                     # sizes already on the deck's type scale (P4)
-        trial = copy.deepcopy(blocks)
+    for step in (0, 1):                                    # one step up the type scale at most (P4): bullets body ->
+        trial = copy.deepcopy(blocks)                      # head, leads head -> sub; no in-between sizes
         for b in trial:
-            b["size"] = (T["head"] if b.get("bold") and not b.get("bullet") else T["body"]) + bump \
-                if b.get("size", T["body"]) in (T["body"], T["head"]) else b.get("size", T["body"])
+            lead_ = b.get("bold") and not b.get("bullet")
+            b["size"] = ((T["head"], T["sub"]) if lead_ else (T["body"], T["head"]))[step]
         if _need(trial, w) > 0.92 * h:
             break
         best = trial
@@ -1880,7 +1924,7 @@ def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel"):
         return
     lh = 0.0
     if lead:
-        lead = _fill_text(lead, iw, 0.3 * ih, 2)
+        lead = [dict(b, size=T["head"]) for b in lead]
         lh = min(_need(lead, iw) + 0.18, 0.35 * h)
     cw = w / 2
     bh = h - lh
@@ -1893,7 +1937,7 @@ def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel"):
         dropped += d
     _cut_note(s, dropped)
     bump_ok = 0                                        # both columns grow by the same step, on the type scale
-    for bump in sorted({0} | {T[k] - T["body"] for k in ("head", "lead", "sub") if 0 < T[k] - T["body"] <= 5}):
+    for bump in (0, T["head"] - T["body"]):
         if all(_need([dict(b, size=b.get("size", T["body"]) + bump) for b in c], icw) <= 0.92 * ibh for c in fitted):
             bump_ok = bump
         else:
@@ -2048,6 +2092,152 @@ def a_waterfall_bridge(ctx, s, sl, n):
     a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="waterfall")), sl, n)
 
 
+BENCH_LABEL_W = 1.9                                   # names (and logos) column of a benchmark page
+
+
+def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
+    """One multiple across the peers: native horizontal bars in a fixed order (the same order in every panel), a
+    Median bar at the foot, a dashed median line across the peers and dotted 25th / 75th percentile lines. Values
+    that are not meaningful show NM, not a bar. Returns the bar centres (y) for the shared label column."""
+    vals = [None if v is None else float(v) for v in c["values"]]
+    med = c.get("median")
+    pts = [v for v in vals if v is not None] + ([float(med)] if med is not None else [])
+    unit, dec = c.get("unit", "x"), c.get("decimals", 1)
+    shown = [0.0 if v is None else v for v in vals] + ([float(med)] if med is not None else [])
+    hi = max(pts) if pts else 1.0
+    lo = min(0.0, min(pts)) if pts else 0.0
+    amax = _nice_bounds(lo, hi)[1]
+    PL = (0.02, 0.78)                                      # plot x and width (fractions of the frame)
+    px = lambda v: x + w * (PL[0] + PL[1] * (v - lo) / (amax - lo))  # noqa: E731
+    band = h / len(shown)
+    centres = [y + band * (j + 0.5) for j in range(len(shown))]
+    peers_bottom = y + band * len(vals)
+    for key, dash, wt, colr in (("p25", 3, 0.75, TC.TEXT_2), ("p75", 3, 0.75, TC.TEXT_2), ("median", 4, 1.5, TC.TEXT_1)):
+        v = c.get(key)                                     # drawn first: the bars and their labels sit on top
+        if v is None:
+            continue
+        lx = px(float(v))
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(lx), Inches(y), Inches(lx), Inches(peers_bottom))
+        ln.name = f"ov_{name}{key.capitalize()}"
+        ln.line.color.theme_color = colr
+        ln.line.width = Pt(wt)
+        ln.line.dash_style = dash
+    cd = CategoryChartData()
+    cd.categories = [str(i + 1) for i in range(len(shown))]
+    fmt = f'0.{"0" * dec}"{unit}";-0.{"0" * dec}"{unit}"' if unit in ("x", "%") else f"0.{'0' * dec}"
+    cd.add_series(c.get("title", "Value"), shown, fmt)
+    gf = sl.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(x), Inches(y), Inches(w), Inches(h), cd)
+    positive_axis_ids(gf.chart)
+    gf.name = f"ov_{name}"
+    ch = gf.chart
+    ch.has_title = ch.has_legend = False
+    ch.font.size = Pt(T["label"])
+    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+    lay = pa.find(qn("c:layout"))
+    if lay is None:
+        lay = pa.makeelement(qn("c:layout"), {})
+        pa.insert(0, lay)
+    for e in list(lay):
+        lay.remove(e)
+    ml = lay.makeelement(qn("c:manualLayout"), {})
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", PL[0]),
+                     ("c:y", 0.0), ("c:w", PL[1]), ("c:h", 1.0)):
+        ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
+    lay.append(ml)
+    plot = ch.plots[0]
+    plot.gap_width = 55
+    va, ca = ch.value_axis, ch.category_axis
+    va.minimum_scale, va.maximum_scale = lo, amax
+    va.visible = False
+    va.has_major_gridlines = False
+    ca.reverse_order = True
+    ca.tick_label_position = XL_TICK_LABEL_POSITION.NONE
+    ca.format.line.color.theme_color = TC.TEXT_1
+    se = plot.series[0]
+    se.format.fill.solid()
+    se.format.fill.fore_color.theme_color = TC.ACCENT_4
+    se.data_labels.show_value = True
+    se.data_labels.number_format = fmt
+    se.data_labels.number_format_is_linked = False
+    se.data_labels.position = XL_LABEL_POSITION.INSIDE_END    # inside the bar end, white: clear of the lines
+    se.data_labels.font.size = Pt(T["label"])
+    se.data_labels.font.color.theme_color = TC.BACKGROUND_1
+    hl = set(c.get("highlight") or [])
+    lab_w = _need_w(f"{max(abs(v) for v in shown) if shown else 0:.{dec}f}{unit}", T["label"]) + 0.08
+    for j, v in enumerate(shown):                          # a bar too short for its number gets it outside
+        if (j >= len(vals) or vals[j] is not None) and abs(px(v) - px(0 if lo <= 0 else lo)) < lab_w:
+            dl = se.points[j].data_label
+            dl.position = XL_LABEL_POSITION.OUTSIDE_END
+            dl.font.size = Pt(T["label"])
+            dl.font.color.theme_color = TC.TEXT_1
+    for j in range(len(shown)):
+        if j == len(vals) or j in hl:                     # the Median bar and the subject company stand out
+            f = se.points[j].format
+            f.fill.solid()
+            f.fill.fore_color.theme_color = TC.TEXT_2 if j == len(vals) else TC.ACCENT_3
+        if j < len(vals) and vals[j] is None:             # not meaningful: no bar, no number, an NM note
+            dls = se._element.find(qn("c:dLbls"))
+            d_ = dls.makeelement(qn("c:dLbl"), {})
+            d_.append(d_.makeelement(qn("c:idx"), {"val": str(j)}))
+            d_.append(d_.makeelement(qn("c:delete"), {"val": "1"}))
+            dls.insert(0, d_)
+            _write(_box(sl, px(lo) + 0.04, centres[j] - 0.12, 0.6, 0.24, f"ov_{name}NM{j + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": "NM", "size": T["label"], "italic": True, "numbers": False}], ctx, n)
+    _alt(gf, c.get("alt") or f"{c.get('title', 'Multiple')} by company with the median and quartiles")
+    return centres
+
+
+def a_benchmark(ctx, s, sl, n):
+    """Peer benchmarking without a table: the companies lined up once (name and optional logo), one panel per
+    multiple or metric beside each other in the same order, each with its median line and Median bar, the
+    subject company highlighted; the so-what panel under them."""
+    _header(ctx, s, sl, n)
+    b = s["benchmark"]
+    names = [str(v) for v in b["companies"]]
+    panels = b["panels"][:4]
+    logos = b.get("logos") or {}
+    tk = s.get("takeaway") or {}
+    lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+            if tk.get("text") else [])
+    bl = [{"text": x["text"] if isinstance(x, dict) else str(x), "size": T["body"], "bullet": True,
+           "space_before": 4, "prov": x.get("prov") if isinstance(x, dict) else None} for x in s.get("bullets") or []]
+    notes = s.get("footnotes") or []
+    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    bottom_all = FOOT_RULE_Y - 0.04 - notes_h
+    rows_n = len(names) + 1
+    head_h = 0.42
+    want_h = min(rows_n * 0.42, bottom_all - BODY_Y - head_h - (1.05 if (lead or bl) else 0))
+    top = BODY_Y + head_h
+    gap = 0.3
+    pw = (RIGHT - LEFT - BENCH_LABEL_W - gap * (len(panels) - 1)) / len(panels)
+    band = want_h / rows_n
+    for j, nm_ in enumerate(names + [b.get("median_label", "Median")]):   # the shared label column, top to bottom
+        cy = top + band * (j + 0.5)
+        lx, lw_ = LEFT, BENCH_LABEL_W - 0.1
+        logo = logos.get(nm_)
+        if logo and Path(logo).exists():
+            d = min(0.3, band * 0.8)
+            pic = sl.shapes.add_picture(str(logo), Inches(lx), Inches(cy - d / 2), height=Inches(d))
+            pic.name = f"ov_Logo{j + 1}"
+            _alt(pic, f"{nm_} logo")
+            lx, lw_ = lx + pic.width / 914400 + 0.06, lw_ - pic.width / 914400 - 0.06
+        is_med = j == len(names)
+        hl = j in set(b.get("highlight") or [])
+        _write(_box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE),
+               [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False,
+                 "italic": is_med}], ctx, n)
+    for i, pn in enumerate(panels):
+        x = LEFT + BENCH_LABEL_W + i * (pw + gap)
+        _write(_box(sl, x, BODY_Y, pw, head_h - 0.06, f"ov_BenchHead{i + 1}", MSO_ANCHOR.BOTTOM),
+               [{"text": pn.get("title", ""), "size": T["head"], "bold": True, "numbers": False}], ctx, n)
+        _rule(sl, x, top - 0.04, pw, TC.TEXT_1, 0.75, f"ov_BenchRule{i + 1}")
+        _bench_panel(ctx, sl, n, dict(pn, highlight=b.get("highlight")), x, top, pw, want_h, rows_n, f"Bench{i + 1}")
+        ctx.track(n, " ".join(str(v) for v in pn.get("values") or []), pn.get("prov"))
+    ptop = top + want_h + 0.2
+    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl)
+    ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
+
+
 def a_football_field(ctx, s, sl, n):
     """Valuation summary: the floating-bar ranges on the left two thirds, the takeaway and bullets on the right."""
     a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="range")), sl, n)
@@ -2064,7 +2254,7 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "text_matrix": a_challenge_matrix, "exhibit_argument": a_exhibit_argument, "table_focus": a_table_focus,
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
-              "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
+              "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "benchmark": a_benchmark, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
               "grid": a_grid}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
@@ -2165,7 +2355,8 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             errors.append(f"slide {n}: archetype '{arch}' is not in the library {sorted(ARCHETYPES)}")
             fn = a_chart_takeaway if s.get("chart") else a_challenge_matrix
         sl = prs.slides.add_slide(layout(prs, "Title Slide" if arch in DIVIDERS else "Title Only"))
-        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}")
+        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
+                                           + (" computed:1" if s.get("fixed") else ""))
         try:
             fn(ctx, s, sl, n)
             if arch not in DIVIDERS:

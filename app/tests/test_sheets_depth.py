@@ -183,7 +183,11 @@ def test_lbo_page_from_the_workbook(tmp_path, monkeypatch):
     from engines.forge.finance_pages import pages_from_workbook
     pages, facts = pages_from_workbook(str(tmp_path / "lbo.xlsx"))
     pg = next(p for p in pages if p["title"].startswith("A sponsor earns"))
-    labels = [r[0] for r in pg["table"]["rows"]]
-    assert labels[:3] == ["Purchase enterprise value", "Transaction and financing fees", "Total uses"]
-    assert "Sponsor equity" in labels and pg["table"]["rows"][-1][1].startswith("$")
+    chart, stats, table = pg["parts"]
+    assert chart["chart"]["kind"] == "stacked_column" and [s_["name"] for s_ in chart["chart"]["series"]] == \
+        ["Term Loan A", "Term Loan B", "Senior notes"]
+    assert chart["chart"]["categories"][0] == "Entry" and chart["chart"]["series"][2]["values"][0] == 400.0
+    labels = [r[0] for r in table["table"]["rows"]]
+    assert labels[:3] == ["Purchase EV", "Fees", "Total uses"] and "Sponsor equity" in labels
+    assert stats["items"][0]["label"] == "Sponsor IRR"
     assert any("LBO: IRR" in f["text"] for f in facts)

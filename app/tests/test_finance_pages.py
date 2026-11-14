@@ -45,7 +45,8 @@ def test_pages_carry_the_workbook_numbers(books):
     from engines.sheets import qa
     pages, facts = pages_from_workbook(str(books / "model.xlsx"))
     kinds = [p["archetype"] for p in pages]
-    assert kinds[:2] == ["table_focus", "football_field"] and "bar_takeaway" in kinds
+    assert kinds[:2] == ["grid", "football_field"] and "bar_takeaway" in kinds
+    assert {"waterfall_bridge", "grid", "table_focus"} <= set(kinds)                # different visuals, not one table
     wb = load_workbook(qa.recalc(str(books / "model.xlsx"), str(books / "rc")), data_only=True)
 
     def named(n):
@@ -56,20 +57,28 @@ def test_pages_carry_the_workbook_numbers(books):
     assert f"${named('weighted_value_per_share'):,.2f}" in ff["title"]
     dcf = next(p for p in pages if p["title"].startswith("The DCF puts"))
     assert f"${named('dcf_per_share'):,.2f}" in dcf["title"]
-    row = next(r for r in dcf["table"]["rows"] if r[0] == "Value per share ($)")
-    assert row[1] == f"${named('dcf_per_share'):,.2f}"
+    wf = dcf["chart"]["series"][0]["values"]                                        # waterfall to equity value
+    assert dcf["archetype"] == "waterfall_bridge" and wf[-1] == pytest.approx(named("dcf_equity"))
+    assert wf[0] + sum(wf[1:-1]) == pytest.approx(wf[-1])                             # the bridge adds up
     sens = next(p for p in pages if p["title"].startswith("Value per share runs"))
     assert sens["table"]["rows"][2][3] == f"${named('dcf_per_share'):,.2f}"          # grid centre = base value
     assert len(sens["table"]["rows"]) == 11                                         # both grids stacked
+    hg = sens["table"]["heat_grid"]                                                  # heat map around each base
+    assert hg[0]["center"] == pytest.approx(named("dcf_per_share")) and hg[0]["base"] == [2, 3]
+    assert hg[1]["center"] == pytest.approx(named("dcf_per_share_exit"))
+    wt = next(p for p in pages if p["title"].startswith("Weighting the methods"))
+    assert [pt["type"] for pt in wt["parts"]] == ["harvey", "chart"]
     sc = next(p for p in pages if p["archetype"] == "bar_takeaway")
     assert sc["chart"]["series"][0]["values"] == pytest.approx(
         [named("bear_value_per_share"), named("base_value_per_share"), named("bull_value_per_share")])
     assert all(f["source"].startswith("Meshpool model") for f in facts) and len(facts) >= len(pages)
     p2, _ = pages_from_workbook(str(books / "val.xlsx"))
     comps = next(p for p in p2 if p["title"].startswith("Peers are valued"))
-    med = comps["table"]["rows"][comps["table"]["highlight_rows"][0]]
-    assert med[0] == "Median" and f"{named_val(books / 'val.xlsx', 'comps_ev_ebitda_median'):.1f}x" in med
-    assert any("NM" in r for r in comps["table"]["rows"]) and comps["footnotes"]
+    assert comps["archetype"] == "benchmark"
+    ev = next(pn for pn in comps["benchmark"]["panels"] if pn["title"].startswith("EV / EBITDA"))
+    assert ev["median"] == pytest.approx(named_val(books / "val.xlsx", "comps_ev_ebitda_median"))
+    assert ev["values"][3] is None and len(ev["values"]) == len(comps["benchmark"]["companies"])   # Delta: NM
+    assert any(b["text"].startswith("NM") for b in comps["bullets"])
     assert any(p["title"].startswith("Precedent deals paid") for p in p2)
 
 
