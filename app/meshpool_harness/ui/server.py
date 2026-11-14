@@ -171,6 +171,13 @@ def save_upload(name: str, data: bytes) -> dict:
 
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
 
+def _disposition(kind: str, name: str) -> str:
+    """Headers must be Latin-1: "图表 – chart.png" dropped the connection. ASCII fallback plus the UTF-8 name (RFC 6266)."""
+    from urllib.parse import quote
+    plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", name)
+    return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
 
@@ -266,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             if not (ctype.startswith("image/") or ctype == "application/pdf"):
                 return self._send(415, {"error": "only images and PDFs are served"})
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'inline; filename="{p.name}"',
+            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition("inline", p.name),
                                                           "X-Content-Type-Options": "nosniff",
                                                           "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
         if u.path.startswith("/files/"):
@@ -282,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'{disp}; filename="{p.name}"'})
+            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks

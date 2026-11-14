@@ -1306,8 +1306,8 @@ def normalize(s: dict) -> dict:
         t["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
         gap = re.compile(r"\[GAP[^\]]*\]")
         if any(gap.search(c) for r in t["rows"] for c in r):           # visible, footnoted gaps, not raw markers
-            t["rows"] = [[gap.sub("n/a", c) for c in r] for r in t["rows"]]
-            s["footnotes"] = list(s.get("footnotes") or []) + ["n/a: not available in the source data"]
+            t["rows"] = [[gap.sub("N/A", c) for c in r] for r in t["rows"]]
+            s["footnotes"] = list(s.get("footnotes") or []) + ["N/A: not available in the source data"]
             s["notes"] = (s.get("notes", "") + "\n[QA] table contains values not available in the sources").strip()
         s["table"] = t
     for key in ("bullets",):

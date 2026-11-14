@@ -126,6 +126,15 @@ def _runs(par, text: str):
             par.add_run(part)
 
 
+def _free(p: Path) -> Path:
+    """p, or "name (2).ext" if p exists: a second document of the same name never replaces the first."""
+    stem, suf, i = p.stem, p.suffix, 2
+    while p.exists():
+        p = p.with_name(f"{stem} ({i}){suf}")
+        i += 1
+    return p
+
+
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
     from docx import Document
     from docx.shared import Pt
@@ -209,7 +218,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
-    path = out / name
+    path = _free(out / name)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
 
@@ -298,7 +307,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
         i += 1
     flush()
-    path = out / name
+    path = _free(out / name)
     SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False

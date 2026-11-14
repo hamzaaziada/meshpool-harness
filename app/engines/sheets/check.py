@@ -13,4 +13,6 @@ if __name__ == "__main__":
             print(f"{i['check']}\t{i['cell']}\t{i['detail']}")
         print(f"FAIL: {len(r['issues'])} issues; stats {json.dumps({k: v for k, v in r['stats'].items() if k != 'recalculated_copy'})}")
         sys.exit(1)
-    print(f"PASS: {r['stats']['formulas']} formulas, sheets {r['stats']['sheets']}, named ranges {r['stats']['named_ranges']}")
+    print(f"PASS: {r['stats']['formulas']} formulas, sheets {r['stats']['sheets']}, named ranges {r['stats']['named_ranges']}"
+          + ("" if r["stats"].get("recalculated") else
+             " (structure only: LibreOffice is not installed, so formula values were not recalculated and are unverified)"))

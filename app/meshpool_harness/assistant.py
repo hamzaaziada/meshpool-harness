@@ -10,6 +10,14 @@ Files in the Meshpool data folder:
 """
 from __future__ import annotations
 
+# Every agent gets this, whatever it runs on: the built-in agents in their instructions, Pi, Hermes, Codex and
+# OpenCode in the first message of each chat, and the deck and workbook writers in their prompts.
+HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you do not know, or the files and sources "
+           "do not say, write \"I don't know\" (in a table, model or slide: N/A) and say what would answer it. Do not "
+           "guess or interpolate numbers, dates, names, quotes, sources or results and present them as fact; if an "
+           "estimate genuinely helps, label it as an estimate and show how you got it. Never say something was done, "
+           "checked or tested when it was not.")
+
 import contextlib
 import difflib
 import json
@@ -184,7 +192,7 @@ def context_block() -> str:
     st = settings()
     now = datetime.now().astimezone()
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})."]
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY]
     ins = instructions() if st["instructions_on"] else ""
     mem = memory() if st["memory_on"] else ""
     if ins:

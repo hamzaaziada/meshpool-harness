@@ -423,8 +423,10 @@ supports it. Choose varied archetypes that prove each title.
         ev = set(x.get("evidence") or [])
         rel = [f for f in facts if f["id"] in ev] or facts
         try:
+            from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
-design. {WRITE[density]}
+design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (it shows as N/A).
+{WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
                 + f"\n\nThis slide: {json.dumps(x)}\n\nFacts (cite by id):\n"

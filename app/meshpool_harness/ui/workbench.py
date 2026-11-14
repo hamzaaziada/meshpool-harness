@@ -323,7 +323,8 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         raise ValueError("Git is not installed." + (" On a Mac, run: xcode-select --install" if sys.platform == "darwin" else ""))
     # A project's own .git/config must not run programs when Meshpool merely looks at it (status on opening a
     # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
-    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "--no-pager"]
+    safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false",
+            "--no-pager"]
     r = subprocess.run([g, *safe, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=timeout, creationflags=NO_WINDOW, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
     if check and r.returncode != 0:
@@ -370,9 +371,16 @@ def git_action(root: str, body: dict) -> dict:
         name = body.get("branch", "").strip()
         if not name:
             raise ValueError("Give a branch name.")
-        if name.startswith("-") or subprocess.run(["git", "check-ref-format", "--branch", name], cwd=str(r),
-                                                  capture_output=True, creationflags=NO_WINDOW).returncode:
+        if name.startswith("-") or not git_exe() or subprocess.run(
+                [git_exe(), "check-ref-format", "--branch", name], cwd=str(r), capture_output=True,
+                creationflags=NO_WINDOW).returncode:
             raise ValueError(f"\"{name}\" is not a valid branch name.")
+        if not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
+                not _git(r, "for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/heads",
+                         check=False).strip():
+            # detached, with commits on no branch: switching away would leave them only in the reflog
+            raise ValueError("You have commits that are on no branch (a detached HEAD). Create a branch for them "
+                             "first (type a name and press Create), then switch.")
         if body.get("create"):
             _git(r, "switch", "-c", name)
         else:
@@ -381,7 +389,11 @@ def git_action(root: str, body: dict) -> dict:
         msg = (body.get("message") or "").strip()
         if not msg:
             raise ValueError("Write a commit message.")
-        _git(r, "add", "-A")
+        top = Path(_git(r, "rev-parse", "--show-toplevel").strip())
+        if _git(r, "diff", "--name-only", "--diff-filter=U", check=False).strip() or (top / ".git" / "MERGE_HEAD").exists():
+            raise ValueError("This repository is in the middle of a merge with conflicts. Resolve the conflicts "
+                             "(look for <<<<<<< in the files), then commit.")
+        _git(r, "add", "-A", "--", ".")          # this project's folder only, not the rest of a larger repository
         _git(r, "-c", "user.name=" + (_git(r, "config", "user.name", check=False).strip() or "Meshpool"),
              "-c", "user.email=" + (_git(r, "config", "user.email", check=False).strip() or "meshpool@localhost"),
              "commit", "-m", msg)

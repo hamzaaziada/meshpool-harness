@@ -452,7 +452,8 @@ class Agent:
             text += SK.catalog_text()
         except Exception:
             pass
-        return text
+        from meshpool_harness.assistant import HONESTY
+        return text + "\n\n" + HONESTY
 
     def tool_schemas(self) -> list:
         if self.plan:

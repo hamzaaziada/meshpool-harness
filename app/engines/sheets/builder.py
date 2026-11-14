@@ -204,7 +204,8 @@ def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
     formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
     ch["E3"] = "All checks"
     ch["E3"].font = Font(name=FONT, bold=True)
-    formula(ch, "F3", f'=IF(COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
+    # ISERROR too: COUNTIF does not count error values, so a #DIV/0! check read "All checks OK"
+    formula(ch, "F3", f'=IF(SUMPRODUCT(--ISERROR(C4:C{r}))+COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
     if "MasterCheck" not in wb.defined_names:
         define_name(wb, "MasterCheck", "'Checks'!$F$3")
     return f"Checks!C{r}"
@@ -326,17 +327,17 @@ STAT_ROWS = [("mean", "Mean", "AVERAGE({rng})"), ("median", "Median", "MEDIAN({r
 COMPS_INPUTS = [("price", "Share price ($)", "usd2"), ("shares", "Diluted shares (m)", "num"),
                 ("debt", "Total debt ($m)", "usd"), ("cash", "Cash ($m)", "usd"),
                 ("revenue", "Revenue LTM ($m)", "usd"), ("ebitda", "EBITDA LTM ($m)", "usd")]
-COMPS_CALCS = [("equity", "Equity value ($m)", "{price}*{shares}", "usd"),
-               ("ev", "Enterprise value ($m)", "{equity}+{debt}-{cash}", "usd"),
-               ("ev_rev", "EV / Revenue LTM (x)", 'IF({revenue}<=0,"NM",{ev}/{revenue})', "x"),
-               ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF({ebitda}<=0,"NM",{ev}/{ebitda})', "x"),
+COMPS_CALCS = [("equity", "Equity value ($m)", 'IF(OR({price}<=0,{shares}<=0),"NM",{price}*{shares})', "usd"),
+               ("ev", "Enterprise value ($m)", 'IF(ISNUMBER({equity}),{equity}+{debt}-{cash},"NM")', "usd"),
+               ("ev_rev", "EV / Revenue LTM (x)", 'IF(OR(NOT(ISNUMBER({ev})),{revenue}<=0),"NM",IF({ev}<=0,"NM",{ev}/{revenue}))', "x"),
+               ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF(OR(NOT(ISNUMBER({ev})),{ebitda}<=0),"NM",IF({ev}<=0,"NM",{ev}/{ebitda}))', "x"),
                ("margin", "EBITDA margin (%)", 'IF({revenue}<=0,"NM",{ebitda}/{revenue})', "pct")]
 PRECEDENT_TEXT = [("date", "Announced"), ("acquirer", "Acquirer"), ("name", "Target"), ("consideration", "Consideration")]
 PRECEDENT_INPUTS = [("ev", "Enterprise value ($m)", "usd"), ("revenue", "Target revenue LTM ($m)", "usd"),
                     ("ebitda", "Target EBITDA LTM ($m)", "usd"), ("offer", "Offer price ($/share)", "usd2"),
                     ("unaffected", "Unaffected price ($/share)", "usd2")]
-PRECEDENT_CALCS = [("ev_rev", "EV / Revenue LTM (x)", 'IF({revenue}<=0,"NM",{ev}/{revenue})', "x"),
-                   ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF({ebitda}<=0,"NM",{ev}/{ebitda})', "x"),
+PRECEDENT_CALCS = [("ev_rev", "EV / Revenue LTM (x)", 'IF(OR({revenue}<=0,{ev}<=0),"NM",{ev}/{revenue})', "x"),
+                   ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF(OR({ebitda}<=0,{ev}<=0),"NM",{ev}/{ebitda})', "x"),
                    ("premium", "Premium to unaffected (%)", 'IF({unaffected}<=0,"NM",{offer}/{unaffected}-1)', "pct")]
 
 
