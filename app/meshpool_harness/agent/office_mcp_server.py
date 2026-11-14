@@ -50,6 +50,18 @@ def _resolve(f: str) -> Path:
     return p if p.is_absolute() else (_project() / p)
 
 
+def _readable(p: Path) -> bool:
+    """read_document runs without asking, so it reads only the project, its outputs and the files the user
+    attached; a path elsewhere (an SSH key, ~/.aws/credentials) is refused."""
+    try:
+        q = p.resolve()
+        from meshpool_harness import config as C
+        ok = [_project().resolve(), (C.runs_dir() / "_uploads").resolve()]
+    except Exception:  # noqa: BLE001
+        return False
+    return any(q == r or r in q.parents for r in ok)
+
+
 def _run_job(jid: str):
     OJ.run(jid)
 
@@ -291,6 +303,9 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
     p = _resolve(path)
     if not p.exists():
         return f"File not found: {p}", True
+    if not _readable(p):
+        return (f"{p} is outside the project. Ask the user to attach it (or open the folder it is in as the "
+                "project) and read it from there."), True
     return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
 
 
