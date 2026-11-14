@@ -65,6 +65,8 @@ Build history (the release is live: https://github.com/hamzaaziada/meshpool-harn
 | 2 | Both: "Building wheels for hermes-agent is not supported" | install Hermes's dependencies only (`hermes_requirements.py`) |
 | 3 | Mac Intel: `cryptography==50.0.0` has no Intel Mac build, source build fails (OpenSSL) | Intel runtime uses `cryptography==48.0.1` (`sed` in workflow) |
 | 4 | **succeeded**: v0.0.1 published with all four files (14:49 UTC, 14 Nov) | — |
+| 4 (on the owner's M4 Mac, macOS 15.5) | the app showed crossed out: the launcher was compiled for the build machine's newer macOS; Node 24 needs macOS 13.5 | launcher built with `-mmacosx-version-min=11.0`, Node 22 bundled, `packaging/mac/check_minos.py` stops a build whose launcher/Node/Python need more than macOS 11 (build 5) |
+| 6 | — | the crawl's fixes (commit `7b2c997`) |
 
 After run 4, `eb8b5c0` added `hdiutil` retries in `packaging/mac/repack.sh` (pushed with `[skip ci]`; it goes into the
 next build).
@@ -84,6 +86,21 @@ so a marker-limited package such as `nemo-relay` can falsely fail).
 
 **Done means:** https://github.com/hamzaaziada/meshpool-harness/releases/tag/v0.0.1 exists, is not a draft, is
 marked latest, and has all four files.
+
+## Crawl results (done, fixed in `7b2c997`)
+
+Hermes lost its MCP tools after a model switch (patched in `packaging/hermes-acp-server.patch`; `acp.py` skips a
+switch to the current model); Hermes chats locked each other out of `state.db` (journal mode `delete`); Settings
+close button over the heading; Settings, side panels and the model picker broken at phone width; raw HTML in
+connector errors; "None" error; double traceback on dropped requests; empty beta-report title; blank lines before
+Hermes replies. Stale tests fixed in `testkit/`. Still open: the custom-connector-with-token test in
+`testkit/e2e_full.py` needs a local MCP-over-HTTP server that checks `Bearer abc123` (example.com is not one); no
+suite covers OpenCode; the dark-mode Preview panel shows a white empty frame for the default localhost:3000.
+
+## Branches
+
+On 14 Nov the session had the owner delete the merged `claude/*` branches; `claude/tender-pascal-pwc9bg` was deleted
+too. The owner wanted them back; all seven were restored at their last commits. **Never delete branches again.**
 
 ## After the release is up
 
