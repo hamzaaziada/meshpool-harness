@@ -102,7 +102,6 @@ class LiveClient:
 
     def chat(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
              max_tokens=8192, temperature=None, extra=None):
-        import os
         from meshpool_harness.profiles import apply, for_model
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         if prof["family"] != "deepseek":
@@ -158,7 +157,6 @@ class LiveClient:
 
 def _log_event(task_id: str, role: str, model: str, resp: dict) -> None:
     """One JSON line per model call to MH_EVENT_LOG (the web app tails it for live progress)."""
-    import os
     path = os.environ.get("MH_EVENT_LOG")
     if not path:
         return

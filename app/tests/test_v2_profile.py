@@ -1,6 +1,5 @@
 """v2 minimal profile: guard switches, additive test guard, feature defaults, timing log. No model calls."""
 import json
-import os
 import subprocess
 import sys
 import tempfile

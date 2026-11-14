@@ -178,7 +178,6 @@ class Terminal:
                               f"Session: {s['in']:,} in, {s['out']:,} out."))
 
     def approve(self, kind: str, title: str, detail: str, options=None):
-        st = self.st
         self.spin.stop()
         if not sys.stdin.isatty():
             return "no", "No terminal to ask in. Run with --auto."

@@ -1,6 +1,5 @@
 """Document reading and page fetching regressions: number precision, PDF text layers, CSV and Excel edge cases,
 content-type extensions, hostile HTML and fetches to local addresses."""
-import io
 import re
 import sys
 import time

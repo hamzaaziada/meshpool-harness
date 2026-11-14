@@ -149,13 +149,12 @@ def restore(workdir: str, snap: tuple[str, str]) -> bool:
 
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", temperature: float = 0.0) -> dict:
-    import re as _re
     cont = cdir = None
     mounted = True
-    m = _re.search(r"docker exec -w (\S+) (\S+) bash -lc", task)
+    m = re.search(r"docker exec -w (\S+) (\S+) bash -lc", task)
     if m and os.environ.get("MH_CONTAINER_NATIVE", "1") == "1":
         cdir, cont = m.group(1), m.group(2)
-        mounted = bool(_re.search(r"mounted into the container", task))
+        mounted = bool(re.search(r"mounted into the container", task))
         task += (f"\n\n<harness_note>Your bash and run_tests tools already execute inside the container "
                  f"(cwd {cdir}). Write plain commands, without any docker exec prefix. "
                  + ("read_file/edit/write_file operate on the same files (container paths are accepted)."
@@ -178,15 +177,14 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
                  "(files, outputs, running services) with a command.\n</terminal_mode>")
     if feature("MH_CODE_HINTS"):
         from .locate import hints
-        import re as _re
-        m = _re.search(r"<issue>(.*?)</issue>", task, _re.S)
+        m = re.search(r"<issue>(.*?)</issue>", task, re.S)
         h = hints(m.group(1) if m else task, workdir)
         if h:
             task = task + "\n\n<repo_hints>\n" + h + "\n</repo_hints>"
     finish_check = None
     if cont and mounted:
         from . import gates
-        m2 = _re.search(r"<issue>(.*?)</issue>", task, _re.S)
+        m2 = re.search(r"<issue>(.*?)</issue>", task, re.S)
         if m2 and feature("MH_ISSUE_REPRO"):
             rep = gates.issue_repro(m2.group(1), workdir, cont, cdir)
             if rep:

@@ -274,6 +274,8 @@ class Checkpoints:
                         seen.add(path)
                         if before.get(path) is not None:
                             a[path] = before[path]
+                        elif _unknown(path, before):    # existed, under a folder that was not walked
+                            a[path] = "!unknown"
                     b.pop(path, None)
                     if after.get(path) is not None:
                         b[path] = after[path]

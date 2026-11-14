@@ -59,7 +59,7 @@ if every engine finished with passing checks.
    deliverable only when a creation verb precedes them ("make a deck" vs "from this tracker"), repo presence, explicit
    `--format`. Mixed requests become chains in the order code -> data -> sheets -> slides; each step gets only the
    previous step's answer and files. Below 0.6 confidence one 60-token classification call decides; below 0.5 the
-   request goes to `general`. Every decision is logged to `routing.csv`. `--engine` and `--model` override.
+   request goes to `general`. `--engine` and `--model` override.
 2. **Engine** (`engines/<name>/engine.py`): owns its system prompt (byte-stable, so the provider cache hits),
    its tools, and a deterministic `finish_check`.
 3. **Core loop** (`meshpool_harness/core/`): strict tool schemas with precise errors, tool-output truncation with the

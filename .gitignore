@@ -10,7 +10,6 @@ dist-src/
 mcp-health.json
 /runs/
 /skills/
-app/routing.csv
 harness-lab/bench/results/raw/
 app/vendor/
 app/engines/forge/schemas/ooxml/

@@ -572,7 +572,7 @@ class Session:
         else:
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
-                users = [i for i, e in enumerate(self.events) if e.get("type") == "user"]
+                users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
                 cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
@@ -587,7 +587,9 @@ class Session:
                              _n("deleted", "removed") if r.get("deleted") else "") if s]
         msg = "Undone. " + ("Files are back to how they were: " + ", ".join(parts) if parts else
                             "No files had changed")
-        if r.get("kept"):
+        if r.get("notes"):                       # why each file was kept: changed later, never stored, a link...
+            msg += ". " + " ".join(r["notes"][:5]).rstrip(".") + (" ..." if len(r["notes"]) > 5 else "")
+        elif r.get("kept"):
             names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
             msg += f". Kept as they are, because you changed them afterwards: {names}"
         self.emit({"type": "status", "text": msg + "."})

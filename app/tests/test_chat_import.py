@@ -1,6 +1,5 @@
 """Old chats and sessions become Meshpool threads: ChatGPT and Claude exports, Claude Code and Codex sessions."""
 import json
-import os
 import sys
 import zipfile
 from pathlib import Path

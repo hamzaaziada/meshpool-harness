@@ -14,7 +14,6 @@ note. One small model call per cell, run in parallel.
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
