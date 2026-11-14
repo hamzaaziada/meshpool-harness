@@ -191,3 +191,28 @@ def test_lbo_page_from_the_workbook(tmp_path, monkeypatch):
     assert labels[:3] == ["Purchase EV", "Fees", "Total uses"] and "Sponsor equity" in labels
     assert stats["items"][0]["label"] == "Sponsor IRR"
     assert any("LBO: IRR" in f["text"] for f in facts)
+
+
+def test_market_inputs_are_sourced_and_ranged(tmp_path):
+    from engines.sheets import market as MK
+    F = ROOT / "tests" / "fixtures" / "market"
+    rf = MK.treasury_yield(text=(F / "treasury_2026_tail.xml").read_text())
+    assert rf["value"] == pytest.approx(0.0515) and rf["date"] == "2026-11-13" and "10Y on 2026-11-13" in rf["source"]
+    erp = MK.damodaran_erp((F / "damodaran_home_snippet.html").read_text())
+    assert erp["value"] == pytest.approx(0.0441) and (erp["low"], erp["high"]) == pytest.approx((0.0339, 0.0581))
+    bt = (F / "damodaran_betas_snippet.html").read_text()
+    b = MK.damodaran_beta("aerospace", bt)
+    assert b["industry"] == "Aerospace/Defense" and b["unlevered_cash"] == pytest.approx(0.87) and b["firms"] == 79
+    with pytest.raises(KeyError):
+        MK.damodaran_beta("zzz qqq", bt)
+    wb = B.banker_workbook("x", "y", middle=("Inputs", "DCF"))
+    book = B.assumption_book(wb["Inputs"], 3)
+    MK.add_wacc_inputs(book, "Aerospace", rf=rf, erp=erp, beta=b)
+    p = tmp_path / "m.xlsx"
+    wb.save(p)
+    assert qa.missing_sources(str(p)) == []
+    ws = wb["Inputs"]
+    vals = {ws.cell(row=r, column=1).value: (ws.cell(row=r, column=2).value, ws.cell(row=r, column=5).value,
+                                            ws.cell(row=r, column=6).value) for r in range(4, 7)}
+    assert vals["Equity risk premium (%)"] == pytest.approx((0.0441, 0.0339, 0.0581))
+    assert vals["Risk-free rate: US Treasury 10-year (%)"] == pytest.approx((0.0515, 0.0465, 0.0565))

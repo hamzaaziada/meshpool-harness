@@ -116,6 +116,9 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
   facts = S.fetch_companyfacts(S.cik_for_ticker("ACME"))      # SEC EDGAR XBRL; User-Agent from $SEC_USER_AGENT
   sp = S.spread(facts, years=3)    # standard IS/BS/CF, each cell with tag, accession, filing date; sp.gaps (left
       empty, never estimated), sp.checks (balance sheet balances, cash flow ties, net income ties); report both
+  from engines.sheets import market as MK
+  MK.add_wacc_inputs(book, industry="Semiconductor")   # live, sourced: Treasury 10Y, Damodaran implied ERP (its
+      published variants as the range), industry unlevered beta corrected for cash; MK.industries() lists names
   S.history_metrics(sp)            # growth, gross margin, SG&A %, DSO/DIO/DPO, capex %, D&A %, tax rate, payout
   q = S.spread_quarters(facts, 8)  # fiscal quarters from 10-Q/10-K (Q4 = year less Q1-Q3; cash flow from YTD)
   S.ltm(q, "revenue"); S.calendarize({{"2025-06-30": 100, "2026-06-30": 120}}, 2025)   # LTM; calendar-year peers
