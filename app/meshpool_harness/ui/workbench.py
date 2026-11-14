@@ -173,11 +173,17 @@ def models(refresh: bool = False) -> dict:
                 " Check your API key." if e.code in (401, 403) else "")
         except Exception as e:  # noqa: BLE001
             err = f"Could not list models: {e}"
+    from meshpool_harness import providers as PV
+    dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}
-    if default not in ids:
-        rows = [{"id": default, "name": default, "provider": _provider_of(default, ""), "caps": [],
+    if dprov == "key" and dbare not in ids and key:
+        rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
-    return {"models": rows, "favorites": fav, "default": default, "error": err, "base_url": base}
+    # One section per provider (the key endpoint, ChatGPT, Claude, Gemini), ready or with what to set up.
+    groups = PV.groups(rows, err, refresh=refresh)
+    flat = [m for g in groups for m in g["models"]]
+    return {"models": flat, "groups": groups, "favorites": fav, "default": default,
+            "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
 def set_favorite(mid: str, on: bool) -> dict:

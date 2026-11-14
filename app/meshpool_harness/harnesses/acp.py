@@ -230,10 +230,10 @@ class ACPAgent:
         m = self.manifest
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
-            prepare_hermes()
+            prepare_hermes(self.model)
         elif m.get("prepare") == "codex":
             from meshpool_harness.harnesses import prepare_codex
-            prepare_codex()
+            prepare_codex(self.model)
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -264,6 +264,9 @@ class ACPAgent:
             "clientInfo": {"name": "meshpool", "title": "Meshpool", "version": _VERSION}}, timeout=300)
         self.agent_info = init.get("agentInfo") or {}
         self.capabilities = init.get("agentCapabilities") or {}
+        auth = m.get("auth")                   # e.g. Gemini CLI: which of its own logins to use
+        if auth and any(a.get("id") == auth.get("methodId") for a in init.get("authMethods") or []):
+            self._request("authenticate", auth, timeout=120)
 
     def _reader(self):
         for raw in self._p.stdout:
@@ -521,10 +524,12 @@ class ACPAgent:
             self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 
     def _apply_model(self):
-        if not (self.model and self.acp_session):
-            return
+        from meshpool_harness import providers as PV
+        bare = PV.split(self.model)[1] if self.model else ""
+        if not (bare and bare != "default" and self.acp_session):
+            return                             # "default": the harness's own account picks the model
         try:
-            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": self.model}, timeout=60)
+            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": bare}, timeout=60)
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
 

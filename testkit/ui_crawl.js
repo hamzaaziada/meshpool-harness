@@ -24,6 +24,9 @@ async function watch(p) {
     await p.goto(`http://127.0.0.1:${freshPort}/`);
     await p.waitForSelector("#oKey", {timeout: 20000});
     check("onboarding shows the key screen", true);
+    // One provider choice: the Meshpool key, another key, a ChatGPT plan, or a Claude plan (which runs Claude Code only)
+    check("onboarding offers the four providers", (await p.$$eval("[data-prov]", x => x.map(e => e.dataset.prov).join(","))) === "meshpool,custom,chatgpt,claude");
+    check("the Claude plan is labelled as Claude Code only", /runs Claude Code/i.test(await p.textContent("[data-prov=claude]")));
     await p.click("#oGo"); await p.waitForTimeout(300);
     check("empty key shows a message", /Paste your API key/.test(await p.textContent("#oRes")));
     await p.fill("#oKey", "test-key-1234");
@@ -43,7 +46,7 @@ async function watch(p) {
     await p.waitForFunction(() => document.querySelector("#oImport") && !/Looking for/.test(document.querySelector("#oImport").textContent), null, {timeout: 30000});
     const n = await p.$$eval("#oImport [data-key]", x => x.length);
     check("setup step lists skills and MCP servers from other apps", n >= 5, n);
-    check("setup step lists both subscriptions", (await p.$$eval("#oSubs li", x => x.length)) === 2);
+    check("setup step leaves sign-ins to the provider step", !(await p.$("#oSubs")));   // providers are chosen in step 1
     await p.screenshot({path: out + "/u2-setup.png"});
     await p.click("#impNone"); await p.click("#impAll");
     // Start imports what is ticked (there is no separate Import button in onboarding)
@@ -104,7 +107,9 @@ async function watch(p) {
   }
   await p.click("#hPill"); await p.waitForTimeout(300);
   const groups = await p.$$eval(".pop .grp", x => x.map(g => g.textContent));
-  check("harness picker shows Automatic and subscriptions", groups.some(g => /Automatic/.test(g)) && groups.some(g => /subscriptions/i.test(g)), groups);
+  // Agents only (Codex and Claude Code are agents; a subscription is a provider, chosen in the model menu)
+  check("harness picker shows Automatic and agents, no subscription entries", groups.some(g => /Automatic/.test(g)) && !groups.some(g => /subscription/i.test(g)), groups);
+  check("each agent shows what it is best at", (await p.$$eval(".pop .opt[data-id] .od", x => x.filter(e => e.textContent.trim()).length)) >= 3);
   await p.click(".pop .opt[data-id='meshpool-auto']"); await p.waitForTimeout(300);
   check("pick Meshpool Auto", /Meshpool Auto/.test(await p.textContent("#hPill")));
   await p.click("#pPill"); await p.waitForTimeout(200); check("plan toggle on", (await p.getAttribute("#pPill", "aria-pressed")) === "true"); await p.click("#pPill");

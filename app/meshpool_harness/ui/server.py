@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
+from meshpool_harness import providers as PVD
 from meshpool_harness.ui import agent_api as A
 from meshpool_harness.ui import workbench as W
 
@@ -70,8 +71,8 @@ def start_job(body: dict) -> dict:
     if not request:
         raise ValueError("Describe the task first.")
     vals = C.read()
-    if not (vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")):
-        raise ValueError("Add your API key in Settings first.")
+    if not (HR.api_key() or (HR.provider() == "chatgpt" and HR.ready())):
+        raise ValueError("Add your API key or sign in to ChatGPT in Settings first.")
     engine = body.get("engine") or ""
     if engine and any(e not in ENGINES for e in engine.split(",")):
         raise ValueError(f"Unknown engine: {engine}")
@@ -237,7 +238,9 @@ def get_settings() -> dict:
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
-            "ready": HR.ready(), "provider": HR.provider()}
+            "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
+            "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()},
+            "keys": {"anthropic": bool(HR.anthropic_key()), "gemini": bool(PVD.gemini_key())}}
 
 
 def save_settings(body: dict) -> dict:
@@ -614,8 +617,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/harness-login":
                 from meshpool_harness import harnesses as HRS
                 b = self._json()
-                return self._send(200, HRS.login({"claude-subscription": "claude",
-                                                  "chatgpt-subscription": "codex"}.get(b.get("id", ""), b.get("id", ""))))
+                hid = HRS.LEGACY.get(b.get("id", ""), b.get("id", ""))
+                which = {"claude-code": "claude", "codex": "codex", "gemini-cli": "gemini"}.get(hid) or HRS.LOGINS.get(hid, hid)
+                return self._send(200, HRS.login(which))     # by harness id, or by provider (claude, chatgpt)
             if u.path == "/api/import-context":
                 # context from ChatGPT, Claude or another assistant: pasted answer, pasted instructions, or an export
                 from meshpool_harness import importer as IM
@@ -718,7 +722,7 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 return self._send(200, W.set_favorite(b.get("id", ""), bool(b.get("on"))))
             if u.path == "/api/models/default":
-                C.write({"MH_MODEL": self._json().get("id", "").strip()})
+                C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
                 C.load_into_env(override=True)
                 return self._send(200, W.models())
             if u.path == "/api/projects":

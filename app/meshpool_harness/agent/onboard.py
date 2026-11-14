@@ -192,6 +192,9 @@ def sub_step(st, which: str) -> bool:
         _p(st.dim("    The Meshpool desktop app includes it."))
         return False
     _p(f"  Usage comes out of your {plans} plan. No API key needed.")
+    if which == "claude":
+        _p(st.dim("  A Claude subscription runs Claude Code, Anthropic's own agent. Meshpool never uses its sign-in"))
+        _p(st.dim("  for anything else."))
     _p()
     if which == "chatgpt":
         _p(st.dim("    Your browser opens for the ChatGPT sign-in. Come back here when it says you are signed in."))
@@ -214,14 +217,29 @@ def sub_step(st, which: str) -> bool:
     return False
 
 
+def _agent_note(st) -> None:
+    """Say which agent the provider gives: the default agent is chosen from the provider."""
+    from meshpool_harness import harnesses as HR
+    try:
+        h = HR.get(HR.default_for("code"))
+    except (KeyError, ValueError):
+        return
+    _p(f"    {st.green('✓')} Your agent: {h['name']}" + (f", on {h['runs_on']}." if h.get("runs_on") else "."))
+    if HR.provider() == "claude":
+        _p(st.dim("    Anthropic's terms let a Claude subscription run only Claude Code, so Meshpool Code, Work, Pi"))
+        _p(st.dim("    and Hermes need an API key or a ChatGPT sign-in. Add one any time with `meshpool setup`."))
+
+
 def provider_step(st, n: int = 1) -> bool:
     """Step 1: what Meshpool runs on. The Meshpool key is the default; any other key or a subscription also works."""
     _step(st, n, "Choose how Meshpool runs", "You can change this any time with `meshpool setup`.")
     from meshpool_harness import harnesses as HR
     opts = [("meshpool", "Meshpool API key", "recommended: every model on one key, 20% cheaper"),
-            ("custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider"),
-            ("claude", "Claude subscription", "your Claude Pro or Max plan"),
-            ("chatgpt", "ChatGPT subscription", "your ChatGPT Plus, Pro or Business plan")]
+            ("custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider"),
+            ("chatgpt", "ChatGPT subscription", "your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, "
+                                                "Pi, Hermes and Codex"),
+            ("claude", "Claude subscription, runs Claude Code", "your Claude Pro or Max plan; only Claude Code "
+                                                                "can use it")]
     cur = HR.provider()
     d = next((i for i, o in enumerate(opts, 1) if o[0] == cur), 1)
     while True:
@@ -241,9 +259,11 @@ def provider_step(st, n: int = 1) -> bool:
                     return False
                 if keep:
                     _use(which)
+                    _agent_note(st)
                     return True
             ok = key_step(st, custom=which == "custom")
         if ok:
+            _agent_note(st)
             return True
         _p()
         _p(st.dim("  Choose again, or press Ctrl+C to leave."))
