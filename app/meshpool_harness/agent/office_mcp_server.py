@@ -134,6 +134,61 @@ def _runs(par, text: str):
             par.add_run(part)
 
 
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0e-\x1f]")
+
+
+def _clean(text: str | None) -> str:
+    """Text without the control characters Word refuses (PDF extracts carry form feeds): a form feed becomes a
+    paragraph break, the rest are dropped."""
+    return _CTRL.sub("", (text or "").replace("\x0c", "\n\n"))
+
+
+def _safe_name(filename: str, default: str, ext: str) -> str:
+    """A file name that every file system takes: unsafe characters replaced, at most 150 bytes (non-Latin names were
+    over the 255-byte limit and the save failed), with its extension."""
+    name = re.sub(r"[^\w .-]", "_", Path(filename or "").name).strip() or default
+    stem = name[:-len(ext)] if name.lower().endswith(ext) else name
+    while len(stem.encode("utf-8")) > 150:
+        stem = stem[:-1]
+    return (stem.strip() or Path(default).stem) + ext
+
+
+def _pdf_font(text: str) -> tuple[str, str]:
+    """(regular, bold) font names for a PDF: Helvetica covers Latin only, so other scripts got black boxes. The first
+    Unicode font on this computer that covers the text is embedded; CJK falls back to a built-in CID font."""
+    if not re.search(r"[^\x00-\xff\u2013\u2014\u2018-\u201d\u2022\u2026\u20ac]", text):
+        return "Helvetica", "Helvetica-Bold"
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    cjk = bool(re.search(r"[\u3000-\u9fff\uac00-\ud7af\uf900-\ufaff]", text))
+    win = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+    cands = ([("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", None), ("/Library/Fonts/Arial Unicode.ttf", None),
+              (str(win / "msyh.ttc"), str(win / "msyhbd.ttc")),
+              ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc")]
+             if cjk else [])
+    cands += [("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", None), ("/Library/Fonts/Arial Unicode.ttf", None),
+              (str(win / "arial.ttf"), str(win / "arialbd.ttf")), (str(win / "segoeui.ttf"), str(win / "segoeuib.ttf")),
+              ("/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+              ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")]
+    for reg, bold in cands:
+        if not Path(reg).is_file():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("MPText", reg, subfontIndex=0))
+            b = "MPText"
+            if bold and Path(bold).is_file():
+                pdfmetrics.registerFont(TTFont("MPTextBold", bold, subfontIndex=0))
+                b = "MPTextBold"
+            return "MPText", b
+        except Exception:  # noqa: BLE001  try the next font
+            continue
+    if cjk:
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        return "STSong-Light", "STSong-Light"
+    return "Helvetica", "Helvetica-Bold"
+
+
 def _free(p: Path) -> Path:
     """p, or "name (2).ext" if p exists: a second document of the same name never replaces the first."""
     stem, suf, i = p.stem, p.suffix, 2
@@ -146,9 +201,8 @@ def _free(p: Path) -> Path:
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
     from docx import Document
     from docx.shared import Pt
-    name = re.sub(r"[^\w .-]", "_", Path(filename).name).strip() or "document.docx"
-    if not name.lower().endswith(".docx"):
-        name += ".docx"
+    name = _safe_name(filename, "document.docx", ".docx")
+    markdown, title = _clean(markdown), _clean(title) or None
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     doc = Document()
@@ -255,20 +309,23 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import cm
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
-    name = re.sub(r"[^\w .-]", "_", Path(filename).name).strip() or "document.pdf"
-    if not name.lower().endswith(".pdf"):
-        name += ".pdf"
+    name = _safe_name(filename, "document.pdf", ".pdf")
+    markdown, title = _clean(markdown), _clean(title) or None
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     st = getSampleStyleSheet()
+    reg, bold = _pdf_font(markdown + (title or ""))
+    for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
+        st[k].fontName = bold if k.startswith(("Title", "Heading")) else reg
     flow = [Paragraph(_md_inline(title), st["Title"])] if title else []
     lines = markdown.replace("\r\n", "\n").split("\n")
-    i, bullets = 0, []
+    i, bullets, numbered = 0, [], [False]
 
     def flush():
         if bullets:
             flow.append(ListFlowable([ListItem(Paragraph(_md_inline(b), st["BodyText"])) for b in bullets],
-                                     bulletType="bullet", leftIndent=14))
+                                     bulletType="1" if numbered[0] else "bullet", leftIndent=14,
+                                     bulletFontName=reg))
             bullets.clear()
     while i < len(lines):
         s = lines[i].strip()
@@ -300,6 +357,10 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             lvl = len(s) - len(s.lstrip("#"))
             flow.append(Paragraph(_md_inline(s[lvl:].strip()), st["Heading%d" % min(lvl, 4)]))
         elif re.match(r"^([-*+]|\d+[.)])\s", s):
+            num = bool(re.match(r"^\d+[.)]\s", s))
+            if bullets and num != numbered[0]:
+                flush()                                  # a numbered list after a bulleted one starts a new list
+            numbered[0] = num
             bullets.append(re.sub(r"^([-*+]|\d+[.)])\s+", "", s))
         elif s.startswith(">"):
             flush()
@@ -348,11 +409,16 @@ def convert_document(path: str, to: str = "pdf"):
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-    r = subprocess.run([exe, "--headless", "--convert-to", to, "--outdir", str(out), str(src)], capture_output=True,
-                       text=True, timeout=300, **kw)
-    dst = out / (src.stem + "." + to)
-    if r.returncode != 0 or not dst.exists():
-        return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
+    import shutil
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
+        r = subprocess.run([exe, "--headless", "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
+                           capture_output=True, text=True, timeout=300, **kw)
+        made = Path(tmp) / (src.stem + "." + to)
+        if r.returncode != 0 or not made.exists():
+            return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
+        dst = _free(out / made.name)
+        shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
 
 

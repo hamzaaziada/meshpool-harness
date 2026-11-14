@@ -63,8 +63,11 @@ def check_document(path: str) -> tuple[str, bool]:
         return f"File not found: {path}", True
     r = check(str(p))
     if r["ok"]:
-        how = "schema-valid and" if r["schema_validation"] == "run" else "package checks only (schemas not installed);"
-        return f"{p.name}: {how} no problems found in {r['parts_validated']} parts; Office should open it without repair.", False
+        if r["schema_validation"] == "run":
+            return (f"{p.name}: schema-valid, no problems found in {r['parts_validated']} parts; Office should open it "
+                    "without repair."), False
+        return (f"{p.name}: the package checks passed (relationships, content types, well-formed XML). Schema "
+                "validation did not run (schemas not installed), so Office may still offer to repair it."), False
     lines = [f"{p.name}: {len(r['problems'])} problem(s) that would make Office offer to repair the file:"]
     lines += [f"- {x['part']} ({x['check']}): {x['detail']}" for x in r["problems"][:20]]
     return "\n".join(lines), False
