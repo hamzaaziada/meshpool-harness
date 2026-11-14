@@ -128,7 +128,7 @@ const ISSUES = "https://github.com/hamzaaziada/meshpool-harness/issues/new";
 async function reportProblem(what = "") {
   if (!S.version) { try { S.version = (await api("/api/about")).version; } catch (e) { S.version = "unknown"; } }
   const v = S.cur?.view || {};
-  const q = new URLSearchParams({template: "bug_report.yml", title: "[Beta] " + clip(String(what).replace(/\s+/g, " "), 70),
+  const q = new URLSearchParams({template: "bug_report.yml", title: "[Beta] " + (clip(String(what).replace(/\s+/g, " "), 70) || "Problem report"),
     version: S.version, os: navigator.userAgentData?.platform || navigator.platform || "", agent: [v.harness?.name, v.model].filter(Boolean).join(", "),
     error: String(what).slice(0, 1500)});
   openExternal(`${ISSUES}?${q}`);
@@ -751,7 +751,7 @@ function closePop() { $("#pop")?.remove(); document.removeEventListener("mousedo
 function popAway(e) { if (!e.target.closest("#pop") && !e.target.closest(".pill") && !e.target.closest(".chip")) closePop(); }
 function openPop(anchor, html, {above = true, width} = {}) {
   closePop();
-  const p = document.createElement("div"); p.className = "pop"; p.id = "pop"; p.innerHTML = html; if (width) p.style.width = width + "px";
+  const p = document.createElement("div"); p.className = "pop"; p.id = "pop"; p.innerHTML = html; if (width) p.style.width = Math.min(width, innerWidth - 16) + "px";
   document.body.appendChild(p);
   p._place = () => {
     const r = anchor.getBoundingClientRect();

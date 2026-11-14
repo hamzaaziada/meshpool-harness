@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# One build at a time: a newer push waits for the running one, then replaces its files
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   PI_VERSION: "1.5.2"
   HERMES_COMMIT: b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a
@@ -140,5 +145,6 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
           fi
+          gh release edit "$TAG" --notes-file packaging/release-notes.md
           gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/SHA256SUMS.txt --clobber
           gh release edit "$TAG" --draft=false --latest

@@ -434,8 +434,11 @@ class ACPAgent:
             if c.get("type") == "text" and c.get("text"):
                 if re.match(r"\s*Warning: Model metadata for .* not found", c["text"]):
                     return                         # Codex's own start-up notice about a custom model, not a reply
-                self._text.append(c["text"])
-                self._emit({"type": "text_delta", "text": c["text"]})
+                t = c["text"] if self._text else c["text"].lstrip()   # the first piece kept has text in it
+                if not t:
+                    return                         # blank lines before the reply starts (Hermes sends two)
+                self._text.append(t)
+                self._emit({"type": "text_delta", "text": t})
         elif kind == "agent_thought_chunk":
             c = u.get("content") or {}
             if c.get("type") == "text" and c.get("text"):
@@ -526,6 +529,7 @@ class ACPAgent:
 
     def _models_from(self, r: dict):
         ms = r.get("models") or {}
+        self.model_now = ms.get("currentModelId")
         if ms.get("availableModels"):
             self.available_models = [{"id": m.get("modelId"), "name": m.get("name") or m.get("modelId")}
                                      for m in ms["availableModels"] if m.get("modelId")]
@@ -556,8 +560,11 @@ class ACPAgent:
         bare = PV.split(self.model)[1] if self.model else ""
         if not (bare and bare != "default" and self.acp_session):
             return                             # "default": the harness's own account picks the model
+        if bare == getattr(self, "model_now", None):
+            return                             # already on it; switching anyway makes Hermes rebuild its agent
         try:
             self._request("session/set_model", {"sessionId": self.acp_session, "modelId": bare}, timeout=60)
+            self.model_now = bare
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
 
