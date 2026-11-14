@@ -85,6 +85,18 @@ def brand_from(task: str, files: list[str] | None = None) -> tuple[dict, dict | 
     return look, prof
 
 
+def icon_set_from(task: str, options: dict | None = None) -> str | None:
+    """The deck's icon set: options["icon_set"], or 'icon set: phosphor', 'material icons', 'carbon icon style' in
+    the request (engines/icons SETS). None keeps the default (Lucide)."""
+    from engines.icons import SETS
+    asked = (options or {}).get("icon_set")
+    if asked:
+        return str(asked).strip().lower() if str(asked).strip().lower() in SETS else None
+    names = "|".join(re.escape(s) for s in sorted(SETS, key=len, reverse=True))
+    m = re.search(r"\bicon(?:s| set| style)?\s*[:=]\s*(" + names + r")\b|\b(" + names + r")\s+icons?\b", task.lower())
+    return (m.group(1) or m.group(2)) if m else None
+
+
 def density_from(task: str, options: dict | None = None, density: str | None = None) -> str:
     """'for presenting', 'keynote', 'visual' -> present; 'send-ahead', 'pre-read', 'detailed', 'dense' -> read;
     otherwise balanced. An explicit density (argument, options["density"], or 'density: x' in the request) wins."""
@@ -114,6 +126,10 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
             print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
     look, prof = brand_from(task, attached)
+    iset = icon_set_from(task, options)
+    if iset:                                                    # one icon set for the whole deck
+        th = look.get("theme")
+        look["theme"] = {**(th if isinstance(th, dict) else {"palette": th} if th else {}), "icon_set": iset}
     res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
                 density=mode, fixed_pages=fixed, extra_facts=extra, **look)
     pptx = res["pptx"]

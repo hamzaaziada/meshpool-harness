@@ -14,7 +14,7 @@ Tools
   check_workbook(path)                -> the forge workbook rules (X0-X13) after a headless recalculation
   check_document(path)                -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
   measure_office_file(path, pages?)   -> how a .pptx/.xlsx/.pdf is built (reverse-engineering a reference file)
-  find_icon(query, set?, limit?)      -> bundled outline icons (Lucide, Tabler) that fit a meaning, with SVG paths
+  find_icon(query, set?, style?, ...) -> bundled icons (Lucide, Tabler, Phosphor, Material, Carbon, ...) for a meaning
 
 Engine jobs run in the background. A call waits up to OFFICE_WAIT_S (default 100 s, under the common 120 s MCP
 timeout; Meshpool's own client sets 280 s with a 330 s timeout); a longer job returns a job id to check with
@@ -72,10 +72,12 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
 def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
               density: str | None = None, slides: int | None = None, theme: str | None = None,
               opening: str | None = None, closing: str | None = None, sources: str | None = None,
-              brief_ok: bool = False):
+              brief_ok: bool = False, icon_set: str | None = None):
     """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
     or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
     or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
+    if icon_set:                                   # one icon set for the deck (engines/forge/engine.py icon_set_from)
+        request = f"{request}\nIcon set: {icon_set}"
     fields = {k: v for k, v in dict(audience=audience, purpose=purpose, density=density, slides=slides, theme=theme,
                                     opening=opening, closing=closing, sources=sources).items() if v not in (None, "")}
     try:
@@ -329,20 +331,29 @@ def convert_document(path: str, to: str = "pdf"):
     return f"Saved: {dst}", False
 
 
-def find_icon(query: str, set: str | None = None, limit: int = 8):
-    """Icons from the bundled outline sets that fit a meaning, best first (read-only)."""
+def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: str | None = None,
+              list_sets: bool = False):
+    """Icons from the bundled sets that fit a meaning, best first, each with its set, licence and style; or, with
+    list_sets, the sets themselves (read-only)."""
     if str(APP) not in sys.path:
         sys.path.insert(0, str(APP))
     from engines import icons as IC
     try:
-        rows = IC.search(query, set=set or None, limit=max(1, min(int(limit or 8), 40)))
+        if list_sets or not str(query or "").strip():
+            rows = IC.sets(style=style or None)
+            lines = [f"{r['set']:<22} {r['count']:>5} icons  {r['kind']:<8} {r['license']:<10} {r['style']}"
+                     + ("  (main style)" if r["primary"] else "") for r in rows]
+            return ("Icon sets (set, icons, style, licence, look). Use one set for the whole deck; pass it as `set` "
+                    "here and as icon_set for a deck:\n" + "\n".join(lines)), False
+        rows = IC.search(query, set=set or None, limit=max(1, min(int(limit or 8), 40)), style=style or None)
     except ValueError as e:
         return str(e), True
     if not rows:
         return f"No icon matches {query!r}. Try a simpler word (money, growth, risk, people, time).", False
-    lines = [f"{r['set']}:{r['name']}  score {r['score']}  {r['path']}" + (f"  tags: {', '.join(r['tags'][:5])}"
-             if r["tags"] else "") for r in rows]
-    return ("Use one set for the whole deck. Best matches (set:name, score, SVG path):\n" + "\n".join(lines)), False
+    lines = [f"{r['set']}:{r['name']}  score {r['score']}  {r['style']}, {r['license']}  {r['path']}"
+             + (f"  tags: {', '.join(r['tags'][:5])}" if r["tags"] else "") for r in rows]
+    return ("Use one set for the whole deck. Best matches (set:name, score, style, licence, SVG path):\n"
+            + "\n".join(lines)), False
 
 
 S = {"type": "string"}
@@ -362,6 +373,9 @@ TOOLS = {
                                               "pre-read"},
                    "slides": {"type": "integer", "description": "Number of slides"},
                    "theme": {"type": "string", "description": "navy, ocean, forest, burgundy, graphite or mono"},
+                   "icon_set": {"type": "string", "description": "One icon set for the whole deck, e.g. phosphor, "
+                                "phosphor-light, material, carbon, heroicons (find_icon list_sets=true lists them); "
+                                "default lucide"},
                    "opening": {"type": "string", "description": "Opening slides, e.g. title and agenda"},
                    "closing": {"type": "string", "description": "Closing slides, e.g. next steps, questions"},
                    "sources": {"type": "string", "description": "Sources to use or leave out"},
@@ -389,10 +403,14 @@ TOOLS = {
                          "to PDF, or Markdown to PDF or Word. `to` is the target extension.",
                          {"path": S, "to": S}, ["path", "to"]),
     "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
-                  "\"risk\"). Searches the bundled outline sets, Lucide (ISC) and Tabler (MIT), by name, tags and "
-                  "synonyms, and returns set:name and the SVG path, best first. `set` (lucide or tabler) keeps a "
-                  "deck to one set; `limit` is the number of results (default 8).",
-                  {"query": S, "set": S, "limit": {"type": "integer"}}, ["query"]),
+                  "\"M&A\", \"datacentre\"). Searches the bundled open-licence sets (Lucide, Tabler, Phosphor, "
+                  "Iconoir, Heroicons, Bootstrap, Material Symbols, IBM Carbon; no company logos) by name, tags and "
+                  "synonyms, and returns set:name, style, licence and the SVG path, best first. `set` keeps a deck to "
+                  "one set (e.g. lucide, phosphor, phosphor-fill, material, carbon); `style` (outline, filled, "
+                  "duotone) searches that style of every family; `list_sets` lists the sets with counts, licences "
+                  "and styles; `limit` is the number of results (default 8).",
+                  {"query": S, "set": S, "style": {"type": "string", "enum": ["outline", "filled", "duotone"]},
+                   "limit": {"type": "integer"}, "list_sets": {"type": "boolean"}}, []),
     "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }

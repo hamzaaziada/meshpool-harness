@@ -317,22 +317,116 @@ def icon_name(key: str | None) -> str:
 
 
 @lru_cache(maxsize=256)
-def _icon_png(name: str, hexcolor: str) -> str | None:
+def _icon_png(name: str, hexcolor: str, icon_set: str | None = None) -> str | None:
+    """The icon rasterised in `hexcolor` (192 px). icon_set None or "lucide": the Lucide icon for a meaning."""
     import cairosvg
-    nm = icon_name(name)
-    src = ICONS / f"{nm}.svg"
-    if not src.exists():
+    if icon_set in (None, "lucide"):
+        nm = icon_name(name)
+        src = ICONS / f"{nm}.svg"
+        if not src.exists():
+            return None
+        ICON_CACHE.mkdir(exist_ok=True)
+        out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+        if not out.exists():
+            svg = src.read_text().replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
+            cairosvg.svg2png(bytestring=svg.encode(), write_to=str(out), output_width=192, output_height=192)
+        return str(out)
+    svg = _icon_svg(name, hexcolor, icon_set)
+    if not svg:
         return None
     ICON_CACHE.mkdir(exist_ok=True)
-    out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+    out = ICON_CACHE / f"{icon_set}-{name}-{hexcolor}.png"
     if not out.exists():
-        svg = src.read_text().replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
-        cairosvg.svg2png(bytestring=svg.encode(), write_to=str(out), output_width=192, output_height=192)
+        cairosvg.svg2png(bytestring=svg, write_to=str(out), output_width=192, output_height=192)
     return str(out)
 
 
+ICON_SET = {"name": None}       # the deck's icon set (render(icon_set=...) or theme["icon_set"]); None: Lucide, PNG
+SVG_BLIP_URI = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}"
+ASVG = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+
+
+def _set_icons(icon_set: str | None) -> str | None:
+    """Check and apply the deck's icon set (any set of engines/icons); None keeps the Lucide PNG default."""
+    s = (str(icon_set).strip().lower() or None) if icon_set else None
+    if s:
+        from engines.icons import SETS
+        if s not in SETS:
+            raise ValueError(f"Unknown icon set {icon_set!r}. Sets: {', '.join(SETS)}")
+    ICON_SET["name"] = s
+    return s
+
+
+@lru_cache(maxsize=512)
+def icon_ref(key: str | None, icon_set: str | None = None) -> tuple[str, str]:
+    """(set, icon name) for a meaning in one set. Lucide: icon_name() (deck meanings, aliases, closest name). Other
+    sets: the name itself when the set has it (for a deck meaning, when the Lucide icon is tagged with it too, so
+    "scale" keeps meaning "maximize"); otherwise the library's search for the
+    meaning together with the Lucide icon it maps to and that icon's tags, so "risk" finds each set's warning sign
+    and "congestion" its traffic cone."""
+    s = icon_set or "lucide"
+    lucide = icon_name(key)
+    if s == "lucide":
+        return "lucide", lucide
+    from engines import icons as IC
+    k = (key or "").strip().lower().replace("_", "-").replace(" ", "-")
+    own = IC._lookup(k, s) if k else None
+    tags = next((r["tags"] for r in IC.index("lucide") if r["name"] == lucide), [])
+    remapped = any(w in ICON_MEANINGS or w in ICON_ALIASES for w in k.split("-"))
+    if own and (not remapped or k == lucide or k in tags):     # "money" -> the set's own "money" icon
+        return s, own
+    query = " ".join([k.replace("-", " "), lucide.replace("-", " ")] + list(tags[:6]))
+    words = set(IC._words(query))
+    subject = set(IC._words(" ".join([lucide.replace("-", " ")] + list(tags[:6])))) if remapped else words
+
+    def fit(r):                                    # the icon's subject (first name word) should be in the query
+        nw = IC._words(r["name"].replace("-", " "))
+        return (r["score"] + (4 if nw and nw[0] in subject else 0) + (5 if r["name"] == lucide else 0)
+                - 2 * sum(1 for w in nw if w not in words))
+    hits = IC.search(query, set=s, limit=10) or IC.search("circle dot", set=s, limit=1)
+    return s, (max(hits, key=fit)["name"] if hits else (own or ""))
+
+
+@lru_cache(maxsize=256)
+def _icon_svg(name: str, hexcolor: str, icon_set: str) -> bytes | None:
+    """The icon's SVG in `hexcolor` (PowerPoint does not resolve currentColor), 2px strokes thinned to 1.25px like
+    the Lucide PNGs."""
+    from engines import icons as IC
+    txt = IC.svg(name, icon_set)
+    if not txt:
+        return None
+    txt = txt.replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
+    if "<?xml" not in txt[:10]:
+        txt = '<?xml version="1.0" encoding="UTF-8"?>' + txt
+    return txt.encode("utf-8")
+
+
+def _embed_svg(pic, blob: bytes) -> None:
+    """Add the SVG beside the PNG (a:blip/a:extLst/asvg:svgBlip, how PowerPoint stores an SVG picture): PowerPoint
+    2016+ draws the crisp, recolourable SVG; older readers and LibreOffice draw the PNG. One part per distinct SVG."""
+    from lxml import etree
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.opc.package import Part
+    slide_part = pic.part
+    pkg = slide_part.package
+    seen = pkg.__dict__.setdefault("_forge_svg_parts", {})
+    part = seen.get(blob)
+    if part is None:
+        part = Part(pkg.next_partname("/ppt/media/image%d.svg"), "image/svg+xml", pkg, blob)
+        seen[blob] = part
+    rid = slide_part.relate_to(part, RT.IMAGE)
+    blip = pic._element.find(".//" + qn("a:blip"))
+    ext_lst = blip.find(qn("a:extLst"))
+    if ext_lst is None:
+        ext_lst = etree.SubElement(blip, qn("a:extLst"))
+    ext = etree.SubElement(ext_lst, qn("a:ext"), uri=SVG_BLIP_URI)
+    el = etree.SubElement(ext, f"{{{ASVG}}}svgBlip", nsmap={"asvg": ASVG})
+    el.set(qn("r:embed"), rid)
+
+
 def _icon(sl, name, x, y, d, meaning=""):
-    """Thin line icon (Lucide, ISC) in a thin circle."""
+    """Thin line icon in a thin circle: Lucide (ISC) as PNG by default; with the deck's icon_set, that set's icon
+    as SVG with a PNG fallback."""
     from .template import COLORS
     circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
     circ.name = f"ov_IconRing_{name}"
@@ -340,12 +434,26 @@ def _icon(sl, name, x, y, d, meaning=""):
     circ.fill.background()
     circ.line.color.theme_color = TC.TEXT_1
     circ.line.width = Pt(0.75)
-    png = _icon_png(name, COLORS["dk1"])
-    if png:
-        pad = d * 0.24
-        pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
-        pic.name = f"ov_Icon_{name}"
-        _alt(pic, f"icon:lucide:{name}:{meaning or name}")
+    iset = ICON_SET.get("name")
+    if iset is None:
+        png = _icon_png(name, COLORS["dk1"])
+        if png:
+            pad = d * 0.24
+            pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
+            pic.name = f"ov_Icon_{name}"
+            _alt(pic, f"icon:lucide:{name}:{meaning or name}")
+        return
+    iset, nm = icon_ref(name, iset)
+    png = _icon_png(nm, COLORS["dk1"], iset) if nm else None
+    if not png:
+        return
+    pad = d * 0.24
+    pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
+    pic.name = f"ov_Icon_{name}"
+    _alt(pic, f"icon:{iset}:{nm}:{meaning or name}")
+    svg = _icon_svg(nm, COLORS["dk1"], iset)
+    if svg:
+        _embed_svg(pic, svg)
 
 
 FACE = {"head": "Georgia", "body": "Arial"}
@@ -2350,7 +2458,8 @@ DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
-           carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None) -> dict:
+           carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None,
+           icon_set: str | None = None) -> dict:
     """Render, then (when LibreOffice is available) re-render up to 3 times moving only chart labels that collide.
     carry=False (a fixed slide count): content longer than its slide is never continued on an extra slide; what
     does not fit goes to the speaker notes and is reported, so the content model can cut or merge it.
@@ -2360,8 +2469,11 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     density: "present", "balanced" (default) or "read" (density.py): the type scale and how much text a slide keeps
     on the page; what a mode cuts goes to the speaker notes. A slide's own "density" overrides the deck's.
     brand: {"firm", "footer", "logo"} from a company profile (engines/forge/brand.py render_kwargs): the firm label,
-    and the logo in the footer of every page and on the cover."""
+    and the logo in the footer of every page and on the cover.
+    icon_set: one icon set for the whole deck ("phosphor", "material", "carbon", ... engines/icons SETS), also read
+    from theme["icon_set"]; icons are then embedded as SVG with a PNG fallback. Default: Lucide as PNG."""
     from .template import theme_spec
+    _set_icons(icon_set or (theme.get("icon_set") if isinstance(theme, dict) else None))
     BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None,
                   **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)

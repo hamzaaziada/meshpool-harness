@@ -19,6 +19,13 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 |---|---|---|
 | Lucide icons 0.460.0 (`app/engines/slides/icons`) | ISC | https://lucide.dev (npm lucide-static) |
 | Tabler Icons 3.51.0, outline set without brand logos (`app/engines/icons/tabler`) | MIT | https://tabler.io/icons (npm @tabler/icons) |
+| Tabler Icons 3.51.0, filled set without brand logos (`app/engines/icons/bundles/tabler-filled.json.gz`, licence `app/engines/icons/tabler/LICENSE-tabler.txt`) | MIT | https://tabler.io/icons (npm @tabler/icons) |
+| Phosphor Icons 2.1.1, six weights without the Brands category (`app/engines/icons/bundles/phosphor.json.gz`, `LICENSE-phosphor.txt`), Copyright (c) 2023 Phosphor Icons | MIT | https://phosphoricons.com (npm @phosphor-icons/core) |
+| Iconoir 7.12.2, regular and solid without brand logos (`app/engines/icons/bundles/iconoir.json.gz`, `LICENSE-iconoir.txt`), Copyright (c) 2021 Luca Burgio | MIT | https://iconoir.com (npm iconoir) |
+| Heroicons 2.2.0, 24 px outline and solid (`app/engines/icons/bundles/heroicons.json.gz`, `LICENSE-heroicons.txt`), Copyright (c) Tailwind Labs, Inc. | MIT | https://heroicons.com (npm heroicons) |
+| Bootstrap Icons 1.13.2 without brand logos (`app/engines/icons/bundles/bootstrap.json.gz`, `LICENSE-bootstrap-icons.txt`), Copyright (c) 2019-2024 The Bootstrap Authors | MIT | https://icons.getbootstrap.com (npm bootstrap-icons) |
+| Material Symbols 0.49.0, outlined, rounded and sharp at weight 400, with fill, without product logos (`app/engines/icons/bundles/material.json.gz`, `LICENSE-material-symbols.txt`), by Google | Apache-2.0 | https://fonts.google.com/icons (npm @material-symbols/svg-400) |
+| IBM Carbon icons 11.92.0, 32 px, without the Brand category and IBM product marks (`app/engines/icons/bundles/carbon.json.gz`, `LICENSE-carbon.txt`), Copyright IBM Corp. | Apache-2.0 | https://carbondesignsystem.com (npm @carbon/icons) |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
 
 ## Python packages
