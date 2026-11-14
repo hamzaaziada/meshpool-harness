@@ -464,14 +464,21 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 4, max_steps
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
     rows = rows[:12]
-    root = folder or os.environ.get("MESHPOOL_PROJECT") or str(Path.home())
-    if not Path(root).is_dir():
-        root = str(Path.home())
+    root = folder or os.environ.get("MESHPOOL_PROJECT") or ""
+    if not root or not Path(root).is_dir():                  # no project: an empty folder, never the home folder
+        root = tempfile.mkdtemp(prefix="meshpool-sub-")
     tools = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
 
     class Sub(K.Agent):
         def _tool_names(self):
             return tools
+
+        def _permit(self, name, args):
+            # Sub-agents run unattended, so what would need a yes in Supervised (a read outside the project, an
+            # address carrying data out) is refused instead of allowed: run_subtasks itself runs without asking.
+            risky = self._outside(name, args)
+            return (False, "Sub-agents only read inside the project. Ask the user to attach the file.") if risky \
+                else (True, "")
 
     def one(r):
         a = None

@@ -920,16 +920,19 @@ class Agent:
         elif name in ("fetch_url", "mcp__meshpool_web__web_fetch"):
             from urllib.parse import urlparse
             u = urlparse(str(args.get("url") or ""))
-            long_part = max([len(x) for x in u.path.split("/")] + [0])
-            return (f"Send this to {u.hostname or 'a website'}? The address carries {len(u.query) + long_part} "
-                    "characters of data." if len(u.query) > 200 or long_part > 120 else "")
+            host = u.hostname or ""
+            sub = ".".join(host.split(".")[:-2])           # labels before the site's own name can carry data too
+            carried = len(u.query) + len(u.path) + len(u.fragment) + len(sub)
+            return (f"Send this to {host or 'a website'}? The address carries {carried} characters of data."
+                    if carried > 300 or len(sub) > 60 or len(u.query) > 200 else "")
         else:
             return ""
         try:
             q = Path(p).resolve() if os.path.isabs(p) else (self.ws.root / p).resolve()
         except (OSError, ValueError):
             return f"Read {p[:80]} (outside the project)?"
-        ok = [self.ws.root, self.dir.resolve(), C.runs_dir().resolve()]   # the project, this chat's tool output
+        # the project, this chat's own tool output and the files the user attached; never other chats' histories
+        ok = [self.ws.root, self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
     # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
@@ -963,8 +966,8 @@ class Agent:
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
-                self._diff(name, args) == "(no change)":
-            return True, ""                    # nothing would change: do not ask
+                self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
+            return True, ""                    # nothing would change, byte for byte: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
         if risky:
             group = "outside-" + name
@@ -997,6 +1000,18 @@ class Agent:
         if decision == "always":
             self.always.add(group)
         return decision in ("yes", "always"), note or ""
+
+    def _same_bytes(self, name: str, args: dict) -> bool:
+        """True when the write would leave the file's bytes exactly as they are. A diff of decoded lines hides line
+        endings, the final newline and bytes that are not UTF-8, so it alone cannot skip the prompt."""
+        try:
+            p = self.ws._path(str(args.get("path", "")), write=True)
+            raw = p.read_bytes()
+            if name == "write_file" and not args.get("append"):
+                return raw == str(args.get("content", "")).encode("utf-8")
+            return False
+        except Exception:  # noqa: BLE001
+            return False
 
     def _diff(self, name: str, args: dict) -> str:
         """The change an edit or write_file would make, for the tool card and the approval prompt. Never raises:

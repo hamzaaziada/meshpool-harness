@@ -46,14 +46,15 @@ def _python_m() -> list[str]:
 def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
     """Register a job (its output folder, command and build number) and return its id; run() runs it."""
     jid = uuid.uuid4().hex[:8]
-    out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}"
+    out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
     out.mkdir(parents=True, exist_ok=True)
     cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
     if paths:
         cmd += ["--files", *paths]
     now = time.time()
     recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
-    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1}
+    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
+                 "inputs": {Path(x).name for x in paths or []}}
     return jid
 
 
@@ -101,9 +102,13 @@ def report(jid: str, rel_to: Path | None = None) -> tuple[str, bool]:
         return (f"Still working on the {j['engine']} job ({mins} min so far). Job id: {jid}. "
                 f"Call office_job_status with this id to get the result."), False
     out: Path = j["out"]
-    made = [p for p in sorted(out.rglob("*"))
-            if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)]
     res = j.get("result") or {}
+    # the engine's own files: the copies of the user's inputs and the engine's build scripts are not results
+    arts = [Path(a) if Path(a).is_absolute() else out / a for s in res.get("steps") or [] for a in s.get("artifacts") or []]
+    made = sorted({a.resolve() for a in arts if a.is_file()}) or [
+        p for p in sorted(out.rglob("*"))
+        if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
+        and not (p.parent == out and p.name in j.get("inputs", set())) and p.suffix not in (".py", ".run", ".log")]
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()

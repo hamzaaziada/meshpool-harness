@@ -83,8 +83,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         if len(r.engines) > 1:
             task += f"\n\nYou are step {i + 1} of {len(r.engines)} ({' -> '.join(r.engines)}); do only the {name} part."
         kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
-        if name == "slides" and researched:          # the deck builds on the research report (forge facts)
-            kw = {"files": inputs}
+        if name == "slides" and (researched or request.lstrip().startswith("[add to deck:")):
+            kw = {"files": inputs}                   # research facts, or the user's own deck (by its real path)
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
             kw["model"] = os.environ["MH_MODEL"]
         saved = dict(os.environ)

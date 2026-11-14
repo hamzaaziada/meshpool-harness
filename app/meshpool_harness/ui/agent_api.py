@@ -204,7 +204,7 @@ class Session:
         self.plan = bool(plan)
         self.goal, self._goal_idle = "", 0          # /goal: see GOAL_NOTE
         self.cp = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()          # re-entrant: a steer taken under it emits an event
         self.state = "starting"
         self.queue: list = []                       # messages sent while a harness without mid-turn input works
         self.ctx_pending = not resume_id             # instructions and memory go with the first message
@@ -494,8 +494,12 @@ class Session:
             return {"queued": False, "answered": q["id"]}
         if self.state in ("working", "waiting"):
             if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
-                self.agent.steer(self._body(text, images), images=images)
-                return {"queued": False, "added": True}
+                with self.lock:                      # the turn may be ending: decide under the lock it ends under
+                    if self.state in ("working", "waiting"):
+                        self.agent.steer(self._body(text, images), images=images)
+                        return {"queued": False, "added": True}
+                self._start_turn(text, images)       # it ended meanwhile: this message starts the next turn
+                return {"queued": False}
             with self.lock:
                 self.queue.append((text, images))
             self.emit({"type": "queued", "text": text, "n": len(self.queue)})
@@ -603,7 +607,20 @@ class Session:
                     self.emit({"type": "queued", "text": "", "n": 0})
                     self._start_turn(*nxt)               # stays "working": the queued message goes straight in
                 else:
-                    self.state = "idle"
+                    while True:                          # a message added in the last moment is answered, not left
+                        with self.lock:
+                            late = (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
+                                    and self.agent.has_steers())
+                            if not late:
+                                self.state = "idle"
+                                break
+                        try:
+                            self.agent.resume_steers()
+                        except Exception as e:  # noqa: BLE001
+                            self.emit({"type": "error", "text": str(e)})
+                            with self.lock:
+                                self.state = "idle"
+                            break
                     took = time.time() - self.t_turn
                     if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
                         last = next((e.get("text") for e in reversed(self.events)
