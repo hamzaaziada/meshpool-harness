@@ -358,6 +358,12 @@ def chart_checks(slides) -> dict[int, list[str]]:
                                              "sorted, with the key part highlighted")
             if len(series) == 1 and len(cats) < 2 and kind != "waterfall":
                 out.setdefault(n, []).append("chart with a single bar shows nothing; use kpi_tiles or add comparators")
+            if kind == "range" or s.get("archetype") == "football_field":
+                kind = "range"
+                if len(cats) < 2:
+                    out.setdefault(n, []).append(
+                        f"a football field with {len(cats)} method is not a valuation range; it needs >= 2 methods "
+                        "(ideally 3+) in the same unit as the offer; with fewer, state the one range in the text")
             if kind != "range":
                 pct = [bool(re.search(r"%|percent|\bpp\b", cat, re.I)) for cat in cats]
                 if any(pct) and not all(pct):
@@ -539,12 +545,24 @@ def chart_fact_checks(slides, facts, rules) -> dict[int, list[str]]:
                   if isinstance(c, dict)]
         for c in charts:
             u = _chart_unit(c)
+            label = " ".join(str(x or "") for x in (c.get("unit"), s.get("subtitle"), (s.get("exhibit") or {}).get("unit")
+                                                     if isinstance(s.get("exhibit"), dict) else ""))
+            per_share = bool(re.search(r"per share|/\s*sh\b|\$/sh", label, re.I))
             bad = []
+            mism = []
             for se in c.get("series") or []:
                 for v in (se.get("values") or []) if isinstance(se, dict) else []:
-                    if isinstance(v, (int, float)) and v and not any(
-                            _same_number(f"{v:g}", float(v), u, fv, fu) for fv, fu in pool):
+                    if not isinstance(v, (int, float)) or not v:
+                        continue
+                    hits = [fu for fv, fu in pool if _same_number(f"{v:g}", float(v), u, fv, fu)]
+                    if not hits:
                         bad.append(f"{v:g}")
+                    elif per_share and all(_SCALE.get(fu, 1) > 1 for fu in hits):
+                        mism.append(f"{v:g}")                   # a $4.9B deal value drawn on a $ per share axis
+            if mism:
+                out.setdefault(n, []).append(
+                    f"chart is in $ per share but plots {', '.join(mism[:6])}, which the facts give as totals "
+                    "($ millions/billions); per-share and total values never share an axis")
             if bad:
                 out.setdefault(n, []).append(
                     f"chart plots {', '.join(bad[:6])}{' ...' if len(bad) > 6 else ''}, which are not figures in the "

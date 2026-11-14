@@ -1571,11 +1571,12 @@ def fallback(s: dict) -> dict:
         st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
         if len(st["items"]) < 2:                       # one number is not an exhibit: full-width argument instead
             s["chart"] = None
-            if s.get("title_right"):
-                s["title"] = s["title"].rstrip(" .…") + " " + s["title_right"].lstrip(" .…")
             s["archetype"] = "argument_only"
             if not s.get("blocks"):
                 s["blocks"] = [{"text": "", "bullets": list(s.get("bullets") or [])}]
+            if s.get("title_right"):                        # the right half's title leads the text, not the title:
+                tr = s.pop("title_right").strip(" .…")      # glued on, it made two sentences with no stop
+                s["blocks"] = [{"text": f"**{tr[0].upper() + tr[1:]}**."}] + list(s["blocks"])
             return s                                        # the callout stays a callout (so-what band)
         s["chart"] = st
         if s.get("archetype") in ("exhibit_argument",) and s.get("blocks") and s.get("title_right"):

@@ -81,3 +81,30 @@ def test_calcs_are_recomputed_from_the_cited_facts():
     assert any("1.45 not in the cited facts" in m for m in bad[1]) and any("not $60" in m for m in bad[1])
     assert number_checks([s], facts + ok[1], rules) == {}
     assert number_checks([s], facts, rules)                      # without the ledger the derived numbers fail
+
+
+def test_football_field_needs_methods_and_per_share_units():
+    facts = [{"id": "F1", "text": "Precedent deal values $4.9B (AMD/ZT) to ~$20B (NVIDIA/Groq)"}]
+    ff = {"archetype": "football_field", "title": "t", "subtitle": "Implied equity value per share, $ per share",
+          "chart": {"categories": ["Precedent transactions"], "series": [{"name": "Low", "values": [4.9]},
+                                                                         {"name": "High", "values": [20.0]}], "unit": "$"}}
+    assert any("football field with 1 method" in m for m in chart_checks([ff])[1])
+    assert any("per share" in m for m in chart_fact_checks([ff], facts, load_rules())[1])
+
+
+def test_density_never_cuts_a_bullet_to_a_lead_in_phrase():
+    from engines.forge.density import headline
+    h = headline("On EV per live GW, CoreWeave and IREN both sit at ~$90B per GW, so financing, not asset quality, "
+                 "explains the lower revenue multiple", 14)
+    assert h != "On EV per live GW"
+    assert headline("Backlog rose 27% to $132.5B in one quarter, driven by two hyperscaler contracts and a sovereign "
+                    "deal in Europe", 12) == "Backlog rose 27% to $132.5B in one quarter"
+
+
+def test_fallback_keeps_the_title_whole_and_moves_the_right_title_into_the_text():
+    from engines.forge.render import fallback
+    s = fallback({"archetype": "exhibit_argument", "title": "Year 1 dilutes EPS", "title_right":
+                  "synergy timing drives EPS", "chart": {"kind": "column", "categories": ["A"],
+                                                         "series": [{"name": "x", "values": [2.46]}]},
+                  "blocks": [{"text": "Body."}]})
+    assert s["title"] == "Year 1 dilutes EPS" and s["blocks"][0]["text"].startswith("**Synergy timing drives EPS**")
