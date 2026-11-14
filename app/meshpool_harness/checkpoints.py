@@ -5,7 +5,10 @@ session's folder. That gives a diff per turn and for the whole thread, and a rev
 it was before a chosen turn, including deleting files the agent created. No Git needed.
 
 Skipped: .git and other tool folders, dependency and build folders, anything the project's .gitignore lists (simple
-patterns), files over 2 MB, and projects with more than 20,000 files.
+patterns), files over 2 MB, and projects with more than 20,000 files. Ignored, too-big and unreadable files, links and
+ignored folders are still listed in each snapshot with a "not stored" marker, so a file that only became visible during
+a turn (say the agent edited .gitignore) is never mistaken for one the agent created, and Undo never deletes or
+overwrites a path whose earlier (or current) contents it did not store.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import stat
 import time
 import zlib
 from pathlib import Path
@@ -21,6 +25,7 @@ from pathlib import Path
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
              ".next", ".nuxt", "dist", "build", ".cache", ".turbo", ".gradle", "target", ".idea", ".DS_Store",
              "Pods", ".terraform", ".tox", "coverage"}
+SKIP_FILES = {".DS_Store"}
 MAX_FILE = 2_000_000
 MAX_FILES = 20_000
 
@@ -50,6 +55,41 @@ def _ignored(rel: str, is_dir: bool, rules) -> bool:
         elif fnmatch.fnmatch(name, pat):
             return True
     return False
+
+
+# Manifest values: "<sha>:<octal mode>" for a stored file (old manifests: "<sha>"), or a "!..." marker for a path that
+# exists but whose contents were not stored. Keys ending in "/" are folders that were not walked (ignored or a link):
+# everything under them existed, contents unknown.
+def _stored(v) -> bool:
+    return isinstance(v, str) and not v.startswith("!")
+
+
+def _sha(v) -> str | None:
+    return v.partition(":")[0] if _stored(v) else None
+
+
+def _mode(v) -> int | None:
+    m = v.partition(":")[2] if _stored(v) else ""
+    return int(m, 8) if m else None
+
+
+def _same(x, y) -> bool:
+    """Same recorded state. Unstored contents are never "the same" as anything."""
+    if x is None or y is None:
+        return x is None and y is None
+    if not (_stored(x) and _stored(y)):
+        return False
+    mx, my = _mode(x), _mode(y)
+    return _sha(x) == _sha(y) and (mx is None or my is None or mx == my)
+
+
+def _unknown(path: str, manifest: dict) -> bool:
+    """True if `path` existed in `manifest` without its contents stored (marker, or under an unwalked folder)."""
+    v = manifest.get(path)
+    if v is not None and not _stored(v):
+        return True
+    parts = path.split("/")
+    return any("/".join(parts[:i]) + "/" in manifest for i in range(1, len(parts)))
 
 
 class Checkpoints:
@@ -99,42 +139,65 @@ class Checkpoints:
             return None
         rules = _ignore_rules(self.root)
         files, count = {}, 0
+        def note(rel: str, marker: str) -> bool:
+            nonlocal count
+            count += 1
+            if count > MAX_FILES:
+                self.disabled = ("This folder is too big to track changes in, so Undo is off here. "
+                                 "Work in a smaller folder to turn it back on.")
+                return False
+            files[rel] = marker
+            return True
+
         for dirpath, dirnames, filenames in os.walk(self.root):
             d = Path(dirpath)
             rel_d = "" if d == self.root else d.relative_to(self.root).as_posix()
             keep = []
             for n in dirnames:
                 rel = f"{rel_d}/{n}" if rel_d else n
-                if n in SKIP_DIRS or n.startswith(".meshpool") or _ignored(rel, True, rules) or (d / n).is_symlink():
+                if n in SKIP_DIRS or n.startswith(".meshpool"):
+                    continue
+                if (d / n).is_symlink():
+                    if not note(rel + "/", "!link"):
+                        return None
+                    continue
+                if _ignored(rel, True, rules):
+                    if not note(rel + "/", "!ignored"):
+                        return None
                     continue
                 keep.append(n)
             dirnames[:] = keep
             for n in filenames:
                 rel = f"{rel_d}/{n}" if rel_d else n
-                if n in SKIP_DIRS or _ignored(rel, False, rules):
+                if n in SKIP_FILES:
                     continue
                 p = d / n
                 try:
-                    st = p.stat()
+                    st = p.lstat()
                 except OSError:
+                    if not note(rel, "!unreadable"):
+                        return None
                     continue
-                if st.st_size > MAX_FILE or p.is_symlink():
+                marker = ("!link" if stat.S_ISLNK(st.st_mode) else "!special" if not stat.S_ISREG(st.st_mode)
+                          else "!ignored" if _ignored(rel, False, rules) else "!big" if st.st_size > MAX_FILE else "")
+                if marker:
+                    if not note(rel, marker):
+                        return None
                     continue
-                count += 1
-                if count > MAX_FILES:
-                    self.disabled = ("This folder is too big to track changes in, so Undo is off here. "
-                                     "Work in a smaller folder to turn it back on.")
-                    return None
+                mode = f":{stat.S_IMODE(st.st_mode):o}"
                 prev = self._last.get(rel)
                 if prev and prev[0] == st.st_size and prev[1] == st.st_mtime_ns:
-                    files[rel] = prev[2]
+                    if not note(rel, prev[2] + mode):
+                        return None
                     continue
                 try:
                     sha = self._put(p.read_bytes())
                 except OSError:
-                    continue
-                files[rel] = sha
-                self._last[rel] = (st.st_size, st.st_mtime_ns, sha)
+                    sha = ""
+                if not note(rel, sha + mode if sha else "!unreadable"):
+                    return None
+                if sha:
+                    self._last[rel] = (st.st_size, st.st_mtime_ns, sha)
         mid = time.strftime("%Y%m%d%H%M%S") + hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest()[:8]
         p = self._manifest_path(mid)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -166,18 +229,25 @@ class Checkpoints:
     def _changes(a: dict, b: dict) -> list:
         out = []
         for path in sorted(set(a) | set(b)):
-            if a.get(path) != b.get(path):
-                out.append({"path": path, "status": "added" if path not in a else "deleted" if path not in b else "modified"})
+            if path.endswith("/") or a.get(path) == b.get(path):
+                continue
+            if path not in a:                    # "added" only when it truly did not exist before
+                status = "modified" if _unknown(path, a) else "added"
+            else:
+                status = "deleted" if path not in b and not _unknown(path, b) else "modified"
+            out.append({"path": path, "status": status})
         return out
 
     def turns(self) -> list:
         return [{k: t.get(k) for k in ("n", "title", "time", "changed")} | {"done": bool(t.get("after"))}
                 for t in self._turns()]
 
-    def _text(self, sha: str | None) -> list[str] | None:
-        if not sha:
+    def _text(self, v: str | None) -> list[str] | None:
+        if not v:
             return []
-        data = self._get(sha)
+        if not _stored(v):
+            return None                          # exists, contents not stored: shown like a binary file
+        data = self._get(_sha(v))
         if b"\0" in data[:8000]:
             return None
         return data.decode("utf-8", "replace").splitlines()
@@ -204,6 +274,8 @@ class Checkpoints:
                         seen.add(path)
                         if before.get(path) is not None:
                             a[path] = before[path]
+                        elif _unknown(path, before):    # existed, under a folder that was not walked
+                            a[path] = "!unknown"
                     b.pop(path, None)
                     if after.get(path) is not None:
                         b[path] = after[path]
@@ -242,29 +314,117 @@ class Checkpoints:
             raise ValueError("No such turn.")
         target = self._load_manifest(t["before"])
         now_id = self.snapshot()
-        now = self._load_manifest(now_id) if now_id else {}
+        if not now_id:                            # can't see the folder now: undoing blind could clobber files
+            raise ValueError(self.disabled or "Couldn't read the folder, so nothing was undone.")
+        now = self._load_manifest(now_id)
         agent_left: dict = {}                     # path -> content sha the agent's last change left (None: deleted)
         for x in sorted((x for x in turns if x["n"] >= turn and x.get("after")), key=lambda x: x["n"]):
             after = self._load_manifest(x["after"])
             for ch in x.get("changed") or []:
                 agent_left[ch["path"]] = after.get(ch["path"])
-        restored, deleted, kept = [], [], []
+        restored, deleted, kept, notes = [], [], [], []
+
+        def keep(path: str, why: str = ""):
+            kept.append(path)
+            if why:
+                notes.append(f"{path}: {why}")
+
+        # 1. decide every action first, touching nothing
+        unlinks, writes = [], []
         for path, left in sorted(agent_left.items()):
-            if now.get(path) != left:             # changed after the agent: not ours to undo
-                kept.append(path)
-                continue
-            p = self.root / path
-            if path in target:
-                if now.get(path) != target[path]:
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(self._get(target[path]))
-                    restored.append(path)
+            if _unknown(path, now):               # can't tell what it holds now (ignored, too big, a link)
+                keep(path, "its current contents aren't tracked (ignored, over 2 MB or a link), so it was left as is")
+            elif not _same(now.get(path), left):  # changed after the agent: not ours to undo
+                keep(path)
+            elif _unknown(path, target):          # its earlier state was never stored: never delete or overwrite it
+                keep(path, "its earlier version wasn't saved (ignored or over 2 MB), so it was left as is")
+            elif path in target:
+                if not _same(now.get(path), target[path]):
+                    writes.append(path)
             elif path in now:
-                try:
-                    p.unlink()
-                    deleted.append(path)
-                except OSError:
-                    kept.append(path)
+                unlinks.append(path)
+        if writes and self._case_insensitive():
+            gone = {p.lower() for p in unlinks}
+            now_lower = {p.lower(): p for p in now if not p.endswith("/")}
+            for path in list(writes):
+                other = now_lower.get(path.lower())
+                if other and other != path and path.lower() not in gone:
+                    writes.remove(path)
+                    keep(path, f"{other} now takes its name on this disk (names ignore case here), so it was left as is")
+
+        # 2. apply: removals first (so a case-only rename or a file<->folder swap can be put back), then writes
+        for path in sorted(unlinks, reverse=True):
+            p = self.root / path
+            try:
+                if not self._inside(p.parent):
+                    keep(path, "it is behind a link that points outside the project, so it was left as is")
+                    continue
+                p.unlink()
+                deleted.append(path)
+            except OSError as e:
+                keep(path, f"couldn't delete it ({e.strerror or e})")
+        for path in writes:
+            p = self.root / path
+            try:
+                if not self._inside(p.parent):
+                    keep(path, "it is behind a link that points outside the project, so it was left as is")
+                    continue
+                if p.is_symlink():
+                    p.unlink()                    # replace the link, never write through it
+                elif p.is_dir():
+                    # a folder now stands where the file was, so it was made after the turn began: remove it only
+                    # if nothing but empty folders is left in it
+                    if not self._remove_empty_tree(p):
+                        keep(path, "a folder with other files in it now has its name, so it was left as is")
+                        continue
+                data = self._get(_sha(target[path]))
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data)
+                if _mode(target[path]) is not None:
+                    os.chmod(p, _mode(target[path]))
+                restored.append(path)
+            except (OSError, zlib.error) as e:
+                keep(path, f"couldn't put it back ({getattr(e, 'strerror', None) or e})")
         self._last.clear()
         self._save_turns([x for x in turns if x["n"] < turn])
-        return {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}
+        out = {"restored": restored, "deleted": deleted, "kept": kept, "message_index": t.get("message_index")}
+        if notes:
+            out["notes"] = notes
+        return out
+
+    def _inside(self, p: Path) -> bool:
+        try:
+            Path(os.path.realpath(p)).relative_to(self.root)
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _remove_empty_tree(d: Path) -> bool:
+        for dirpath, dirnames, filenames in os.walk(d, topdown=False):
+            if filenames:
+                return False
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                return False
+        return True
+
+    def _case_insensitive(self) -> bool:
+        name = self.root.name
+        if name.swapcase() != name:
+            alt = self.root.parent / name.swapcase()
+            try:
+                return alt.exists() and os.path.samefile(alt, self.root)
+            except OSError:
+                return False
+        try:
+            self.store.mkdir(parents=True, exist_ok=True)
+            probe = self.store / "CaseProbe.tmp"
+            probe.write_bytes(b"")
+            try:
+                return (self.store / "caseprobe.tmp").exists()
+            finally:
+                probe.unlink()
+        except OSError:
+            return False

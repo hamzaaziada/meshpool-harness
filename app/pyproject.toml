@@ -4,17 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meshpool-harness"
-version = "0.1.0"
+version = "0.0.1"
 description = "Meshpool: a model-agnostic coding agent (terminal and local app, with MCP) plus one-shot engines for code, data, office and browser tasks."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
 dependencies = ["pandas>=2.0", "openpyxl>=3.1", "python-pptx>=0.6.23", "python-docx>=1.1", "PyYAML>=6.0",
                 "lxml>=5.0", "Pillow>=10.0", "cairosvg>=2.7"]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
-code-intel = ["ruff>=0.5", "jedi>=0.19"]   # MH_LINT_EDIT and MH_NAV (both MIT); optional, with fallbacks
 dev = ["pytest>=8.0", "ruff"]
 
 [project.scripts]

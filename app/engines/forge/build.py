@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT))
 from engines.forge.common import load_rules  # noqa: E402
 from engines.forge.density import DEFAULT as DEFAULT_DENSITY, FILL, STORY, WRITE, normalize as _density  # noqa: E402
 from engines.forge.render import ARCHETYPES, render  # noqa: E402
-from engines.forge.validate_pptx import _candidates, _numbers, validate  # noqa: E402
+from engines.forge.common import SCALE as _SCALE, numbers as _numbers  # noqa: E402
+from engines.forge.validate_pptx import validate  # noqa: E402
 
 MODEL = os.environ.get("FORGE_MODEL") or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
@@ -144,13 +145,28 @@ def facts_from_brief(text: str) -> list[dict]:
     return facts
 
 
-def _fact_values(facts, ids, ignore) -> list[float]:
-    vals = []
-    for f in facts:
-        if f["id"] in ids:
-            for _, v, u in _numbers(f["text"], ignore):
-                vals += _candidates(abs(v), u)
-    return vals
+def _fact_values(facts, ids, ignore) -> list[tuple[float, str]]:
+    return [(abs(v), u) for f in facts if f["id"] in ids for _, v, u in _numbers(f["text"], ignore)]
+
+
+def _same_number(raw: str, v: float, u: str, fv: float, fu: str) -> bool:
+    """Is the quoted number (raw, v, unit u) the fact's value (fv, fu)? Within 0.6% or the rounding of the decimals
+    shown ($7m matches $7.2m, never $45m), and only through same-unit scalings ($7.2m = 7,200,000; never $7.2bn)."""
+    v = abs(v)
+    m = re.search(r"\.(\d+)", raw)
+    half = 0.5 * 10 ** -(len(m.group(1)) if m else 0)          # a figure shown with d decimals is rounded to d
+    pct = ("%", "pp")
+    if (u in pct) != (fu in pct):
+        if u and fu:                                          # a percentage is never a $ amount or a multiple
+            return False
+        if u in pct:                                          # 35% against a fact written 0.35
+            return abs(v / 100 - fv) <= max(0.006 * fv, half / 100)
+        return abs(v - fv / 100) <= max(0.006 * fv / 100, half)
+    ok = lambda a, b, tol: abs(a - b) <= max(0.006 * abs(b), tol)  # noqa: E731
+    s, fs = _SCALE.get(u, 1), _SCALE.get(fu, 1)
+    if (u == fu or not u or not fu) and ok(v, fv, half):        # the same figure as written
+        return True
+    return ok(v * s, fv * fs, half * s)                         # the same amount in another scale
 
 
 def number_checks(slides, facts, rules) -> dict[int, list[str]]:
@@ -168,8 +184,7 @@ def number_checks(slides, facts, rules) -> dict[int, list[str]]:
             out.setdefault(n, []).append(f"{where}: numbers {', '.join(r for r, _, _ in nums)} have no fact id in prov")
             return
         vals = _fact_values(facts, set(prov), ignore)
-        bad = [raw for raw, v, u in nums if not any(abs(c - fv) <= 0.006 * max(abs(fv), 1e-9) or abs(c - fv) < 0.051
-                                                     for c in _candidates(abs(v), u) for fv in vals)]
+        bad = [raw for raw, v, u in nums if not any(_same_number(raw, v, u, fv, fu) for fv, fu in vals)]
         if bad:
             out.setdefault(n, []).append(f"{where}: {', '.join(bad)} not found in cited facts {', '.join(prov)}; "
                                          "use the fact's value or a [GAP] marker")

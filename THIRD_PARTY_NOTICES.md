@@ -1,6 +1,6 @@
 # Third-party notices
 
-Meshpool desktop bundles the open-source software below. Each component stays under its own license; Meshpool's Apache 2.0 license covers only Meshpool's own code. License texts ship inside each component's folder in the app.
+Meshpool desktop bundles the open-source software below. Each component stays under its own license. License texts ship inside each component's folder in the app.
 
 ## Bundled programs
 

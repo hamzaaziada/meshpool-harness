@@ -13,7 +13,6 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from meshpool_harness import config as C
 
 HOME = Path.home()
 
@@ -184,20 +183,18 @@ def find_mcp() -> list[dict]:
 def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
     """Add a server to Meshpool's mcp.json under a free name (an identical entry keeps its name); returns the name."""
     from meshpool_harness.agent import mcp as M
-    p = M.config_file()
+    base = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "server"
+
+    def add(servers: dict) -> str:
+        n, i = base, 2
+        while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
+            n, i = f"{base}-{i}", i + 1
+        servers[n] = dict(spec, description=description or f"Imported from another app ({name}).")
+        return n
     try:
-        cfg = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {"mcpServers": {}}
+        return M.edit_config(add)
     except ValueError:
         raise ValueError("mcp.json is not valid JSON. Fix it under Settings, MCP servers, then import again.")
-    servers = cfg.setdefault("mcpServers", {})
-    base = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "server"
-    n, i = base, 2
-    while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
-        n, i = f"{base}-{i}", i + 1
-    servers[n] = dict(spec, description=description or f"Imported from another app ({name}).")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    return n
 
 
 # ---------- both --------------------------------------------------------------------------------------------------------
@@ -302,13 +299,12 @@ def import_instructions_as_skill(name: str, text: str, description: str = "") ->
 
 
 def _write_skill(name: str, desc: str, body: str) -> str:
+    """Write (or, on a second import, rewrite) a skill; returns its id."""
     from meshpool_harness import skills as SK
-    slug = re.sub(r"[^a-z0-9-]+", "-", (name or "imported").lower()).strip("-")[:60] or "imported"
-    d = SK.folder() / slug
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"---\nname: {slug}\ndescription: {desc.replace(chr(10), ' ')[:300]}\n---\n\n{body}\n",
-                                encoding="utf-8")
-    return slug
+    sid = SK.slug(name or "imported")
+    desc = re.sub(r"\s+", " ", desc or "").strip()[:300] or sid
+    SK.create(sid, desc, body, overwrite=True)
+    return sid
 
 
 def _export_kind(z) -> str:

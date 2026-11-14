@@ -198,6 +198,11 @@ def test_market_inputs_are_sourced_and_ranged(tmp_path):
     F = ROOT / "tests" / "fixtures" / "market"
     rf = MK.treasury_yield(text=(F / "treasury_2026_tail.xml").read_text())
     assert rf["value"] == pytest.approx(0.0515) and rf["date"] == "2026-11-13" and "10Y on 2026-11-13" in rf["source"]
+    feed = (F / "treasury_2026_tail.xml").read_text()
+    with pytest.MonkeyPatch.context() as mp:                  # early January: this year's feed is empty, use last year's
+        mp.setattr(MK, "_get", lambda url, timeout=30: feed if "value=2026" in url else "<feed/>")
+        mp.setattr(MK.time, "strftime", lambda fmt: "2027")
+        assert MK.treasury_yield()["date"] == "2026-11-13"
     erp = MK.damodaran_erp((F / "damodaran_home_snippet.html").read_text())
     assert erp["value"] == pytest.approx(0.0441) and (erp["low"], erp["high"]) == pytest.approx((0.0339, 0.0581))
     bt = (F / "damodaran_betas_snippet.html").read_text()
@@ -229,7 +234,7 @@ def ma_recompute(x, prem=None, stock=None):
     stock = x["pct_stock"] if stock is None else stock
     t = x["tax_rate"]
     eq = x["tgt_price"] * (1 + prem) * x["tgt_shares"]
-    debt, cash = eq * x["pct_debt"], eq * (1 - stock - x["pct_debt"])
+    debt, cash = eq * x["pct_debt"], eq * max(0.0, 1 - stock - x["pct_debt"])
     syn = x["synergies"] * x["synergy_phase"] * (1 - t)
     ni = (x["acq_net_income"] + x["tgt_net_income"] + syn - debt * x["new_debt_rate"] * (1 - t)
           - cash * x["cash_yield"] * (1 - t) - x["writeup_da"] * (1 - t) - x["deal_fees"])
@@ -266,6 +271,24 @@ def test_merger_accretion_matches_recompute(tmp_path):
     r = VX.validate(str(p))
     assert {k: v for k, v in r["rules"].items() if v not in ("pass", "not_run")} == {}, \
         [f["message"] for f in r["failures"] if f["status"] == "fail"][:6]
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")
+def test_merger_grid_centre_is_the_base_case_for_a_small_stock_share(tmp_path):
+    x = {**MA, "pct_stock": 0.1, "pct_debt": 0.6}                    # 0.1 < 2 x 25% step; 0.6 + 0.6 stock > 100%
+    wb = B.banker_workbook("M&A", "Accretion / dilution", "T", "2026-11-14", middle=("Inputs", "Merger"))
+    book = B.assumption_book(wb["Inputs"], 3)
+    for k, v in x.items():
+        book.add(k, v, "num", name=k, source="Test")
+    out = B.merger(wb["Merger"], 3)
+    p = tmp_path / "ma_small.xlsx"
+    wb.save(p)
+    rc = load_workbook(qa.recalc(str(p), str(tmp_path / "rc")), data_only=True)
+    ws, gh = rc["Merger"], out["grid_header_row"]
+    assert [ws.cell(row=gh, column=2 + j).value for j in range(5)] == pytest.approx([0, 0, 0.1, 0.35, 0.6])
+    assert ws.cell(row=gh + 3, column=4).value == pytest.approx(ma_recompute(x)["accretion"], rel=1e-9)
+    assert ws.cell(row=gh + 3, column=6).value == pytest.approx(ma_recompute(x, stock=0.6)["accretion"], rel=1e-9)
+    assert rc["Checks"]["F3"].value == "OK"
 
 
 @pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")

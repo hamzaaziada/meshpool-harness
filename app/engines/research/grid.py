@@ -14,7 +14,6 @@ note. One small model call per cell, run in parallel.
 from __future__ import annotations
 
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -112,6 +111,15 @@ def grid(corpus: Corpus, rows: dict[str, list[str]] | list[str], questions: list
     return g
 
 
+def _put(ws, row: int, column: int, value):
+    """Write a cell. Text that starts with '=' (a web page title, passage or model answer) stays text: it is never
+    evaluated as a formula (=HYPERLINK, =WEBSERVICE...)."""
+    c = ws.cell(row=row, column=column, value=value)
+    if isinstance(value, str) and value.startswith("="):
+        c.data_type, c.quotePrefix = "s", True
+    return c
+
+
 def to_excel(g: Grid, corpus: Corpus, path: str) -> str:
     """Grid sheet (answers with their passage ids; a link to the first cited source; the quoted passage in a
     comment) and a Sources sheet listing every cited passage with its source, page and text."""
@@ -123,21 +131,21 @@ def to_excel(g: Grid, corpus: Corpus, path: str) -> str:
     ws.title = "Grid"
     head = PatternFill("solid", fgColor="1B2333")
     miss = PatternFill("solid", fgColor="F2F2F2")
-    ws.cell(row=1, column=1, value="Document / question").font = Font(bold=True, color="FFFFFF")
+    _put(ws, 1, 1, "Document / question").font = Font(bold=True, color="FFFFFF")
     ws.cell(row=1, column=1).fill = head
     for j, q in enumerate(g.questions, start=2):
-        c = ws.cell(row=1, column=j, value=q)
+        c = _put(ws, 1, j, q)
         c.font, c.fill = Font(bold=True, color="FFFFFF"), head
         c.alignment = Alignment(wrap_text=True, vertical="top")
         ws.column_dimensions[c.column_letter].width = 42
     ws.column_dimensions["A"].width = 34
     cited = []
     for i, lab in enumerate(g.rows, start=2):
-        ws.cell(row=i, column=1, value=lab).font = Font(bold=True)
+        _put(ws, i, 1, lab).font = Font(bold=True)
         for j in range(2, len(g.questions) + 2):
             cell = g.get(i - 2, j - 2)
             txt = cell.answer + (" " + "".join(f"[{c}]" for c in cell.citations) if cell.citations else "")
-            x = ws.cell(row=i, column=j, value=txt)
+            x = _put(ws, i, j, txt)
             x.alignment = Alignment(wrap_text=True, vertical="top")
             if not cell.ok:
                 x.fill = miss
@@ -156,13 +164,13 @@ def to_excel(g: Grid, corpus: Corpus, path: str) -> str:
     ws.freeze_panes = "B2"
     S = wb.create_sheet("Sources")
     for j, h in enumerate(["Passage", "Source", "Page", "URL", "Text"], start=1):
-        c = S.cell(row=1, column=j, value=h)
+        c = _put(S, 1, j, h)
         c.font, c.fill = Font(bold=True, color="FFFFFF"), head
     for r, pid in enumerate(cited, start=2):
         p = corpus.passage(pid)
         s = corpus.sources[p.source_id]
         for j, v in enumerate([pid, s.citation(), p.page, s.url, p.text], start=1):
-            S.cell(row=r, column=j, value=v).alignment = Alignment(wrap_text=True, vertical="top")
+            _put(S, r, j, v).alignment = Alignment(wrap_text=True, vertical="top")
     for col, w in zip("ABCDE", (12, 60, 8, 50, 100)):
         S.column_dimensions[col].width = w
     wb.save(path)

@@ -3,8 +3,9 @@
 The page is shown as a numbered list of what you can act on, e.g. `[3] button "Sign in"`, plus visible text,
 so any model can drive it without screenshots (and with few tokens).
 
-  python -m engines.browser.ctl start            # start the browser daemon (headless unless MH_HEADLESS=0)
-  python -m engines.browser.ctl goto <url>
+  python -m engines.browser.ctl start [dir]      # start the browser daemon (headless unless MH_HEADLESS=0);
+                                                 # screenshots may only be saved under dir (default: cwd)
+  python -m engines.browser.ctl goto <url>       # http(s) only
   python -m engines.browser.ctl snapshot         # numbered elements + page text (short)
   python -m engines.browser.ctl click <n>
   python -m engines.browser.ctl type <n> <text>  # replaces the field's value
@@ -13,18 +14,66 @@ so any model can drive it without screenshots (and with few tokens).
   python -m engines.browser.ctl click_text <text>  # click the visible element showing exactly this text
   python -m engines.browser.ctl select <n> <option text>
   python -m engines.browser.ctl back | screenshot <file.png> | stop
+
+The file can also be run directly (python path/to/ctl.py ...), without PYTHONPATH.
+The daemon listens on 127.0.0.1, on a free port (MH_BROWSER_PORT pins one), and answers only requests that carry
+its random token. Port and token are in a state file only this user can read (state_path()).
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
-PORT = int(os.environ.get("MH_BROWSER_PORT", "8765"))
+if __package__ in (None, ""):                     # run as a file: make the app's packages importable
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 MARK = "data-mh-ref"
+TOKEN_HEADER = "X-MH-Token"
+
+
+def state_path(port: int | str | None = None) -> Path:
+    """The running daemon's port and token: one file per MH_BROWSER_PORT (or one for the default
+    free port), in this user's private Meshpool folder."""
+    from meshpool_harness.config import user_home_default
+    port = port if port is not None else os.environ.get("MH_BROWSER_PORT")
+    base = Path(os.environ["MESHPOOL_HOME"]).expanduser() if os.environ.get("MESHPOOL_HOME") else user_home_default()
+    return base / "browser" / (f"ctl-{int(port)}.json" if port else "ctl.json")
+
+
+def _write_state(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    from meshpool_harness.config import replace_file
+    replace_file(tmp, path)
+
+
+def _read_state(port=None) -> dict:
+    return json.loads(state_path(port).read_text())
+
+
+def _inside(path: str, folder: str) -> bool:
+    p, d = os.path.realpath(path), os.path.realpath(folder)
+    try:
+        return os.path.commonpath([p, d]) == d
+    except ValueError:                            # different drives on Windows
+        return False
+
+
 SNAP_JS = """(mark) => {
   const sel = 'a,button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=tab],[role=menuitem],[onclick],summary';
   const out = []; let n = 0;
@@ -125,7 +174,11 @@ from meshpool_harness.core.webfix import SETTLE_JS, smart_fill as _smart_fill  #
 def _fill(loc, text: str, timeout: int) -> str | None:
     return _smart_fill(loc, _fit_value(loc, text), timeout)
 
-def _serve():
+def _serve(outdir: str | None = None):
+    outdir = os.path.realpath(outdir or os.getcwd())
+    token = secrets.token_urlsafe(32)
+    server = HTTPServer(("127.0.0.1", int(os.environ.get("MH_BROWSER_PORT") or 0)), BaseHTTPRequestHandler)
+    port = server.server_address[1]
     from playwright.sync_api import sync_playwright
     pw = sync_playwright().start()
     kw = {"headless": os.environ.get("MH_HEADLESS", "1") != "0", "args": ["--no-sandbox"]}
@@ -139,7 +192,7 @@ def _serve():
         browser = pw.chromium.launch(executable_path=exe, **kw)   # preinstalled Chromium when versions differ
     page = browser.new_page()
     lock = threading.Lock()
-    state = {}
+    state = {"outdir": outdir}
 
     def ref(n):
         return page.locator(f"[{MARK}='{int(n)}']").first
@@ -219,6 +272,8 @@ def _serve():
             state["batch"] = {"steps": report, "ok": ok}
             cmd = "batch_done"
         elif cmd == "goto":
+            if urllib.parse.urlsplit(args[0]).scheme.lower() not in ("http", "https"):
+                return {"error": f"goto takes an http:// or https:// URL, not {args[0][:80]!r}"}
             page.goto(args[0], wait_until="domcontentloaded", timeout=30000)
         elif cmd == "click":
             ref(args[0]).click(timeout=10000)
@@ -246,6 +301,9 @@ def _serve():
             ref(args[0]).select_option(label=" ".join(args[1:]), timeout=10000)
         elif cmd == "back":
             page.go_back()
+        elif cmd == "_outdir":                    # `start <dir>` on a running daemon: a new task's working folder
+            state["outdir"] = os.path.realpath(args[0])
+            return {"outdir": state["outdir"]}
         elif cmd == "_lock":                      # grader: lock _eval behind a token only the grader holds
             state["token"] = args[0]
             return {"locked": True}
@@ -254,8 +312,11 @@ def _serve():
                 return {"error": "not available"}
             return {"value": page.evaluate(args[0])}
         elif cmd == "screenshot":
-            page.screenshot(path=args[0], full_page=True)
-            return {"saved": args[0]}
+            out = os.path.join(state["outdir"], args[0])  # relative paths land in the working folder
+            if not _inside(out, state["outdir"]):
+                return {"error": f"screenshots can only be saved inside {state['outdir']}"}
+            page.screenshot(path=out, full_page=True)
+            return {"saved": out}
         elif cmd not in ("snapshot", "batch_done"):
             return {"error": f"unknown command {cmd}"}
         try:
@@ -295,8 +356,24 @@ def _serve():
         def log_message(self, *a):
             pass
 
+        def _allowed(self) -> bool:
+            """Only this user's own clients: the exact local Host (no DNS rebinding), a JSON body (a web page cannot
+            send one cross-site without a preflight, which is never answered) and the daemon's token."""
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            return (self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}")
+                    and ctype == "application/json"
+                    and hmac.compare_digest(self.headers.get(TOKEN_HEADER) or "", token))
+
         def do_POST(self):
-            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            if not self._allowed():
+                self._send({"error": "forbidden"}, 403)
+                return
+            try:
+                req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                assert isinstance(req, dict) and isinstance(req.get("args", []), list)
+            except Exception:
+                self._send({"error": "bad request"}, 400)
+                return
             if req.get("cmd") == "stop":
                 self._send({"stopped": True})
                 threading.Thread(target=server.shutdown).start()
@@ -308,23 +385,35 @@ def _serve():
                     res = {"error": f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"}
             self._send(res)
 
-        def _send(self, obj):
+        def _send(self, obj, status=200):
             b = json.dumps(obj).encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)
 
-    server = HTTPServer(("127.0.0.1", PORT), H)
-    server.serve_forever()
-    browser.close()
-    pw.stop()
+    server.RequestHandlerClass = H
+    path = state_path()
+    _write_state(path, {"port": port, "token": token, "pid": os.getpid()})
+    try:
+        server.serve_forever()
+    finally:
+        try:
+            if _read_state().get("token") == token:
+                path.unlink()
+        except (OSError, ValueError):
+            pass
+        browser.close()
+        pw.stop()
 
 
-def call(cmd, *args):
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}", data=json.dumps({"cmd": cmd, "args": list(args)}).encode(),
-                                 method="POST", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+def call(cmd, *args, port=None):
+    """Send one command to the running daemon (port: the MH_BROWSER_PORT it was started with; default: the env)."""
+    st = _read_state(port)
+    req = urllib.request.Request(f"http://127.0.0.1:{st['port']}",
+                                 data=json.dumps({"cmd": cmd, "args": list(args)}).encode(), method="POST",
+                                 headers={"Content-Type": "application/json", TOKEN_HEADER: st["token"]})
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=60) as r:
         return json.loads(r.read())
 
 
@@ -353,14 +442,22 @@ def main(argv=None):
         print(__doc__)
         return 1
     if a[0] == "start":
+        outdir = os.path.abspath(a[1] if len(a) > 1 else os.getcwd())
         try:
-            call("snapshot")
+            call("_outdir", outdir)
             print("browser already running")
             return 0
         except Exception:
             pass
-        subprocess.Popen([sys.executable, "-m", "engines.browser.ctl", "_serve"], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            state_path().unlink()                 # a stale file from a daemon that died
+        except OSError:
+            pass
+        # Its own session (POSIX) or process group with no console (Windows): Ctrl+C or closing the terminal that
+        # started a task must not take the browser with it.
+        detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True})
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", outdir], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, **detach)
         for _ in range(60):
             try:
                 call("snapshot")
@@ -371,8 +468,10 @@ def main(argv=None):
         print("ERROR: browser did not start")
         return 1
     if a[0] == "_serve":
-        _serve()
+        _serve(a[1] if len(a) > 1 else None)
         return 0
+    if a[0] == "screenshot" and len(a) > 1:
+        a[1] = os.path.abspath(a[1])              # relative to where the command runs, not the daemon
     print(render(call(a[0], *a[1:])))
     return 0
 

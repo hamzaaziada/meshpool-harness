@@ -228,6 +228,18 @@ class Spread:
                 "gaps": self.gaps, "checks": self.checks}
 
 
+def fy_label(end: str) -> str:
+    """Fiscal year label from a year-end date, by the nearest-year rule: a 52/53-week year that ends in the first
+    week of January (e.g. 2022-01-01) is the prior fiscal year (FY2021), so consecutive years never collide."""
+    y, m, d = int(end[:4]), int(end[5:7]), int(end[8:10])
+    return f"FY{y - 1 if m == 1 and d <= 7 else y}"
+
+
+def name_part(label: str) -> str:
+    """A year label as it goes into a defined name (letters, digits and underscores only)."""
+    return re.sub(r"[^a-z0-9_]", "_", label.lower())
+
+
 def _days(a: str, b: str) -> int:
     return (date.fromisoformat(b) - date.fromisoformat(a)).days
 
@@ -316,9 +328,9 @@ def spread(facts: dict, years: int | list[str] = 3) -> Spread:
     if not ends:
         raise ValueError(f"{entity or cik}: no annual us-gaap income statement facts in 10-K filings "
                          "(foreign filers report under IFRS; spread them from the 20-F instead)")
-    labels = [f"FY{e[:4]}" for e in ends]
+    labels = [fy_label(e) for e in ends]
     if len(set(labels)) != len(labels):
-        labels = [f"FY{e}" for e in ends]
+        labels = [f"FY{e.replace('-', '_')}" for e in ends]
     end_of = dict(zip(labels, ends))
     prior = {lab: (all_ends[all_ends.index(e) - 1] if e in all_ends and all_ends.index(e) > 0 else None)
              for lab, e in end_of.items()}
@@ -510,7 +522,7 @@ def link_opening_balances(book, sp: Spread, year: str | None = None, name_prefix
         nm = names.get(key, key)
         terms, srcs, absent = [], [], []
         for line in lines:
-            h = f"{name_prefix}{line}_{y.lower()}"
+            h = f"{name_prefix}{line}_{name_part(y)}"
             if h.lower() in have:
                 terms.append(h)
                 srcs.append(sp.cells[line][y].source() or "SEC 10-K")
@@ -549,7 +561,7 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
     B.freeze(ws, f"B{row + 1}")
     r = row + 1
     where: dict[str, int] = {}
-    nm = lambda k, y: f"{name_prefix}{k}_{y.lower()}"  # noqa: E731
+    nm = lambda k, y: f"{name_prefix}{k}_{name_part(y)}"  # noqa: E731
     blocks = {"IS": [k for k, l in LINE.items() if l["statement"] == "IS"],
               "BS": [k for k, l in LINE.items() if l["statement"] == "BS" and k != "total_liab_equity"]
               + ["other_current_assets", "other_noncurrent_assets", "other_current_liabilities",
@@ -705,7 +717,7 @@ def spread_quarters(facts: dict, quarters: int = 8, keys: list[str] | None = Non
                 if start is None:
                     return None
                 q = max(1, min(4, round(_days(start, end) / 91.3)))
-                return f"FY{e[:4]}", q
+                return fy_label(e), q
         return None
     q_ends: set[str] = set()
     for key in ("revenue", "net_income"):
@@ -762,11 +774,18 @@ def spread_quarters(facts: dict, quarters: int = 8, keys: list[str] | None = Non
                         fy = _facts_by_end(facts, tag, line["unit"], "duration", 340, 390).get(e)
                         prior = [x for x in labels if x.split()[1] == lab.split()[1] and x != lab]
                         qs = [_facts_by_end(facts, tag, line["unit"], "duration", 80, 100).get(ends[x]) for x in prior]
-                        if fy and len(qs) == 3 and all(qs):
+                        if fy and line["unit"] == "shares":        # a share count does not add up over quarters
+                            got = Cell(line["sign"] * fy["val"] / scale, tag, fy.get("accn"), fy.get("form"),
+                                       fy.get("filed"), e, _filing_url(cik, fy.get("accn", "")),
+                                       derived=f"fiscal-year weighted average used for Q4 (us-gaap:{tag}, "
+                                               f"10-K {fy.get('accn')})")
+                        elif fy and len(qs) == 3 and all(qs):
                             v = fy["val"] - sum(x["val"] for x in qs)
+                            approx = "; approximate: per-share amounts do not add exactly" \
+                                if line["unit"] == "USD/shares" else ""
                             got = Cell(line["sign"] * v / scale, tag, fy.get("accn"), fy.get("form"), fy.get("filed"),
                                        e, _filing_url(cik, fy.get("accn", "")),
-                                       derived=f"fiscal year less Q1-Q3 (us-gaap:{tag}, 10-K {fy.get('accn')})")
+                                       derived=f"fiscal year less Q1-Q3 (us-gaap:{tag}, 10-K {fy.get('accn')}{approx})")
                 if got:
                     break
             if got is None:
@@ -782,23 +801,29 @@ def ltm(q: Quarters, key: str) -> tuple[float | None, str]:
     """Last twelve months: the sum of the last four quarters for a flow, the latest value for a balance. Returns the
     value and how it was built; None when a quarter is missing (never guessed)."""
     line = LINE[key]
-    labs = q.labels[-4:] if line["kind"] == "duration" else q.labels[-1:]
+    flow = line["kind"] == "duration" and line["unit"] != "shares"      # a share count is not summed: latest quarter
+    labs = q.labels[-4:] if flow else q.labels[-1:]
     vals = [q.value(key, lab) for lab in labs]
-    if len(labs) < (4 if line["kind"] == "duration" else 1) or any(v is None for v in vals):
+    if len(labs) < (4 if flow else 1) or any(v is None for v in vals):
         return None, f"LTM not available: {key} missing in {[lb for lb, v in zip(labs, vals) if v is None]}"
-    how = (f"sum of {', '.join(labs)}" if line["kind"] == "duration" else f"as at {q.ends[labs[0]]}")
-    return sum(vals) if line["kind"] == "duration" else vals[0], how
+    how = (f"sum of {', '.join(labs)}" if flow else
+           f"latest quarter, {labs[0]}" if line["kind"] == "duration" else f"as at {q.ends[labs[0]]}")
+    return sum(vals) if flow else vals[0], how
 
 
 def calendarize(by_fy_end: dict[str, float], year: int) -> tuple[float | None, str]:
     """Calendar-year value from fiscal-year values: CY = (m/12) x FY ending in the year + ((12 - m)/12) x FY ending
     the next year, m = the fiscal year-end month. by_fy_end: {"2026-06-30": value, ...}."""
+    def eff(e: str) -> tuple[int, int]:
+        """(year, month) the fiscal year effectively ends in: a 52/53-week year ending 2 Oct is September, and one
+        ending 2 January is December of the year before."""
+        y, m = int(e[:4]), int(e[5:7]) - (int(e[8:10]) < 15)
+        return (y - 1, 12) if m == 0 else (y, m)
     ends = sorted(by_fy_end)
-    this = next((e for e in ends if e[:4] == str(year)), None)
+    this = next((e for e in ends if eff(e)[0] == year), None)
     if this is None:
         return None, f"no fiscal year ends in {year}"
-    m = int(this[5:7]) if int(this[8:10]) >= 15 else int(this[5:7]) - 1      # a 52/53-week year ending 2 Oct is Sept
-    m = max(1, min(12, m))
+    m = eff(this)[1]
     if m == 12:
         return by_fy_end[this], "fiscal year is the calendar year"
     nxt = next((e for e in ends if e > this), None)

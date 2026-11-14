@@ -542,8 +542,13 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
     g = single("g", "Terminal growth rate (%)", f"={N['g']}", "pct")
     fcfn = single("fcf_n", "Final-year free cash flow ($m)", f"={L}{rows['fcf']}")
     tn = single("t_n", "Final discount period (years, end of year)", f"={L}{rows['t']}", "num")
-    tv = single("tv", "Terminal value, Gordon growth ($m)", f"={fcfn}*(1+{g})/({P('wacc')}-{g})")
-    pvtv = single("pv_tv", "PV of terminal value ($m)", f"={tv}/(1+{P('wacc')})^{tn}")
+    # the Gordon value continues the forecast's cash flow timing, so it is discounted with the final year's discount
+    # period (N - 0.5 under the mid-year convention); an exit multiple is a price at year end and stays at N
+    tng = single("t_n_gordon", "Gordon terminal value discount period (years, final-year convention)",
+                 f"={L}{rows['dp']}", "num")
+    tv = single("tv", "Terminal value, Gordon growth ($m; #N/A unless growth is below WACC)",
+                f"=IF({P('wacc')}<={g},NA(),{fcfn}*(1+{g})/({P('wacc')}-{g}))")
+    pvtv = single("pv_tv", "PV of terminal value ($m)", f"={tv}/(1+{P('wacc')})^{tng}")
     spv = single("sum_pv", "Sum of PV of free cash flow ($m)", f"=SUM({F0}{rows['pv']}:{L}{rows['pv']})")
     ev = single("ev", "Enterprise value ($m)", f"={spv}+{pvtv}", total=True, name="ev")
     single("tv_share", "Terminal value share of EV (%)", f"=IF({ev}=0,0,{pvtv}/{ev})", "pct", name="tv_share")
@@ -592,7 +597,7 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
         _f(ws, f"A{rr}", e, "pct").fill = SECTION_FILL
         for c in gcols:
             w, gg = f"$A{rr}", f"{c}${gh}"
-            ev_x = pv_x(w) + f"+${L}${fr}*(1+{gg})/({w}-{gg})/(1+{w})^${L}${tr_}"
+            ev_x = pv_x(w) + f"+${L}${fr}*(1+{gg})/({w}-{gg})/(1+{w})^${L}${dpr}"
             _f(ws, f"{c}{rr}", f'=IF({w}<={gg},"NM",IF({N["shares"]}=0,0,({ev_x}-{N["debt"]}+{N["cash"]}{other})'
                                f'/{N["shares"]}))', "usd2")
     centre = f"{gcols[2]}{gh + 3}"
@@ -624,6 +629,7 @@ def _dcf_tail(ws, r, hdr, rows, cols, N, prefix, width, title_text, extra_grid=F
                       f"='{ws.title}'!{gcols[2]}{xh + 3}-{P('per_share_exit')}")
         r = xh + 6
     if "Checks" in wb.sheetnames:
+        add_check(wb, f"{title_text}: terminal growth is below WACC", f"=IF({P('wacc')}>'{ws.title}'!{g},0,1)")
         add_check(wb, f"{title_text}: sensitivity centre equals base value per share",
                   f"='{ws.title}'!{centre}-{P('per_share')}")
     if ws.freeze_panes is None:
@@ -1903,7 +1909,8 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
     eqv = one("eq", "Equity purchase price ($m)", f"={op}*{N['tgt_shares']}", total=True)
     stk = one("stock", "Paid in acquirer stock ($m)", f"={eqv}*{N['pct_stock']}")
     dbt = one("debt", "Funded with new debt ($m)", f"={eqv}*{N['pct_debt']}")
-    csh = one("cash", "Paid from cash on hand ($m)", f"={eqv}-{stk}-{dbt}")
+    csh = one("cash", "Paid from cash on hand ($m, none when stock + debt cover the price)",
+              f"=MAX(0,{eqv}-{stk}-{dbt})")
     nsh = one("new_shares", "New acquirer shares issued (m)", f"={stk}/{N['acq_price']}", "num")
     r += 1
     section(ws, r, f"{title_text}: pro forma earnings", 4)
@@ -1936,8 +1943,8 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
     gh = r
     ws.cell(row=gh, column=1, value="Premium (%) \\ stock (%)").font = Font(name=FONT, bold=True)
     gcols = [get_column_letter(2 + j) for j in range(5)]
-    for j, c in enumerate(gcols):
-        e = f"=MAX(0,{N['pct_stock']}-2*{N['stock_step']})" if j == 0 else f"=MIN(1,{gcols[j - 1]}{gh}+{N['stock_step']})"
+    for j, c in enumerate(gcols):                  # each column is set from the base, so the centre is the base case
+        e = f"={N['pct_stock']}" if j == 2 else f"=MAX(0,MIN(1,{N['pct_stock']}{j - 2:+d}*{N['stock_step']}))"
         _f(ws, f"{c}{gh}", e, "pct").fill = SECTION_FILL
     for i in range(5):
         rr = gh + 1 + i
@@ -1947,7 +1954,7 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
             p_, s_ = f"$A{rr}", f"{c}${gh}"
             eq_ = f"({N['tgt_price']}*(1+{p_})*{N['tgt_shares']})"
             debt_ = f"({eq_}*{N['pct_debt']})"
-            cash_ = f"({eq_}*(1-{s_}-{N['pct_debt']}))"
+            cash_ = f"({eq_}*MAX(0,1-{s_}-{N['pct_debt']}))"
             ni_ = (f"({N['acq_ni']}+{N['tgt_ni']}+{N['synergies']}*{N['phase']}*(1-{t})-{debt_}*{N['kd']}*(1-{t})"
                    f"-{cash_}*{N['cash_yield']}*(1-{t})-{N['writeup_da']}*(1-{t})-{N['fees']})")
             sh_ = f"({N['acq_shares']}+{eq_}*{s_}/{N['acq_price']})"

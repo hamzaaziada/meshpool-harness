@@ -120,7 +120,7 @@ add_to_path() {
 }
 
 ready() {   # a key, or a signed-in subscription chosen at setup
-  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=(claude|chatgpt))' "$DIR/meshpool.config" 2>/dev/null
+  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$DIR/meshpool.config" 2>/dev/null
 }
 
 # ---------- install ----------------------------------------------------------------------------------------------
@@ -159,7 +159,17 @@ main() {
   fi
   [ -n "$SRC" ] || die "The download was incomplete. Run this again."
   rm -rf "$DIR/app.new" && cp -R "$SRC/app" "$DIR/app.new"
-  cp "$SRC/LICENSE" "$SRC/NOTICE" "$SRC/THIRD_PARTY_NOTICES.md" "$DIR/app.new/"
+  cp "$SRC/THIRD_PARTY_NOTICES.md" "$DIR/app.new/"
+  # The package list this copy is installed from: the in-app update compares it with a new release's list.
+  cp "$SRC/packaging/requirements-cli.txt" "$DIR/app.new/requirements-cli.txt"
+  # The command runs this file rather than `python -m`: Python then puts the app folder first on sys.path, never the
+  # folder the command is typed in, so a project's own json.py or argparse.py is not imported in place of Python's.
+  # (`python -P` does the same, but only from Python 3.11, and this installer accepts 3.10.)
+  cat > "$DIR/app.new/meshpool_launch.py" <<'PY'
+import runpy
+
+runpy.run_module("meshpool_harness", run_name="__main__", alter_sys=True)
+PY
   rm -rf "$DIR/app" && mv "$DIR/app.new" "$DIR/app"
   ok "Meshpool"
 
@@ -174,7 +184,7 @@ main() {
 
   mkdir -p "$BIN"
   SHIM="#!/bin/sh
-PYTHONPATH=\"$DIR/app\" exec \"$DIR/venv/bin/python\" -m meshpool_harness \"\$@\""
+PYTHONPATH=\"$DIR/app\" exec \"$DIR/venv/bin/python\" \"$DIR/app/meshpool_launch.py\" \"\$@\""
   printf '%s\n' "$SHIM" > "$BIN/meshpool" && chmod +x "$BIN/meshpool"
   # An earlier install may have put the command in ~/.local/bin: keep that copy current too.
   if [ "$BIN" != "$HOME/.local/bin" ] && [ -f "$HOME/.local/bin/meshpool" ]; then

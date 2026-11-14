@@ -6,6 +6,7 @@ visible text. Works with any OpenAI-compatible model.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -14,7 +15,23 @@ from meshpool_harness.core.loop import Caps, run
 from meshpool_harness.core.tools import Workspace
 
 ROOT = Path(__file__).resolve().parents[2]
-CTL = f"{sys.executable} -m engines.browser.ctl"
+
+
+def ctl_command(exe: str = sys.executable, script: str = str(Path(__file__).with_name("ctl.py")),
+                windows: bool = os.name == "nt", bash: bool | None = None) -> str:
+    """The shell command that runs ctl.py: the script by its path, so it needs no PYTHONPATH (the app strips it from
+    the agent's shell), both paths quoted for the shell the agent's commands run in."""
+    if windows:                                   # forward slashes work for Windows, Python and Git Bash alike
+        exe, script = exe.replace("\\", "/"), script.replace("\\", "/")
+        if bash is None:
+            from meshpool_harness.config import find_bash
+            bash = bool(find_bash())
+        if not bash:                              # PowerShell: call operator and single quotes
+            return "& " + " ".join("'" + s.replace("'", "''") + "'" for s in (exe, script))
+    return f"{shlex.quote(exe)} {shlex.quote(script)}"
+
+
+CTL = ctl_command()
 
 SYSTEM = f"""You operate a real web browser through shell commands. One command per step.
   {CTL} goto <url>                 open a page; prints a numbered element list and the page text
@@ -40,13 +57,11 @@ payment details or personal data you were not given. When done, call finish with
 
 
 def solve(task: str, *, workdir: str, task_id: str, client=None, max_turns: int = 40, model: str | None = None, **_):
-    env_root = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])
-    os.environ["PYTHONPATH"] = env_root
     import contextlib
     os.environ.setdefault("MH_BROWSER_DIFF", "1")   # our harness: after an action, show only what changed
     from engines.browser import ctl
     with contextlib.redirect_stdout(sys.stderr):   # keep stdout clean for the CLI's JSON
-        ctl.main(["start"])
+        ctl.main(["start", workdir])                # screenshots may be saved in the working folder only
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     if os.environ.get("MH_BROWSER_PREFETCH", "1") == "1":     # saves the first "look at the page" model call

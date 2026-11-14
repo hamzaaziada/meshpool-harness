@@ -316,3 +316,15 @@ def test_wide_table_band_overflow_goes_to_notes(tmp_path):
         r = VP.validate(str(out), render=True)
         assert r["rules"]["P1"] == "pass" and r["rules"]["P8"] == "pass", \
             [f["message"] for f in r["failures"] if f["rule"] in ("P1", "P8")]
+
+
+def test_condense_keeps_computed_tables_whole():
+    rows = [[f"{w}%"] + ["$1.00"] * 5 for w in range(8, 13)] + [["WACC \\ exit"] + ["10x"] * 5] + \
+           [[f"{w}%"] + ["$2.00"] * 5 for w in range(8, 13)]
+    s = {"archetype": "table_focus", "fixed": True, "title": "Value per share runs $1-$2 across WACC and growth",
+         "table": {"columns": ["WACC"] + ["g"] * 5, "rows": rows, "keep_table": True, "italic_rows": [5],
+                   "heat_grid": [{"rows": list(range(5)), "center": 1.0, "base": [2, 3]},
+                                 {"rows": list(range(6, 11)), "center": 2.0, "base": [8, 3]}]}}
+    for mode in ("present", "balanced"):
+        out = condense(s, mode)
+        assert out["table"]["rows"] == rows and out["table"]["heat_grid"] == s["table"]["heat_grid"]

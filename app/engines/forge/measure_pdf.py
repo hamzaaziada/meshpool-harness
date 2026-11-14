@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import re
 import statistics as st
-import sys
 from collections import Counter
 from pathlib import Path
 

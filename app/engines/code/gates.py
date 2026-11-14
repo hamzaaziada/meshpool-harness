@@ -122,12 +122,20 @@ def regression_gate(host_root: str, container: str, cdir: str, timeout: int = 60
     cmd = f"python -m pytest -q -rA -p no:cacheprovider -x --timeout=300 {' '.join(tests)} 2>&1 || true"
     cmd = cmd.replace("--timeout=300 ", "")   # pytest-timeout may not be installed
     cmd = cmd.replace(" -x", "")
-    # baseline: stash the agent's changes (tracked files only), run, restore
-    _cexec(container, cdir, "git stash -q", timeout=60)
+    # baseline: stash the agent's changes (tracked files only), run, restore. Pop only a stash made here: when
+    # nothing was stashed, a pop would apply an older, unrelated stash.
+    top = "git rev-parse -q --verify refs/stash"
+    before = _cexec(container, cdir, top, timeout=60)[1].strip()
+    rc = _cexec(container, cdir, "git stash -q", timeout=60)[0]
+    if rc != 0 or _cexec(container, cdir, top, timeout=60)[1].strip() == before:
+        return None                                    # no baseline without a stash: do not gate
     try:
         _, base = _cexec(container, cdir, cmd, timeout=timeout)
     finally:
-        _cexec(container, cdir, "git stash pop -q", timeout=60)
+        rc, out = _cexec(container, cdir, "git stash pop -q", timeout=60)
+    if rc != 0:
+        return ("GATE: the harness could not put your changes back after the baseline test run (git stash pop "
+                f"failed: {out.strip()[:200]}). Run `git stash pop`, resolve it, then finish again.")
     _, now = _cexec(container, cdir, cmd, timeout=timeout)
     b, n = _outcomes(base), _outcomes(now)
     broke = [t for t, o in b.items() if o == "PASSED" and n.get(t) in ("FAILED", "ERROR")]
@@ -136,38 +144,6 @@ def regression_gate(host_root: str, container: str, cdir: str, timeout: int = 60
     return (f"GATE regression: your change makes {len(broke)} previously passing test(s) fail in "
             f"{', '.join(tests)}: {', '.join(broke[:6])}. Run them, quote the failure, and fix your change "
             f"(do not edit the tests).")
-
-
-REVIEW_PROMPT = """You review a patch for a GitHub issue. You see only the issue and the diff.
-Answer in JSON: {"verdict": "ok" | "concern", "concern": "<one or two sentences>"}.
-Say "concern" ONLY for a concrete problem: the patch fixes a symptom at one entry point while the issue describes
-behaviour that other code paths share; it misses a case the issue states explicitly; it changes behaviour the issue
-did not ask to change; or it cannot work as written. Do not comment on style. If unsure, say "ok"."""
-
-
-def cross_review(issue: str, host_root: str, client, model: str, task_id: str) -> str | None:
-    r = subprocess.run(["git", "diff", "HEAD", "--", ".", ":!.run", ":!.junie"], cwd=host_root, capture_output=True,
-                       text=True)
-    diff = r.stdout
-    if not diff.strip():
-        return None
-    if len(diff) > 12000:
-        diff = diff[:12000] + "\n... [diff truncated]"
-    msgs = [{"role": "system", "content": REVIEW_PROMPT},
-            {"role": "user", "content": f"<issue>\n{issue.strip()[:6000]}\n</issue>\n<diff>\n{diff}\n</diff>"}]
-    try:
-        resp = client.chat(model=model, messages=msgs, max_tokens=200, temperature=0.0, task_id=task_id,
-                           role="verifier", extra={"response_format": {"type": "json_object"}})
-        txt = resp["choices"][0]["message"].get("content") or ""
-        import json as _j
-        d = _j.loads(txt[txt.find("{"): txt.rfind("}") + 1])
-    except Exception:
-        return None
-    if d.get("verdict") == "concern" and d.get("concern"):
-        return ("REVIEW (independent reviewer, saw only the issue and your diff): " + d["concern"].strip()
-                + "\nIf this is right, fix it and re-run your checks; if it is wrong, explain why in one sentence and "
-                  "finish again with the same evidence.")
-    return None
 
 
 # ---- learned from harness-engineering breakdowns (Codex just-in-time context; lecture-07/09 scope control)

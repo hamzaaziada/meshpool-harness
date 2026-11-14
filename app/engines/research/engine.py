@@ -92,7 +92,7 @@ Rely on tiers 1-2 for numbers; never let a number rest only on tier 4."""
 def finish_check(answer, artifacts, ws):
     from engines.research.library import Corpus
     from engines.research.verify import check, report_text
-    md = [a for a in artifacts if a.endswith(".md")] or (["report.md"] if (ws.root / "report.md").exists() else [])
+    md = [a for a in artifacts or [] if isinstance(a, str) and a.endswith(".md")] or (["report.md"] if (ws.root / "report.md").exists() else [])
     if not md:
         return "ENGINE CHECK: write report.md, run R.finalize and list it in artifacts."
     p = md[0] if os.path.isabs(md[0]) else str(ws.root / md[0])

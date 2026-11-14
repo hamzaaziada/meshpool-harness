@@ -102,42 +102,62 @@ def _pdf(p: Path, pages: str | None = None, lang: str = "auto", ocr_mode: str = 
     n = len(r.pages)
     meta = r.metadata or {}
     head = f"# {p.name}\n{n} pages" + (f", title: {meta.get('/Title')}" if meta.get("/Title") else "") + "\n"
-    parts, empty = [], 0
-    for i in _page_set(pages, n):
+    idx = _page_set(pages, n)
+    texts: list[str] = []
+    for i in idx:
         try:
             t = r.pages[i].extract_text() or ""
         except Exception:  # noqa: BLE001
             t = ""
-        if len(t.strip()) < 20 and ocr_mode != "always":
+        if len(t.strip()) < 20:
             try:                                   # pdfminer handles some layouts pypdf misses
                 from pdfminer.high_level import extract_text
-                t = extract_text(str(p), page_numbers=[i]) or t
+                t2 = extract_text(str(p), page_numbers=[i]) or ""
+                t = t2 if len(t2.strip()) > len(t.strip()) else t
             except Exception:  # noqa: BLE001
                 pass
-        if not t.strip() or (ocr_mode == "always") or (len(t.strip()) < 50 and ocr_mode == "auto"):
-            empty += 1
-            t = "" if len(t.strip()) < 50 or ocr_mode == "always" else t
-        parts.append(f"\n## Page {i + 1}\n{t.strip()}")
-    if empty and ocr_mode != "never":
-        scanned = [i for i, part in zip(_page_set(pages, n), parts) if not part.split("\n", 2)[-1].strip()]
+        texts.append(t.strip())
+    # The text layer is always kept. "auto" OCRs only pages with no or almost no text (scans, perhaps with a stamped
+    # page number); "always" OCRs every page as well and adds what it reads next to the text layer.
+    blank = [i for i, t in zip(idx, texts) if not t]
+    if ocr_mode == "always":
+        want = blank + [i for i, t in zip(idx, texts) if t]
+    elif ocr_mode == "auto":
+        want = [i for i, t in zip(idx, texts) if len(t) < 50]
+    else:
+        want = []
+    has_text = {i: bool(t) for i, t in zip(idx, texts)}
+    want = sorted(dict.fromkeys(want), key=lambda i: (has_text[i], i))     # pages with no text first
+    ocr_text: dict[int, str] = {}
+    if want:
         try:
             from meshpool_harness import ocr
             if not ocr.available():
                 raise RuntimeError("OCR is not included in this install")
-            done = 0
-            for i, img in ocr.pdf_page_images(p, scanned[:40]):
-                txt = ocr.describe(img, f"page {i + 1}", lang)
-                k = _page_set(pages, n).index(i)
-                parts[k] = f"\n## Page {i + 1} (scanned, read with OCR)\n" + txt.split("\n", 1)[-1]
-                done += 1
-            if done:
-                head += f"\n{done} scanned page{'s' if done != 1 else ''} read with OCR.\n"
-            elif empty == len(parts):
+            for i, img in ocr.pdf_page_images(p, sorted(want[:40])):
+                ocr_text[i] = ocr.describe(img, f"page {i + 1}", lang)
+            if ocr_text:
+                head += f"\n{len(ocr_text)} page{'s' if len(ocr_text) != 1 else ''} read with OCR.\n"
+            elif len(blank) == len(idx):
                 head += "\nNo text layer and no page images found in this PDF.\n"
-            if len(scanned) > 40:
-                head += f"\nOnly the first 40 scanned pages were read; ask for specific pages for the rest.\n"
+            if len(want) > 40:
+                head += "\nOnly the first 40 pages were read with OCR; ask for specific pages for the rest.\n"
         except Exception as e:  # noqa: BLE001
-            head += f"\nThis PDF looks scanned and OCR did not run ({e}).\n"
+            if blank:
+                head += (f"\n{len(blank)} of {len(idx)} pages have no text layer (probably scanned) and OCR did not "
+                         f"run ({e}).\n")
+            elif ocr_mode == "always":
+                head += f"\nOCR did not run ({e}); the text layer is shown.\n"
+    parts = []
+    for i, t in zip(idx, texts):
+        o = ocr_text.get(i)
+        found = o.split("\n", 1)[1] if o and o.startswith("Text in ") and "\n" in o else ""
+        if o is not None and not t:
+            parts.append(f"\n## Page {i + 1} (scanned, read with OCR)\n" + (found or o).strip())
+        elif found:
+            parts.append(f"\n## Page {i + 1}\n{t}\n\n[text in the page image (OCR)]\n{found.strip()}")
+        else:
+            parts.append(f"\n## Page {i + 1}\n{t}")
     return head + "\n".join(parts)
 
 
@@ -208,6 +228,14 @@ def _docx(p: Path, ocr_mode: str = "auto") -> str:
     return "\n\n".join(out)
 
 
+def _num(v) -> str:
+    """A cell or chart value as text. Floats keep their full precision (15 significant digits, so 15432198.75 stays
+    15432198.75 and 0.1 + 0.2 shows 0.3); whole numbers lose the trailing .0."""
+    if isinstance(v, float) and not isinstance(v, bool):
+        return f"{v:.15g}"
+    return "" if v is None else str(v)
+
+
 def _md_table(rows: list[list[str]]) -> str:
     rows = [[str(c).replace("|", "\\|").replace("\n", " ") for c in r] for r in rows if any(str(c).strip() for c in r)]
     if not rows:
@@ -261,7 +289,7 @@ def _shape_text(sh, title: str) -> list[str]:
         try:
             cats = list(ch.plots[0].categories)
             series = [(s.name, list(s.values)) for s in ch.plots[0].series]
-            rows = [["", *[str(c) for c in cats]]] + [[n, *[f"{v:g}" if isinstance(v, (int, float)) else str(v) for v in vals]]
+            rows = [["", *[str(c) for c in cats]]] + [[n, *[_num(v) for v in vals]]
                                                       for n, vals in series]
             out.append("[chart]\n" + _md_table(rows))
         except Exception:  # noqa: BLE001
@@ -276,23 +304,41 @@ def _shape_text(sh, title: str) -> list[str]:
 def _xlsx(p: Path, sheet: str | None = None, rows: int = 200) -> str:
     import openpyxl
     vals = openpyxl.load_workbook(str(p), data_only=True, read_only=True)
+    forms = None
     try:
-        forms = openpyxl.load_workbook(str(p), data_only=False, read_only=True)
-    except Exception:  # noqa: BLE001
-        forms = None
+        try:
+            forms = openpyxl.load_workbook(str(p), data_only=False, read_only=True)
+        except Exception:  # noqa: BLE001
+            forms = None
+        return _xlsx_text(p, vals, forms, sheet, rows)
+    finally:
+        for wb in (vals, forms):
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+def _xlsx_text(p: Path, vals, forms, sheet: str | None, rows: int) -> str:
     out = [f"# {p.name}\nSheets: " + ", ".join(vals.sheetnames)]
     for name in ([sheet] if sheet else vals.sheetnames):
         ws = vals[name]
         fws = forms[name] if forms else None
-        out.append(f"\n## Sheet: {name} ({ws.max_row} rows x {ws.max_column} columns)")
-        table, nform = [], 0
+        # read-only sheets saved without a <dimension> report max_row/max_column as None: count while reading
+        size = f" ({ws.max_row} rows x {ws.max_column} columns)" if ws.max_row and ws.max_column else ""
+        out.append(f"\n## Sheet: {name}{size}")
+        table, nform, more = [], 0, False
         frows = fws.iter_rows(max_row=rows) if fws is not None else None
-        for r_i, row in enumerate(ws.iter_rows(max_row=rows, values_only=True)):
+        for r_i, row in enumerate(ws.iter_rows(values_only=True)):
+            if r_i >= rows:
+                more = True
+                break
             frow = next(frows, None) if frows is not None else None
             cells = []
             for c_i, v in enumerate(row):
                 f = frow[c_i].value if frow is not None and c_i < len(frow) else None
-                s = "" if v is None else (f"{v:g}" if isinstance(v, float) else str(v))
+                s = _num(v)
                 if isinstance(f, str) and f.startswith("="):
                     nform += 1
                     s = f"{s} [{f}]" if s else f"[{f}]"
@@ -301,8 +347,9 @@ def _xlsx(p: Path, sheet: str | None = None, rows: int = 200) -> str:
         while table and not any(table[-1]):
             table.pop()
         out.append(_md_table(table) if table else "(empty)")
-        if ws.max_row > rows:
-            out.append(f"[first {rows} of {ws.max_row} rows; ask for a sheet or use analyze_data for the rest]")
+        if more:
+            total = f" of {ws.max_row}" if ws.max_row else ""
+            out.append(f"[first {rows}{total} rows; ask for a sheet or use analyze_data for the rest]")
         if nform:
             out.append(f"[{nform} formulas shown in brackets after their values]")
     return "\n".join(out)
@@ -320,12 +367,22 @@ def _xls(p: Path, sheet: str | None = None, rows: int = 200) -> str:
 
 
 def _csv(p: Path, rows: int = 300) -> str:
-    raw = p.read_bytes()[:5_000_000].decode("utf-8-sig", errors="replace")
-    delim = "\t" if p.suffix.lower() == ".tsv" else (csv.Sniffer().sniff(raw[:4000]).delimiter if raw.strip() else ",")
+    with open(p, "rb") as fh:                      # only the start of a big file, never all of it
+        raw = fh.read(5_000_000).decode("utf-8-sig", errors="replace")
+    delim = ","
+    if p.suffix.lower() == ".tsv":
+        delim = "\t"
+    elif raw.strip():
+        try:
+            delim = csv.Sniffer().sniff(raw[:4000], delimiters=",;\t|").delimiter
+        except csv.Error:                          # one column, or no consistent delimiter
+            delim = ","
     data = list(csv.reader(io.StringIO(raw), delimiter=delim))
     out = f"# {p.name}\n{len(data)} rows x {max((len(r) for r in data), default=0)} columns\n\n" + _md_table(data[:rows])
     if len(data) > rows:
         out += f"\n[first {rows} of {len(data)} rows; use analyze_data for the full file]"
+    if p.stat().st_size > 5_000_000:
+        out += "\n[only the first 5 MB of this file were read; use analyze_data for the full file]"
     return out
 
 
@@ -430,7 +487,8 @@ def _xml_text(data: bytes) -> str:
     t = re.sub(rb"<text:(p|h)[^>]*>", b"\n", data)
     t = re.sub(rb"<table:table-row[^>]*>", b"\n", t)
     t = re.sub(rb"<table:table-cell[^>]*>", b" | ", t)
-    t = re.sub(rb"<[^>]+>", b"", t)
+    end = t.rfind(b">") + 1
+    t = re.sub(rb"<[^>]+>", b"", t[:end]) + t[end:]
     import html
     return html.unescape(t.decode("utf-8", errors="replace"))
 
@@ -480,7 +538,8 @@ def _strip_html(s: str) -> str:
     import html
     s = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", " ", s)
     s = re.sub(r"(?i)<br\s*/?>|</(p|div|li|h[1-6]|tr)>", "\n", s)
-    s = re.sub(r"<[^>]+>", " ", s)
+    end = s.rfind(">") + 1                   # text after the last '>' holds no tag; keeps this linear on bad input
+    s = re.sub(r"<[^>]+>", " ", s[:end]) + s[end:]
     return re.sub(r"[ \t]+", " ", html.unescape(s)).strip()
 
 

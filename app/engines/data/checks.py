@@ -28,8 +28,14 @@ def numbers_in(text: str) -> list[tuple[str, float, bool]]:
     return out
 
 
-def _years(v):
-    return float(v).is_integer() and 1900 <= v <= 2100
+def _year(tok: str) -> bool:
+    """A plain year such as 2024; '$2,045', '2045%' or '2045.0' are amounts, not years."""
+    return re.fullmatch(r"(19|20)\d\d|2100", tok) is not None
+
+
+def _decimals(tok: str) -> int:
+    t = tok.rstrip("%")
+    return len(t.split(".")[1]) if "." in t else 0
 
 
 def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list[dict]:
@@ -38,21 +44,19 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
     logged = [v for _, v, _ in numbers_in(code_output)]
     missing = []
     for tok, v, pct in numbers_in(answer):
-        if v in TRIVIAL or _years(v):
+        if v in TRIVIAL or _year(tok):
             continue
-        cands = [v, v / 100] if pct else [v, v * 100]
+        d = _decimals(tok)
+        # (candidate, decimals it is written to): percent <-> fraction moves the decimal point two places
+        cands = [(v, d), (v / 100, d + 2)] if pct else [(v, d), (v * 100, d - 2)]
         ok = False
-        for c in cands:
+        for c, nd in cands:
             for l in logged:
                 if l == c or (c != 0 and abs(l - c) / abs(c) <= rel_tol):
                     ok = True
                     break
-                # answer shows a rounded version of a logged value
-                for nd in range(0, 4):
-                    if round(l, nd) == round(c, nd) and len(tok.split(".")[-1].rstrip("%")) <= nd + 1:
-                        ok = True
-                        break
-                if ok:
+                if abs(round(l, nd) - c) <= 1e-9 * max(1.0, abs(c)):   # the answer shows the logged value rounded
+                    ok = True
                     break
             if ok:
                 break

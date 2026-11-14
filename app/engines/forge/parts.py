@@ -15,7 +15,6 @@ more air), bold (accent tab headings).
 """
 from __future__ import annotations
 
-import copy
 import math
 import re
 
@@ -93,7 +92,7 @@ def _note(s, text):
 
 
 def _plain(t) -> str:
-    return re.sub(r"\*\*|\^\w+", "", str(t or ""))
+    return re.sub(r"\*\*|\^\w+", "", "" if t is None else str(t))          # a value of 0 still shows
 
 
 def _txt(v) -> str:
@@ -564,12 +563,18 @@ def _ball(sl, cx, cy, d, score, name):
         pie.adjustments[1] = end * 60000 / 100000
 
 
-def _score(v, quarters):
+def _num(v):
     try:
-        f = float(str(v).rstrip("%"))
+        return float(str(v).strip().rstrip("%"))
     except (TypeError, ValueError):
+        return None
+
+
+def _score(v, quarters):
+    f = _num(v)
+    if f is None:                                       # blank, n/a: an empty ball
         return 0
-    f = f * 25 if quarters else f
+    f = f * 25 if quarters and not str(v).strip().endswith("%") else f
     return int(max(0, min(100, round(f / 25) * 25)))
 
 
@@ -595,9 +600,10 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
         _note(s, f"part {i}: Harvey-ball row left out: {_txt(keep[-1].get('label'))}")
         keep = keep[:-1]
         rh = (y + h - body_y) / max(1, len(keep))
-    allv = [v for r in keep for v in r.get("scores") or []]
-    quarters = all(isinstance(v, (int, float)) and 0 <= v <= 4 for v in allv) and any(v not in (0,) for v in allv) \
-        and max([float(v) for v in allv] or [0]) <= 4
+    # 0-4 scale or percent, judged on the numeric scores only ("3" counts as 3; blanks, n/a and "75%" do not decide)
+    nums = [f for v in (v for r in keep for v in r.get("scores") or []) if not str(v).strip().endswith("%")
+            for f in [_num(v)] if f is not None]
+    quarters = bool(nums) and all(0 <= f <= 4 for f in nums) and any(f != 0 for f in nums)
     d = min(0.34, rh * 0.62, cw * 0.6)
     for r_, r in enumerate(keep):
         ry = body_y + r_ * rh

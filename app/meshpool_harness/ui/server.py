@@ -1,9 +1,7 @@
-"""Meshpool web app: a local page to set the API key, run tasks and watch the agent work.
+"""Meshpool web app: the local server behind the desktop window and `meshpool ui`.
 
 Standard library only. Binds to 127.0.0.1. Every API call must carry the per-launch token that is baked into the
-page, so other websites open in the same browser cannot drive it. Each task runs as its own process
-(`python -m meshpool_harness run ...`), so a crash or Stop never takes the app down, and new settings apply
-to the next run.
+page, so other websites open in the same browser cannot drive it. Chats run in ui/agent_api.py.
 """
 from __future__ import annotations
 
@@ -12,8 +10,6 @@ import mimetypes
 import os
 import re
 import secrets
-import signal
-import subprocess
 import sys
 import threading
 import time
@@ -25,7 +21,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
-from meshpool_harness import providers as PVD
 from meshpool_harness.ui import agent_api as A
 from meshpool_harness.ui import workbench as W
 
@@ -35,7 +30,6 @@ RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
-JOBS: dict[str, dict] = {}
 DESKTOP = False
 LAST_PING = [time.time()]
 HTTPD = [None]
@@ -43,178 +37,6 @@ NATIVE = [False]                    # True while the interface is shown in the a
 ON_SHOW: list = []                  # called when a second launch asks this instance to come forward
 ON_QUIT: list = []                  # called when the app quits (closes the native window)
 LOCK = threading.Lock()
-ENGINES = ["code", "data", "sheets", "slides", "browser", "general"]
-
-
-# ---------- jobs ---------------------------------------------------------------------------------------------------
-
-def _meta_path(jid: str) -> Path:
-    return RUNS / jid / "job.json"
-
-
-def _save_meta(meta: dict) -> None:
-    _meta_path(meta["id"]).write_text(json.dumps(meta, indent=1), encoding="utf-8")
-
-
-def _load_meta(jid: str) -> dict | None:
-    p = _meta_path(jid)
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except ValueError:
-        return None
-
-
-def start_job(body: dict) -> dict:
-    request = (body.get("request") or "").strip()
-    if not request:
-        raise ValueError("Describe the task first.")
-    vals = C.read()
-    if not (HR.api_key() or (HR.provider() == "chatgpt" and HR.ready())):
-        raise ValueError("Add your API key or sign in to ChatGPT in Settings first.")
-    engine = body.get("engine") or ""
-    if engine and any(e not in ENGINES for e in engine.split(",")):
-        raise ValueError(f"Unknown engine: {engine}")
-    workdir = (body.get("workdir") or "").strip().strip('"')
-    if workdir and not Path(workdir).expanduser().is_dir():
-        raise ValueError(f"Working folder not found: {workdir}")
-    files = [f for f in body.get("files") or [] if Path(f).exists()]
-
-    jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-    jdir = RUNS / jid
-    out = jdir / "out"
-    out.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, "-m", "meshpool_harness", "run", request, "--out", str(out)]
-    if engine:
-        cmd += ["--engine", engine]
-    if workdir:
-        cmd += ["--workdir", str(Path(workdir).expanduser().resolve())]
-    if body.get("format"):
-        cmd += ["--format", body["format"]]
-    if files:
-        cmd += ["--files", *files]
-
-    env = dict(os.environ)
-    env.update({k: v for k, v in vals.items() if v != ""})        # saved settings win inside the app
-    env.update({"MH_EVENT_LOG": str(jdir / "events.jsonl"), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-                "PYTHONPATH": str(APP) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
-                "MESHPOOL_CONFIG": str(C.config_path())})
-    kw = {}
-    if os.name == "nt":
-        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    else:
-        kw["start_new_session"] = True
-    stdout = open(jdir / "result.json", "w", encoding="utf-8")
-    stderr = open(jdir / "stderr.log", "w", encoding="utf-8")
-    proc = subprocess.Popen(cmd, cwd=str(jdir), env=env, stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL, **kw)
-    meta = {"id": jid, "request": request, "engine": engine or "auto", "workdir": workdir,
-            "files": [Path(f).name for f in files], "model": env.get("MH_MODEL", "deepseek-v4.1-flash"),
-            "started": time.time(), "ended": None, "status": "running", "exit": None, "pid": proc.pid}
-    _save_meta(meta)
-    with LOCK:
-        JOBS[jid] = {"proc": proc, "files": (stdout, stderr)}
-    threading.Thread(target=_watch, args=(jid,), daemon=True).start()
-    return meta
-
-
-def _watch(jid: str) -> None:
-    j = JOBS[jid]
-    code = j["proc"].wait()
-    for f in j["files"]:
-        f.close()
-    meta = _load_meta(jid) or {"id": jid}
-    meta["exit"], meta["ended"] = code, time.time()
-    if meta.get("status") != "stopped":
-        res = _result(jid)
-        if res is None:
-            meta["status"] = "error"
-        else:
-            meta["status"] = "passed" if res.get("ok") else "unfinished"
-    _save_meta(meta)
-
-
-def stop_job(jid: str) -> dict:
-    j = JOBS.get(jid)
-    meta = _load_meta(jid)
-    if not j or not meta or meta.get("status") != "running":
-        raise ValueError("That task is not running.")
-    meta["status"] = "stopped"
-    _save_meta(meta)
-    p = j["proc"]
-    try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
-        else:
-            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-    except Exception:
-        p.kill()
-    return meta
-
-
-def _result(jid: str) -> dict | None:
-    p = RUNS / jid / "result.json"
-    try:
-        txt = p.read_text(encoding="utf-8")
-        return json.loads(txt[txt.find("{"):]) if "{" in txt else None
-    except (OSError, ValueError):
-        return None
-
-
-def _events(jid: str, since: int) -> list:
-    p = RUNS / jid / "events.jsonl"
-    if not p.exists():
-        return []
-    out = []
-    for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines()):
-        if i < since or not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            pass
-    return out
-
-
-def _files(jid: str) -> list:
-    out = RUNS / jid / "out"
-    if not out.exists():
-        return []
-    rows = []
-    for p in sorted(out.rglob("*")):
-        rel = p.relative_to(out)
-        if p.is_file() and not any(part.startswith(".") for part in rel.parts):
-            rows.append({"name": rel.as_posix(), "size": p.stat().st_size})
-    return rows[:200]
-
-
-def job_detail(jid: str, since: int) -> dict:
-    meta = _load_meta(jid)
-    if not meta:
-        raise KeyError(jid)
-    if meta.get("status") == "running" and jid not in JOBS:       # app restarted while it ran
-        meta["status"] = "error"
-        meta["note"] = "The app was closed while this task ran."
-    err = (RUNS / jid / "stderr.log")
-    tail = err.read_text(encoding="utf-8", errors="replace")[-4000:] if err.exists() else ""
-    return {"meta": meta, "events": _events(jid, since), "result": _result(jid) if meta["status"] != "running" else None,
-            "stderr": tail, "files": _files(jid)}
-
-
-def list_jobs() -> list:
-    if not RUNS.exists():
-        return []
-    rows = []
-    for d in sorted(RUNS.iterdir(), reverse=True):
-        if d.is_dir() and not d.name.startswith("_"):
-            m = _load_meta(d.name)
-            if m:
-                if m.get("status") == "running" and d.name not in JOBS:
-                    m["status"] = "error"
-                rows.append({k: m.get(k) for k in ("id", "request", "engine", "status", "started", "ended", "model")})
-        if len(rows) >= 50:
-            break
-    return rows
 
 
 # ---------- settings -----------------------------------------------------------------------------------------------
@@ -239,8 +61,7 @@ def get_settings() -> dict:
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
-            "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()},
-            "keys": {"anthropic": bool(HR.anthropic_key()), "gemini": bool(PVD.gemini_key())}}
+            "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
 def save_settings(body: dict) -> dict:
@@ -249,7 +70,9 @@ def save_settings(body: dict) -> dict:
     for k, v in (body.get("values") or {}).items():
         if k not in allowed:
             continue
-        v = str(v).strip().replace("\n", "")
+        v = re.sub(r"[\r\n]", "", str(v)).strip()
+        if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
+            v = re.sub(r"^(?:bearer\s+)", "", v.strip("'\" "), flags=re.I)
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
@@ -324,17 +147,6 @@ def test_connection(values: dict | None = None) -> dict:
                     os.environ[k] = v
 
 
-def route_preview(body: dict) -> dict:
-    from meshpool_harness.router.rules import decide
-    req = (body.get("request") or "").strip()
-    if body.get("engine"):
-        return {"engines": body["engine"].split(","), "confidence": 1.0, "reason": "chosen by you"}
-    if not req:
-        return {"engines": [], "confidence": 0, "reason": ""}
-    eng, conf, why = decide(req, body.get("files") or [], None, body.get("workdir") or None)
-    return {"engines": eng, "confidence": conf, "reason": why}
-
-
 def save_upload(name: str, data: bytes) -> dict:
     safe = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(name).name).strip() or "file"
     d = UPLOADS / uuid.uuid4().hex[:8]
@@ -342,19 +154,6 @@ def save_upload(name: str, data: bytes) -> dict:
     p = d / safe
     p.write_bytes(data)
     return {"path": str(p), "name": safe, "size": len(data)}
-
-
-def open_folder(jid: str) -> dict:
-    d = RUNS / jid / "out"
-    if not d.exists():
-        raise KeyError(jid)
-    if os.name == "nt":
-        os.startfile(str(d))  # noqa: S606
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(d)])
-    else:
-        subprocess.Popen(["xdg-open", str(d)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return {"ok": True, "path": str(d)}
 
 
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
@@ -499,10 +298,8 @@ class Handler(BaseHTTPRequestHandler):
                         except OSError:
                             continue
                     return ""
-                return self._send(200, {"version": MH.__version__, "author": MH.__author__, "notice": rd("NOTICE"),
-                                        "license": rd("LICENSE"), "third_party": rd("THIRD_PARTY_NOTICES.md")})
-            if u.path == "/api/jobs":
-                return self._send(200, {"jobs": list_jobs()})
+                return self._send(200, {"version": MH.__version__, "author": MH.__author__,
+                                        "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
                 return self._send(200, {"sessions": A.listing()})
             if u.path == "/api/mcp":
@@ -556,11 +353,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/agent/([\w-]+)", u.path)
             if m:
                 since = int(parse_qs(u.query).get("since", ["0"])[0])
-                return self._send(200, A.get(m.group(1)).view(since))
-            m = re.fullmatch(r"/api/jobs/([\w-]+)", u.path)
-            if m:
-                since = int(parse_qs(u.query).get("since", ["0"])[0])
-                return self._send(200, job_detail(m.group(1), since))
+                return self._send(200, A.view(m.group(1), since))
         except KeyError:
             return self._send(404, {"error": "Not found."})
         except ValueError as e:
@@ -593,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, UP.check(force=bool(self._json().get("force"))))
             if u.path == "/api/update/install":
                 from meshpool_harness import updater as UP
-                if _busy():
+                if _running():
                     return self._send(200, {"ok": False, "error": "A task is still running. Update when it finishes."})
                 return self._send(200, UP.install())
             if u.path == "/api/update/restart":
@@ -601,10 +394,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True})
                 threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
                 return
-            if u.path == "/api/route":
-                return self._send(200, route_preview(self._json()))
-            if u.path == "/api/run":
-                return self._send(200, start_job(self._json()))
             if u.path == "/api/upload":
                 name = unquote(parse_qs(u.query).get("name", ["file"])[0])
                 return self._send(200, save_upload(name, self._body()))
@@ -614,9 +403,6 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/quit":
                 threading.Timer(0.3, _shutdown).start()
                 return self._send(200, {"ok": True})
-            if u.path == "/api/choose-folder":
-                from meshpool_harness.ui.desktop import choose_folder
-                return self._send(200, {"path": choose_folder(self._json().get("start", ""))})
             if u.path == "/api/open-data":
                 from meshpool_harness.ui.desktop import reveal
                 reveal(C.home())
@@ -631,8 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import harnesses as HRS
                 b = self._json()
                 hid = HRS.LEGACY.get(b.get("id", ""), b.get("id", ""))
-                which = {"claude-code": "claude", "codex": "codex", "gemini-cli": "gemini"}.get(hid) or HRS.LOGINS.get(hid, hid)
-                return self._send(200, HRS.login(which))     # by harness id, or by provider (claude, chatgpt)
+                which = "codex" if hid == "codex" else HRS.LOGINS.get(hid, hid)
+                return self._send(200, HRS.login(which))     # by harness id (codex) or by provider (chatgpt)
             if u.path == "/api/import-context":
                 # context from ChatGPT, Claude or another assistant: pasted answer, pasted instructions, or an export
                 from meshpool_harness import importer as IM
@@ -722,13 +508,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, ML.api_action(self._json()))
             if u.path == "/api/harnesses":
                 return self._send(200, A.harness_change(self._json()))
-            if u.path == "/api/harnesses/open":
-                from meshpool_harness.ui.desktop import reveal
-                from meshpool_harness.harnesses import ensure_defaults, folder
-                ensure_defaults()
-                folder().mkdir(parents=True, exist_ok=True)
-                reveal(folder())
-                return self._send(200, {"ok": True})
             if u.path == "/api/mcp/test":
                 return self._send(200, A.mcp_test(self._json()))
             if u.path == "/api/models/favorite":
@@ -810,6 +589,10 @@ class Handler(BaseHTTPRequestHandler):
                 p = W._inside(W.check_root(b.get("root", "")), b.get("path", ""))
                 if not p.exists():
                     raise ValueError("That file is gone.")
+                if p.suffix.lower() in RUNNABLE:     # opening would run it, outside the approval for commands
+                    reveal(p.parent)
+                    return self._send(200, {"ok": True, "message": f"{p.name} is a script, so its folder opened "
+                                                                   "instead. Ask the agent to run it."})
                 try:
                     reveal(p)
                 except OSError:
@@ -832,7 +615,7 @@ class Handler(BaseHTTPRequestHandler):
                     except CN.NeedsClient as e:
                         return self._send(200, {"needs_client": cid, "redirect": e.redirect, "message": str(e),
                                                 "connectors": CN.listing()})
-                    webbrowser.open(url)
+                    _open_web(url)
                     return self._send(200, {"url": url, "connectors": CN.listing()})
                 if act == "check":
                     r = CN.check(cid)
@@ -847,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
                         except CN.NeedsClient as e:
                             return self._send(200, {"id": c["id"], "needs_client": c["id"], "redirect": e.redirect,
                                                     "message": str(e), "connectors": CN.listing()})
-                        webbrowser.open(url)
+                        _open_web(url)
                         return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
                     return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
                                             "message": f"Connected: {n} tool{'s' * (n != 1)}. New chats can use it."})
@@ -878,7 +661,7 @@ class Handler(BaseHTTPRequestHandler):
                 url = str(self._json().get("url", "")).strip()
                 if not re.match(r"https?://", url, re.I):
                     raise ValueError("Only web addresses can be opened.")
-                webbrowser.open(url)
+                _open_web(url)
                 return self._send(200, {"ok": True})
             if u.path == "/api/open-editor":
                 return self._send(200, W.open_editor(self._json().get("path", "")))
@@ -928,9 +711,6 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/jobs/([\w-]+)/(stop|open)", u.path)
-            if m:
-                return self._send(200, stop_job(m.group(1)) if m.group(2) == "stop" else open_folder(m.group(1)))
         except (ValueError, KeyError) as e:
             return self._send(400, {"error": str(e).strip("'")})
         except Exception as e:  # keep the app alive, show the cause
@@ -938,16 +718,36 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
 
+# Files the operating system runs rather than shows when "opened"
+RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat", ".cmd", ".ps1", ".exe", ".msi",
+            ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool"}
+
+
+def _open_web(url: str) -> None:
+    """Open a sign-in page. The address comes from the app's server metadata: only ever a web page."""
+    if not re.match(r"https?://", url or "", re.I):
+        raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
+    webbrowser.open(url)
+
+
+class _Server(ThreadingHTTPServer):
+    # Windows' SO_REUSEADDR lets a second server bind a port already in use, so the free-port search never moved on
+    allow_reuse_address = os.name != "nt"
+
+
+def _running() -> bool:
+    return any(s.state in ("working", "waiting") for s in list(A.LIVE.values()))
+
+
 def _busy() -> bool:
+    """Keep the app open: a chat is running, or a scheduled task needs the app to fire it."""
     try:
         from meshpool_harness import assistant as AS
         if any(t.get("enabled") for t in AS.tasks()):
-            return True                              # scheduled tasks need the app to stay open
+            return True
     except Exception:  # noqa: BLE001
         pass
-    if any(m.get("status") == "running" for m in (_load_meta(j) or {} for j in list(JOBS))):
-        return True
-    return any(s.state in ("working", "waiting") for s in list(A.LIVE.values()))
+    return _running()
 
 
 def _shutdown():
@@ -980,7 +780,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     httpd = None
     for p in range(port, port + 20):
         try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+            httpd = _Server(("127.0.0.1", p), Handler)
             port = p
             break
         except OSError:
@@ -1005,7 +805,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("")
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: _open_web(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

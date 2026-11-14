@@ -316,3 +316,47 @@ def test_attached_decks_set_the_look_for_one_deck(home, decks):
     assert settled(task, [decks["wide"]])["theme"] is True
     look, prof = brand_from("Summarise the attached deck in 5 slides", [decks["wide"]])
     assert prof is None                                                 # content, not a style to copy
+
+
+def _as_potx(src, dst):
+    import zipfile
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+        for it in zin.infolist():
+            data = zin.read(it.filename)
+            if it.filename == "[Content_Types].xml":
+                data = data.replace(b"presentationml.presentation.main+xml", b"presentationml.template.main+xml")
+            zout.writestr(it, data)
+    return str(dst)
+
+
+def test_potx_template_is_learned_and_measured(home, decks, tmp_path):
+    from engines.forge import brand as B
+    from engines.forge.tools import measure_office_file
+    potx = _as_potx(decks["wide"], tmp_path / "company.potx")
+    p = B.learn([potx])
+    assert p["template"] and p["template_mode"] == "master"            # the master is reused from a .potx
+    out, err = measure_office_file(potx)
+    assert not err and json.loads(out)
+
+
+def test_logo_rels_use_zip_names_on_windows(decks, monkeypatch):
+    import zipfile
+    from pathlib import PureWindowsPath
+    from engines.forge import brand as B
+    monkeypatch.setattr(B, "Path", PureWindowsPath)                      # what Path does on Windows
+    with zipfile.ZipFile(decks["wide"]) as zf:
+        rels = B._rels(zf, "ppt/slideMasters/slideMaster1.xml")
+    assert any(t.startswith("ppt/media/") for t in rels.values()), rels
+
+
+def test_cli_engine_finds_the_attached_deck_in_the_workdir(home, decks, tmp_path, monkeypatch):
+    from engines.forge import engine as FE
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(decks["wide"], work / "old.pptx")
+    seen = {}
+    monkeypatch.setattr(FE, "brand_from", lambda task, files=None: seen.setdefault("files", files) and ({}, None))
+    monkeypatch.setattr("engines.forge.build.build", lambda *a, **k: (_ for _ in ()).throw(SystemExit))
+    with pytest.raises(SystemExit):
+        FE.solve("Build a deck in the same style as the attached deck", workdir=str(work), task_id="t")
+    assert [Path(f).name for f in seen["files"]] == ["old.pptx"]

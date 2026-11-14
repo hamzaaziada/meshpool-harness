@@ -148,9 +148,19 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _status(e: Exception) -> int:
+    """The HTTP status to answer with. An error event inside ChatGPT's 200 stream arrives as "chatgpt HTTP 500";
+    its code tells a rate or usage limit (429) or a request that is too long or malformed (400) from a server fault,
+    so the agent retries, waits or gives up as it should."""
     import re
-    m = re.search(r"HTTP (\d{3})", str(e))
+    s = str(e)
+    m = re.search(r"HTTP (\d{3})", s)
     code = int(m.group(1)) if m else 502
+    if code == 500:
+        low = s.lower()
+        if any(w in low for w in ("rate_limit", "usage_limit", "insufficient_quota", "quota_exceeded")):
+            return 429
+        if any(w in low for w in ("context_length", "invalid_request", "invalid_prompt", "string_above_max")):
+            return 400
     return code if 400 <= code < 600 else 502
 
 

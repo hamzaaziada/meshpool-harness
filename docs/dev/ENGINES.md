@@ -4,9 +4,10 @@ A small, cheap, model-agnostic agent harness. One command routes a request to an
 sheets, slides, browser) and runs it on any OpenAI-compatible model. Built and measured on DeepSeek V4.1 Flash
 against Junie, Claude Code, Codex and a plain bash-only agent on the same tasks: see `results.md`.
 
-## v2 in one line
+## Benchmarked settings
 
-The benchmarked v2 configuration is the minimal profile with streaming: set `MH_HARNESS_PROFILE=minimal MH_STREAM=1 MH_CACHE_KEY=1`. Results: results.md (section 0a). New here? Read HANDOVER.md, then docs/IMPROVEMENT_PLAN.md.
+`meshpool run` turns on the benchmarked flag set for code and browser tasks (`ENGINE_FLAGS` in
+`meshpool_harness/cli.py`); explicit `MH_*` settings win. Results: `docs/BENCHMARKS.md`.
 
 ## Quickstart (your computer)
 
@@ -25,7 +26,7 @@ meshpool work github:owner/repo#12 --workdir . --report                        #
 ```
 
 Settings, plug-ins (skills, model profiles, engines, connectors) and the GitHub Action: `docs/dev/PLUGINS.md`.
-How the harness works (loop, tools, memory): `HARNESS.md`. Contributing: `CONTRIBUTING.md`.
+How the harness works (loop, tools): `HARNESS.md`. Contributing: `CONTRIBUTING.md`.
 
 ## Setup for the benchmarks
 
@@ -59,7 +60,7 @@ if every engine finished with passing checks.
    deliverable only when a creation verb precedes them ("make a deck" vs "from this tracker"), repo presence, explicit
    `--format`. Mixed requests become chains in the order code -> data -> sheets -> slides; each step gets only the
    previous step's answer and files. Below 0.6 confidence one 60-token classification call decides; below 0.5 the
-   request goes to `general`. Every decision is logged to `routing.csv`. `--engine` and `--model` override.
+   request goes to `general`. `--engine` and `--model` override.
 2. **Engine** (`engines/<name>/engine.py`): owns its system prompt (byte-stable, so the provider cache hits),
    its tools, and a deterministic `finish_check`.
 3. **Core loop** (`meshpool_harness/core/`): strict tool schemas with precise errors, tool-output truncation with the
@@ -69,7 +70,7 @@ if every engine finished with passing checks.
 
 | Engine | What it adds | Finish is rejected unless |
 |---|---|---|
-| code | container-native commands (no nested `docker exec` quoting), model-free locate hints, issue examples executed before turn 0, regression gate on related tests, optional cross-family reviewer, optional k-attempt ensemble with cross-test voting | a check command passed after the last edit; no existing test was modified; related tests that passed before still pass |
+| code | container-native commands (no nested `docker exec` quoting), model-free locate hints, issue examples executed before turn 0, regression gate on related tests, one fresh second attempt when the first runs out of budget (the repo is reset to the user's own state, uncommitted and untracked files included, never to HEAD) | a check command passed after the last edit; no existing test was modified; related tests that passed before still pass |
 | data | number tracing, verbatim-quote checker, lean output rules | every number in the answer appears in executed code output; every quote exists verbatim in a source; requested files exist; plain-language check passes |
 | sheets | banker-style builder (Cover -> Inputs -> Calc -> Outputs -> Checks, colored tabs, linked tab map, blue inputs) | LibreOffice recalculation shows no errors, no hardcoded numbers in calc/output tabs, Checks tab shows OK, Cover tab exists |
 | slides | JSON deck spec, deterministic renderer (layout, type scale, native charts/tables, font-metric text fitting), QA | no overflow, overlap, low contrast, >2 fonts, wrong slide count; plain-language check passes |

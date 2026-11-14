@@ -82,11 +82,9 @@ balanced), and an explicit `density` option or "density: present|balanced|read" 
 - Short content steps up the type scale before it gets more air (closing steps, side tables, matrix rows, grid
   text), so a lighter slide looks intentional, not empty.
 
-![The same five slides in present, balanced and read](examples/density_modes.png)
-
 ## Evidence
 
 - Exact rebuilds of the four reference pages (kept out of the repo because they reproduce the reference text)
   pass every render check.
 - Content-only builds from a text brief, on two unrelated topics, pass the render check with zero overlap or
-  overflow: `examples/content_only_bain.*` and `examples/content_only_dc.*`.
+  overflow.

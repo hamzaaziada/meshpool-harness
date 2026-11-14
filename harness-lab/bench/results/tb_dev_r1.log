@@ -1,6 +1,0 @@
-key spend at start: $64.99483295069999
-v5:OK 146.4s $0.0179 | app:x 163.8s $0.0063 | codex:x 12.3s $0.0000 | pi:x 19.2s $0.0007 <- sqlite-db-truncate
-v5:OK 20.7s $0.0021 | app:OK 24.3s $0.0033 | codex:OK 28.7s $0.0029 | pi:OK 20.3s $0.0021 <- multi-source-data-merger
-v5:x 1500.1s $0.0000 | app:x 590.3s $0.0373 | codex:x 639.0s $0.0227 | pi:x 173.0s $0.0099 <- adaptive-rejection-sampler
-v5:OK 127.4s $0.0086 | app:OK 32.2s $0.0032 | codex:x 54.4s $0.0035 | pi:x 95.1s $0.0080 <- nginx-request-logging
-key spend at end: $65.99986291469997 (this run: $1.01)

@@ -1,4 +1,4 @@
-"""ACP client: runs any Agent Client Protocol agent (Hermes, Gemini CLI, Goose, Claude Code/Codex adapters, ...)
+"""ACP client: runs any Agent Client Protocol agent (Hermes, Goose, the Codex adapter, ...)
 as a Meshpool harness. Standard library only.
 
 The agent is a child process speaking newline-delimited JSON-RPC 2.0 on stdin/stdout. This class presents the same
@@ -81,6 +81,7 @@ def _text_of(content) -> str:
     return "\n".join(x for x in out if x)
 
 
+PLAN_BLOCKED = {"edit", "execute", "delete", "move"}      # ACP tool kinds that change something
 ACP_KIND = {"execute": "bash", "read": "read_file", "edit": "edit", "search": "grep", "fetch": "fetch_url",
             "delete": "delete", "move": "move"}
 
@@ -224,9 +225,10 @@ class ACPAgent:
             self.events.append({k: v for k, v in ev.items() if k not in ("i", "t")})
         self.emit_cb(ev)
 
-    def _start(self):
+    def _start(self) -> bool:
+        """Start the harness process unless it runs. True when a new process started (its sessions are gone)."""
         if self._p and self._p.poll() is None:
-            return
+            return False
         m = self.manifest
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
@@ -234,6 +236,10 @@ class ACPAgent:
         elif m.get("prepare") == "codex":
             from meshpool_harness.harnesses import prepare_codex
             prepare_codex(self.model)
+        extra = {}
+        if m.get("prepare") == "opencode":
+            from meshpool_harness.harnesses import prepare_opencode
+            extra = prepare_opencode(self.model)
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -241,6 +247,7 @@ class ACPAgent:
                            + (m.get("install") or ""))
         env = dict(os.environ)
         env.update({k: str(v) for k, v in (m.get("env") or {}).items()})
+        env.update(extra)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX"):
             if k not in (m.get("env") or {}):
                 env.pop(k, None)               # never leak Meshpool's Python into another Python app
@@ -251,12 +258,17 @@ class ACPAgent:
                 env.pop(k)                     # a stale CA path breaks every HTTPS client in the harness
         log_dir = C.runs_dir() / "harness-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+        if getattr(self, "_err", None):
+            try:
+                self._err.close()              # the log of a process that exited
+            except OSError:
+                pass
         self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=self._err, cwd=str(self.root), env=env, **kw)
         self._alive = True
-        threading.Thread(target=self._reader, daemon=True).start()
+        threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
         init = self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False,
@@ -264,12 +276,13 @@ class ACPAgent:
             "clientInfo": {"name": "meshpool", "title": "Meshpool", "version": _VERSION}}, timeout=300)
         self.agent_info = init.get("agentInfo") or {}
         self.capabilities = init.get("agentCapabilities") or {}
-        auth = m.get("auth")                   # e.g. Gemini CLI: which of its own logins to use
+        auth = m.get("auth")                   # a manifest's "auth": which of its own logins to use
         if auth and any(a.get("id") == auth.get("methodId") for a in init.get("authMethods") or []):
             self._request("authenticate", auth, timeout=120)
+        return True
 
-    def _reader(self):
-        for raw in self._p.stdout:
+    def _reader(self, proc):
+        for raw in proc.stdout:
             try:
                 msg = json.loads(raw.decode("utf-8", "replace"))
             except ValueError:
@@ -286,7 +299,8 @@ class ACPAgent:
                     self._pending[msg["id"]] = msg
                     self._cv.notify_all()
         with self._cv:
-            self._alive = False
+            if self._p is proc:                # not a newer process started after this one exited
+                self._alive = False
             self._cv.notify_all()
 
     def _write(self, obj):
@@ -380,6 +394,11 @@ class ACPAgent:
         tc = p.get("toolCall") or {}
         allow = next((o for o in options if o.get("kind") == "allow_once"), None) or \
             next((o for o in options if str(o.get("kind", "")).startswith("allow")), None)
+        reject = next((o for o in options if o.get("kind") == "reject_once"), None) or \
+            next((o for o in options if str(o.get("kind", "")).startswith("reject")), None)
+        if self.plan and (tc.get("kind") in PLAN_BLOCKED or _diff_of(tc.get("content"))):
+            # Plan mode only investigates, as the built-in agents' plan tools do: no edits, commands or moves.
+            return {"outcome": "selected", "optionId": reject["optionId"]} if reject else {"outcome": "cancelled"}
         if self.mode == "auto" and allow:
             return {"outcome": "selected", "optionId": allow["optionId"]}
         if self.mode == "edits" and allow and (tc.get("kind") == "edit" or _diff_of(tc.get("content"))):
@@ -396,7 +415,6 @@ class ACPAgent:
                                      [{"id": o["optionId"], "label": o.get("name") or o["optionId"],
                                        "kind": o.get("kind", "")} for o in options])
         if choice in (None, "", "no"):
-            reject = next((o for o in options if o.get("kind") == "reject_once"), None)
             return {"outcome": "selected", "optionId": reject["optionId"]} if reject else {"outcome": "cancelled"}
         if choice == "yes" and allow:
             return {"outcome": "selected", "optionId": allow["optionId"]}
@@ -409,6 +427,8 @@ class ACPAgent:
             return
         u = (msg.get("params") or {}).get("update") or {}
         kind = u.get("sessionUpdate")
+        if self._replaying and kind not in ("usage_update", "session_info_update"):
+            return                                 # session/load replays old turns: already in the saved thread
         if kind == "agent_message_chunk":
             c = u.get("content") or {}
             if c.get("type") == "text" and c.get("text"):
@@ -468,7 +488,10 @@ class ACPAgent:
 
     # ---------- session ------------------------------------------------------------------------------------------
     def _ensure_session(self):
-        self._start()
+        if self._start() and self.acp_session:
+            # The process exited and a new one started: its session is not in the new process. Load it (or start
+            # a new one), as after a hard restart.
+            self.loaded_from, self.acp_session = self.acp_session, None
         if self.acp_session:
             return
         mcp = mcp_servers_for_acp([str(self.root)]) if self.manifest.get("share_mcp", True) else []
@@ -481,7 +504,9 @@ class ACPAgent:
                                                     "mcpServers": mcp}, timeout=180)
                 self.acp_session = self.loaded_from
                 self._ask_mode((rl or {}).get("modes") or {})
+                self._models_from(rl or {})
                 self._reloaded = True
+                self._apply_model()               # the thread's model, as after session/new
                 return
             except ACPError:
                 pass
@@ -496,11 +521,14 @@ class ACPAgent:
             raise
         self.acp_session = r["sessionId"]
         self._ask_mode(r.get("modes") or {})
+        self._models_from(r)
+        self._apply_model()
+
+    def _models_from(self, r: dict):
         ms = r.get("models") or {}
         if ms.get("availableModels"):
             self.available_models = [{"id": m.get("modelId"), "name": m.get("name") or m.get("modelId")}
                                      for m in ms["availableModels"] if m.get("modelId")]
-        self._apply_model()
 
     def _ask_mode(self, modes: dict):
         """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
@@ -572,7 +600,7 @@ class ACPAgent:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
             self._kill_timer = None
         self._stop = False
-        self._before = self._descendants()
+        self._before = None                              # taken once the process and its MCP servers run (below)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
@@ -591,6 +619,7 @@ class ACPAgent:
             self._emit({"type": "model_start"})
             self._turn_tools = 0
             self._ensure_session()
+            self._before = self._descendants()           # Stop then ends only what this turn starts
             prompt = [{"type": "text", "text": body}]
             if images:
                 if (self.capabilities.get("promptCapabilities") or {}).get("image"):

@@ -119,9 +119,8 @@ Input: the approved storyline (`storyline.json`), the slide JSON list, the templ
 
 ## 5. Workbook block schema
 
-Full JSON Schema: `app/engines/forge/schemas/workbook_block.schema.json`. It extends the existing sheets pipeline
-spec (`engines/sheets/pipeline.py`) with sources, reported totals, checks, circularity policy, a dashboard and
-recompute targets. The model writes keys and formula templates (`={revenue@prev}*(1+growth)`). The builder assigns
+Full JSON Schema: `app/engines/forge/schemas/workbook_block.schema.json`. It describes the model's rows and
+inputs together with sources, reported totals, checks, circularity policy, a dashboard and recompute targets. The model writes keys and formula templates (`={revenue@prev}*(1+growth)`). The builder assigns
 cells, named ranges, styles, number formats, frozen panes, the Checks sheet and the cover's `MasterCheck`.
 
 Sheet roles: Cover, Inputs (blue constants, each with a source), Calc (IS/BS/CF and schedules), Outputs, Dashboard
@@ -176,16 +175,3 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | X11 | before/after diff of every changed cell (`--before`) |
 | X12 | a Checks sheet; `MasterCheck` = AND of all checks |
 | X13 | no externalLink parts, no external references, no VBA |
-
-## 7. Measured gaps between the engine today and this spec
-
-From `scorecard.csv` and the one-shot McKinsey rebuilds (`mckinsey-rebuild-test.md`):
-
-- The current slides renderer (`engines/slides/renderer.py`) draws on the Blank layout with hardcoded RGB, so it
-  fails P6, P7 and P15 by construction. It needs to become the template-placeholder renderer described in §4.
-- It writes no source line (0% of rebuilt slides against 47% median in references) and no provenance map, so it
-  fails P13.
-- Its type is Calibri with 13 body sizes. References use one sans family (Arial in 15 of 17) at 10–14 pt body,
-  mostly 24–25 pt titles and 8–9 pt footnotes.
-- It is already strong on P19 consistency (100% title size and position) and on action titles (73–90% with verbs,
-  against a reference median of 58%).

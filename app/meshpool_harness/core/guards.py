@@ -15,6 +15,10 @@ TEST_PATH = re.compile(r"(^|/)(tests?|spec|__tests__)/|(^|/)test_[^/]*\.py$|_tes
 ERR_LINE = re.compile(r"(Error|Exception|error:|FAILED|FAIL:|AssertionError|Traceback|panic:|fatal:|E   )")
 
 
+class Abort(RuntimeError):
+    """A guard ends the run (the loop stops; any other tool exception is reported to the model)."""
+
+
 def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
     """Append one row to the failure catalog. Logging must never stop a run: in an app the package folder can be
     read-only, so any file error is ignored. MH_FAILURES_LOG moves the file; MH_FAILURES_LOG=off disables it."""
@@ -36,27 +40,23 @@ def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
         pass
 
 
-# Every guard can be switched off for ablation. MH_GUARDS=all|none|comma list overrides the profile default.
+# Every guard can be switched on or off for ablation. MH_GUARDS=all|none|comma list overrides the default set.
 ALL_GUARDS = {"progress", "repeat_search", "repeat_failure", "error_quote", "finish_check", "test_guard", "deliverables",
               "explore_lock"}
-MINIMAL_GUARDS = {"repeat_failure", "test_guard", "deliverables"}     # v2 minimal profile: safety and deliverables only
-
-
-def minimal() -> bool:
-    return os.environ.get("MH_HARNESS_PROFILE") == "minimal"
+DEFAULT_GUARDS = {"repeat_failure", "test_guard", "deliverables"}     # safety and deliverables only
 
 
 def enabled(name: str) -> bool:
     g = os.environ.get("MH_GUARDS")
     if g:
         return g == "all" or (g != "none" and name in g.split(","))
-    return name in (MINIMAL_GUARDS if minimal() else ALL_GUARDS)
+    return name in DEFAULT_GUARDS
 
 
 def test_guard_mode() -> str:
-    """strict (v1): any change to a tracked test file is rejected. additive (v2 default): new tests, even inside an
-    existing test file, are allowed; changed or deleted existing test lines are rejected. off: no check."""
-    return os.environ.get("MH_TEST_GUARD") or ("additive" if minimal() else "strict")
+    """additive (default): new tests, even inside an existing test file, are allowed; changed or deleted existing test
+    lines are rejected. strict: any change to a tracked test file is rejected. off: no check."""
+    return os.environ.get("MH_TEST_GUARD") or "additive"
 
 
 def key_error_line(output: str) -> str | None:
@@ -94,7 +94,7 @@ class Guards:
         return "\n".join(msgs) or None
 
     def stall(self, turn: int) -> str | None:
-        """v3 loop breaker (MH_STALL=1): progress = a file change or a passing command not run before. After 12 turns
+        """Loop breaker (MH_STALL=1): progress = a file change or a passing command not run before. After 12 turns
         without progress, nudge once to change approach; again at 24. Never blocks anything."""
         if os.environ.get("MH_STALL") != "1":
             return None
@@ -116,7 +116,7 @@ class Guards:
         return None
 
     def repeat_calls(self, calls: list) -> str | None:
-        """v3 (MH_DOOM=1): 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
+        """MH_DOOM=1: 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
         if os.environ.get("MH_DOOM") != "1" or not calls:
             return None
         hist = getattr(self, "_call_hist", [])
@@ -171,7 +171,7 @@ class Guards:
             return ("GUARD repeat_failure: this exact command has failed 3 times with the same error. Do not run it "
                     "again unchanged. State a different hypothesis, inspect different code, or change approach.")
         if n >= 5:
-            raise RuntimeError(f"aborted: command failed {n} times identically: {cmd[:120]}")
+            raise Abort(f"aborted: command failed {n} times identically: {cmd[:120]}")
         return None
 
     # error_not_quoted: the turn after a failure must reference the key error line

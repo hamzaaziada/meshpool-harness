@@ -63,6 +63,11 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                     return reply({"jsonrpc": "2.0", "id": rid,
                                   "error": {"code": -32602, "message": f"unknown tool {p.get('name')}"}})
                 args = p.get("arguments") or {}
+                if not isinstance(args, dict):
+                    args = {}
+                props = t.schema.get("properties") or {}
+                extra = sorted(k for k in args if k not in props) if props else []
+                args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument costs a turn
                 try:
                     if serial:
                         with call_lock:
@@ -74,6 +79,12 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                     content, err = [text(f"Bad arguments: {e}")], True
                 except Exception as e:  # noqa: BLE001  report every failure to the agent, never crash
                     content, err = [text(f"{type(e).__name__}: {e}" if not isinstance(e, ToolFailed) else str(e))], True
+                if extra:
+                    note = f"(Ignored unknown argument(s): {', '.join(extra)}.)"
+                    if content and content[0].get("type") == "text":
+                        content[0] = text(f"{note}\n{content[0].get('text', '')}")
+                    else:
+                        content.insert(0, text(note))
                 res = {"content": content, "isError": err}
             else:
                 return reply({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {m}"}})
@@ -89,5 +100,8 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
             msg = json.loads(line)
         except ValueError:
             reply({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+            continue
+        if not isinstance(msg, dict):
+            reply({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}})
             continue
         threading.Thread(target=handle, args=(msg,), daemon=True).start()

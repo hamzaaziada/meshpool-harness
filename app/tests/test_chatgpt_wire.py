@@ -15,7 +15,6 @@ import pytest  # noqa: E402
 
 from meshpool_harness.core import chatgpt as CG  # noqa: E402
 
-CLAUDE_SECRET = "sk-ant-oat01-NEVER-LEAVES-CLAUDE-CODE"
 
 
 def jwt(exp: float, acct: str = "acct-42") -> str:
@@ -112,12 +111,6 @@ def mock(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
-    # A Claude Code sign-in on the same computer: it must never reach any request.
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
-    (tmp_path / "claude").mkdir()
-    (tmp_path / "claude" / ".credentials.json").write_text(json.dumps(
-        {"claudeAiOauth": {"accessToken": CLAUDE_SECRET, "refreshToken": CLAUDE_SECRET}}))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     CG._MODELS.update(t=0.0, rows=[])
     CG._LIMIT.clear()
     yield m
@@ -234,19 +227,13 @@ def test_meshpool_code_agent_streams_on_the_sign_in(mock, tmp_path, monkeypatch)
     monkeypatch.setenv("MESHPOOL_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    from meshpool_harness.agent import core
     from meshpool_harness.agent.core import Agent
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")   # fixed at import: keep the session in tmp
     ev = []
     a = Agent(str(tmp_path), emit=ev.append, mode="auto")
     a.send("say hello")
     assert "".join(e["text"] for e in ev if e.get("type") == "text_delta") == "hello"
-
-
-def test_no_claude_code_token_in_any_request(mock, tmp_path, monkeypatch):
-    write_auth(tmp_path, jwt(time.time() - 10))
-    CG.chat(body())
-    CG.models()
-    for _method, _path, headers, raw in mock.seen:
-        assert CLAUDE_SECRET not in json.dumps(headers) and CLAUDE_SECRET.encode() not in raw
 
 
 # ---------- the local relay (core/chatgpt_relay.py): Pi and Hermes reach the sign-in through it -------------------

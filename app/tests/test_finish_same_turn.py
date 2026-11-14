@@ -1,5 +1,4 @@
 """MH_CODE_FINISH_SAME_TURN: a check and finish in one turn; the guard still refuses a failing check (no model calls)."""
-import json
 import subprocess
 
 from meshpool_harness.core.client import MockClient, tool_call
@@ -38,7 +37,8 @@ def test_pass_and_finish_in_one_turn(tmp_path):
     assert r.ok and r.turns == 3 and len(c.requests) == 3
 
 
-def test_failing_check_refuses_same_turn_finish(tmp_path):
+def test_failing_check_refuses_same_turn_finish(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_GUARDS", "all")                          # finish_check is off by default
     d = _repo(tmp_path)
     r, c = _go(d, [tool_call("read_file", {"path": "calc.py"}),
                    tool_call("edit", {"path": "calc.py", "old": "a - b", "new": "a * b"}), _both("wrong"),
@@ -53,4 +53,4 @@ def test_prompt_line_only_with_flag(monkeypatch):
     eng = importlib.import_module("engines.code.engine")
     src = open(eng.__file__).read()
     assert 'os.environ.get("MH_CODE_FINISH_SAME_TURN") == "1"' in src
-    assert "finish together in the same turn" not in json.dumps([eng.SYSTEM, eng.SYSTEM_MIN])
+    assert "finish together in the same turn" not in eng.SYSTEM

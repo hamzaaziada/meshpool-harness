@@ -179,7 +179,7 @@ def models(refresh: bool = False) -> dict:
     if dprov == "key" and dbare not in ids and key:
         rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
-    # One section per provider (the key endpoint, ChatGPT, Claude, Gemini), ready or with what to set up.
+    # One section per provider (the key endpoint and ChatGPT), ready or with what to set up.
     groups = PV.groups(rows, err, refresh=refresh)
     flat = [m for g in groups for m in g["models"]]
     return {"models": flat, "groups": groups, "favorites": fav, "default": default,
@@ -245,14 +245,25 @@ def read_file(root: str, rel: str) -> dict:
         raise ValueError(_perm_hint(p))
     if b"\0" in data[:8000]:
         return {"path": rel, "binary": True, "size": size, "text": ""}
-    return {"path": rel, "binary": False, "size": size, "text": data.decode("utf-8", "replace")}
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:                   # editing would rewrite every non-UTF-8 byte: show it read-only
+        return {"path": rel, "binary": False, "readonly": True, "size": size, "text": data.decode("utf-8", "replace"),
+                "note": "Not UTF-8 text, so it is read-only here. Open it in your editor to change it."}
+    return {"path": rel, "binary": False, "size": size, "text": text}
 
 
 def write_file(root: str, rel: str, text: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
+    text = text.replace("\r\n", "\n")
+    try:                                         # keep the file's line endings: a one-line edit is a one-line diff
+        if b"\r\n" in p.read_bytes()[:65536]:
+            text = text.replace("\n", "\r\n")
+    except OSError:
+        pass
+    p.write_bytes(text.encode("utf-8"))
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
@@ -339,6 +350,9 @@ def git_action(root: str, body: dict) -> dict:
         name = body.get("branch", "").strip()
         if not name:
             raise ValueError("Give a branch name.")
+        if name.startswith("-") or subprocess.run(["git", "check-ref-format", "--branch", name], cwd=str(r),
+                                                  capture_output=True, creationflags=NO_WINDOW).returncode:
+            raise ValueError(f"\"{name}\" is not a valid branch name.")
         if body.get("create"):
             _git(r, "switch", "-c", name)
         else:
@@ -441,7 +455,8 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     if not command.strip():
         raise ValueError("Type a command.")
     tid = uuid.uuid4().hex[:8]
-    t = {"id": tid, "cwd": str(r), "command": command, "out": [], "rc": None, "start": time.time(), "p": None}
+    t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
+         "p": None, "lock": threading.Lock()}
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -451,10 +466,14 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
 
     def pump():
         for line in iter(p.stdout.readline, b""):
-            t["out"].append(line.decode("utf-8", "replace"))
-            if len(t["out"]) > 5000:
-                del t["out"][:1000]
-        t["rc"] = p.wait()
+            with t["lock"]:
+                t["out"].append(line.decode("utf-8", "replace"))
+                if len(t["out"]) > 5000:             # keep the last lines; "base" keeps every line's number stable
+                    del t["out"][:1000]
+                    t["base"] += 1000
+        rc = p.wait()
+        with t["lock"]:
+            t["rc"] = rc
     threading.Thread(target=pump, daemon=True).start()
     return term_view(tid, 0)
 
@@ -463,9 +482,12 @@ def term_view(tid: str, since: int) -> dict:
     t = TERMS.get(tid)
     if not t:
         raise KeyError(tid)
-    out = t["out"][since:]
-    return {"id": tid, "command": t["command"], "cwd": t["cwd"], "rc": t["rc"], "lines": out, "next": since + len(out),
-            "running": t["rc"] is None}
+    with t["lock"]:                              # lines and exit code from the same moment
+        start = max(since, t["base"])
+        out = t["out"][start - t["base"]:]
+        rc = t["rc"]
+    return {"id": tid, "command": t["command"], "cwd": t["cwd"], "rc": rc, "lines": out, "next": start + len(out),
+            "running": rc is None}
 
 
 def term_stop(tid: str) -> dict:

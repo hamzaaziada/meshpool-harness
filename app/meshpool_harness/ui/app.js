@@ -26,14 +26,12 @@ function termShellPicker() {
   return `<select id="tshell" aria-label="Shell" onchange="store('term_shell', this.value)">${Object.entries(sh.shells).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
 }
 // "deepseek-v4.1-flash" reads as "DeepSeek V4.1 Flash"; unknown ids are tidied the same way.
-// A model id carries its provider (providers.py): "chatgpt:gpt-6.1-sol", "gemini:...", or no prefix for the key endpoint.
-const PROV_PREFIX = ["chatgpt", "anthropic", "gemini", "claude", "google"];
+// A model id carries its provider (providers.py): "chatgpt:gpt-6.1-sol", or no prefix for the key endpoint.
+const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelName(id) {
-  const known = {deepseek: "DeepSeek", gpt: "GPT", claude: "Claude", gemini: "Gemini", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
-  const p = provOf(id);
-  if ((p === "claude" || p === "google") && bareModel(id) === "default") return p === "claude" ? "Claude (your plan)" : "Gemini (your plan)";
+  const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
   return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
 }
 function connMsg(d) {
@@ -105,7 +103,7 @@ function toast(text, ms = 2600, action) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
   if (action) { const b = document.createElement("button"); b.className = "tact"; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); ms = Math.max(ms, 6000); }
-  setTimeout(() => t.remove(), ms);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 160); }, ms);
 }
 
 
@@ -118,14 +116,24 @@ function ask({title, text = "", value, ok = "OK", danger = false}) {
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
     const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
-    const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(val()); } };
+    const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
     $$("[data-a]", sc).forEach(b => b.onclick = () => done(b.dataset.a === "1" ? val() : (input ? null : false)));
     const f = input ? $("#dlgIn", sc) : $("[data-a='1']", sc); f.focus(); if (input) f.select();
   });
 }
-function openExternal(url) { post("/api/open-url", {url}).catch(() => window.open(url, "_blank")); }
+/* Beta: anything that breaks can be reported in one click, with what a fix needs and nothing from the chat itself. */
+const ISSUES = "https://github.com/hamzaaziada/meshpool-harness/issues/new";
+async function reportProblem(what = "") {
+  if (!S.version) { try { S.version = (await api("/api/about")).version; } catch (e) { S.version = "unknown"; } }
+  const v = S.cur?.view || {};
+  const q = new URLSearchParams({template: "bug_report.yml", title: "[Beta] " + clip(String(what).replace(/\s+/g, " "), 70),
+    version: S.version, os: navigator.userAgentData?.platform || navigator.platform || "", agent: [v.harness?.name, v.model].filter(Boolean).join(", "),
+    error: String(what).slice(0, 1500)});
+  openExternal(`${ISSUES}?${q}`);
+}
+function openExternal(url) { post("/api/open-url", {url}).catch(() => { if (/^https?:\/\//i.test(url)) window.open(url, "_blank", "noopener"); }); }
 
 /* ================================== state ================================== */
 const S = {
@@ -156,7 +164,7 @@ function shell() {
       <div class="side-top">
         <div class="brandrow">
           <img class="mlogo" src="${logoSrc()}" alt="Meshpool">
-          <span class="beta" title="Meshpool is in beta. Some things may not work yet; tell us when they don't.">Beta</span>
+          <button class="beta" id="betaBtn" title="Meshpool is in beta: some things may not work yet. Click to report a problem.">Beta</button>
           <span class="sp"></span>
           <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
         </div>
@@ -194,6 +202,7 @@ function shell() {
   $("#openSettings").onclick = () => openSettings();
   $("#updBar").onclick = () => openSettings("about");
   $("#hideSide").onclick = toggleSide;
+  $("#betaBtn").onclick = () => reportProblem();
   const clearQ = () => { $("#q").value = ""; $("#qx").hidden = true; renderSide(); };
   $("#q").oninput = () => { $("#qx").hidden = !$("#q").value; clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
   $("#q").onkeydown = e => { if (e.key === "Escape" && $("#q").value) { e.stopPropagation(); e.preventDefault(); clearQ(); } };
@@ -340,9 +349,9 @@ function renderSide() {
     const p = h.parentElement.dataset.p;
     if (e.target.closest(".chev")) { S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p); store("closed", [...S.closedProjects]); renderSide(); return; }
     S.closedProjects.delete(p); store("closed", [...S.closedProjects]);
-    S.draft.project = p; store("project", p); newThread();
+    newThread(p);
   }));
-  $$("[data-newin]", el).forEach(b => b.onclick = () => { S.draft.project = b.dataset.newin; store("project", S.draft.project); newThread(); });
+  $$("[data-newin]", el).forEach(b => b.onclick = () => newThread(b.dataset.newin));
   $$("[data-pmenu]", el).forEach(b => b.onclick = e => projMenu(e, b.dataset.pmenu));
   bindThreads(el);
 }
@@ -390,7 +399,7 @@ function threadMenu(e, id) {
 }
 function projMenu(e, path) {
   ctxMenu(e, [
-    {label: "New chat here", fn: () => { S.draft.project = path; newThread(); }},
+    {label: "New chat here", fn: () => newThread(path)},
     {label: isMac ? "Open in Finder" : "Open in File Explorer", fn: () => post("/api/open-path", {path}).catch(err => toast(err.message))},
     {label: "Open in code editor", fn: () => post("/api/open-editor", {path}).then(r => toast(r.message)).catch(err => toast(err.message))},
     {label: "Rename", fn: async () => { const n = await ask({title: "Rename folder", text: "The name shown in Meshpool. The folder on disk keeps its name.", value: projName(path), ok: "Rename"}); if (n) { await post("/api/projects", {action: "rename", path, name: n}); await loadProjects(); renderSide(); } }},
@@ -490,7 +499,7 @@ async function pickProject() {
       r = await post("/api/projects", {action: "add", path});
     }
     S.projects = r.projects;
-    if (r.picked) { S.draft.project = r.picked; store("project", r.picked); S.closedProjects.delete(r.picked); newThread(); }
+    if (r.picked) { S.closedProjects.delete(r.picked); newThread(r.picked); }
     renderSide();
   } catch (e) { toast(e.message); }
 }
@@ -641,21 +650,25 @@ function renderAttach() {
 async function stopNow() {
   if (!S.cur || S.stopping) return;
   S.stopping = true; renderBar();
-  try { await post(`/api/agent/${S.cur.id}/stop`); } catch (e) { toast(e.message); }
-  clearTimeout(S.cur.pollT); poll();
   const cur = S.cur, t0 = Date.now();
+  try { await post(`/api/agent/${cur.id}/stop`); } catch (e) { toast(e.message); }
+  if (S.cur !== cur) { S.stopping = false; renderBar(); return; }
+  clearTimeout(cur.pollT); poll();
   const wait = () => { if (S.cur !== cur || !["working", "waiting"].includes(cur.view?.state) || Date.now() - t0 > 20000) { S.stopping = false; renderBar(); if (Date.now() - t0 > 20000 && ["working", "waiting"].includes(cur.view?.state)) toast("Stopping… finishing the current step."); return; } setTimeout(wait, 300); };
   wait();
 }
 async function sendNow(interrupt) {
   try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
-  const inp = $("#input"); let text = inp.value.trim();
+  const inp = $("#input"); let text = inp.value.trim(); const typed = text;
   if (!text && !S.attachments.length) return;
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
   if (!S.settings?.ready) { showOnboarding(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
   inp.value = ""; inp.style.height = "auto";
+  // Doherty threshold: answer the press at once, before the server does
+  const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
+  if (S.cur && !$("#working")) { const wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt">Sending</span><span class="el"></span>`; $("#col").appendChild(wk); scrollConv(true); }
   try {
     if (!S.cur) {
       const root = S.draft.project || S.defaultProject;
@@ -672,12 +685,20 @@ async function sendNow(interrupt) {
     }
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
-    const r = await post(`/api/agent/${S.cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
+    const cur = S.cur;
+    const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
+    if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
     if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
-    S.cur.view.state = "working"; renderBar();
-    clearTimeout(S.cur.pollT); poll(); setTimeout(loadThreads, 500);
-  } catch (e) { inp.value = text; toast(e.message, 4000); }
+    if (cur.view) cur.view.state = "working";
+    renderBar();
+    clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
+  } catch (e) {
+    S.stopping = false; renderBar();
+    if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
+    if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
+    toast(e.message, 4000);
+  }
 }
 
 /* ---------- slash commands and $skills ---------- */
@@ -701,6 +722,10 @@ async function runSlash(text) {
   const cmd = text.split(/\s/)[0].toLowerCase(); const hit = SLASH.find(s => s[0] === cmd);
   if (!hit) return false; hit[2](); return true;
 }
+/* Frequency of use: the commands and skills you use most come first in their menus. */
+const USE = (() => { try { return JSON.parse(localStorage.getItem("mp_use") || "{}"); } catch (e) { return {}; } })();
+function used(key) { USE[key] = (USE[key] || 0) + 1; try { localStorage.setItem("mp_use", JSON.stringify(USE)); } catch (e) {} }
+const byUse = items => items.map((x, i) => [x, i]).sort((a, b) => (USE[b[0].label] || 0) - (USE[a[0].label] || 0) || a[1] - b[1]).map(x => x[0]);
 function menuFromInput() {
   const inp = $("#input"); const v = inp.value; const pos = inp.selectionStart;
   const before = v.slice(0, pos);
@@ -708,15 +733,15 @@ function menuFromInput() {
   const skill = /(^|\s)\$([\w-]*)$/.exec(before);
   if (slash) {
     const q = slash[1].toLowerCase();
-    const items = SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { inp.value = ""; s[2](); }}));
+    const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); inp.value = ""; s[2](); }})));
     return items.length ? inlinePop(items) : closePop();
   }
   if (skill) {
     const q = skill[2].toLowerCase();
-    const items = S.skills.filter(s => s.enabled && s.name.toLowerCase().includes(q)).map(s => ({label: "$" + s.name, desc: s.description, fn: () => {
-      const start = pos - skill[2].length - 1; inp.value = v.slice(0, start) + "$" + s.name + " " + v.slice(pos); inp.focus();
-    }}));
-    return items.length ? inlinePop(items) : closePop();
+    const items = byUse(S.skills.filter(s => s.enabled && s.name.toLowerCase().includes(q)).map(s => ({label: "$" + s.name, desc: s.description, fn: () => {
+      used("$" + s.name); const start = pos - skill[2].length - 1; inp.value = v.slice(0, start) + "$" + s.name + " " + v.slice(pos); inp.focus();
+    }})));
+    return items.length ? inlinePop(items.slice(0, 7)) : closePop();      // Miller: a short list to scan
   }
   if ($("#pop.inline")) closePop();
 }
@@ -767,13 +792,12 @@ function harnessPop(anchor) {
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
 }
 function agentFor(prov) {   // the agent to switch to for a model the current agent cannot run
-  const only = {claude: "claude-code", google: "gemini-cli"}[prov]; if (only) return only;
   const mine = S.appMode === "code" ? "meshpool-code" : "meshpool-work";
   return harness(mine).providers?.includes(prov) ? mine : (S.harnesses.find(h => h.providers?.includes(prov) && h.available !== false) || {}).id;
 }
 async function connectProvider(g) {   // a provider that is not set up yet: sign in, or add its key in Settings
   closePop();
-  if (["chatgpt", "claude", "google"].includes(g.id)) {
+  if (g.id === "chatgpt") {
     try { const r = await post("/api/harness-login", {id: g.id}); toast(r.message); } catch (e) { return toast(e.message); }
     const t0 = Date.now(); const tick = async () => { await loadModels(true); const ok = (S.models.groups || []).find(x => x.id === g.id)?.ready; if (ok) { await loadHarnesses(); await loadSettings(); renderBar(); toast(g.name + " is connected."); } else if (Date.now() - t0 < 600000) setTimeout(tick, 4000); };
     setTimeout(tick, 4000); return;
@@ -801,7 +825,7 @@ function modelPop(anchor) {
   const own = S.cur && h.models !== "meshpool" ? (S.cur.view?.harness_models || []) : [];   // models a running agent offers itself
   // First choose where the model runs (a tab per provider), then the model.
   const keyName = (M.groups || []).find(g => g.id === "key")?.name || "Meshpool";
-  const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]], ["claude", "Claude", ["anthropic", "claude"]], ["gemini", "Gemini", ["gemini", "google"]]];
+  const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]]];
   let tab = (TABS.find(t => t[2].includes(provOf(c.model))) || TABS[0])[0];
   const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:6px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:13px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
   const p = openPop(anchor, `<div class="ph"><div role="tablist" aria-label="Where the model runs" id="mtabs" style="display:flex;gap:4px;margin-bottom:6px"></div><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
@@ -821,10 +845,10 @@ function modelPop(anchor) {
       const can = !h.providers || h.providers.includes(g.id);
       const note = can ? "" : `Runs in ${harness(agentFor(g.id) || "").name || "another agent"}`;
       html += `<div class="grp">${esc(g.name)}</div>`;
-      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${{chatgpt: "Sign in with ChatGPT", claude: "Sign in with Claude", google: "Sign in with Google"}[g.id] || "Add a key"}<span class="od">${esc(g.only ? `Runs in ${harness(g.only).name}. ` : "")}${esc(["chatgpt", "claude", "google"].includes(g.id) ? "Opens the official sign-in. If you already use " + {chatgpt: "Codex", claude: "Claude Code", google: "Gemini CLI"}[g.id] + " on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
+      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${g.id === "chatgpt" ? "Sign in with ChatGPT" : "Add a key"}<span class="od">${esc(g.id === "chatgpt" ? "Opens the official sign-in. If you already use Codex on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
       const rows = g.models.filter(hit);
       if (g.error && !q) html += `<div class="pe">${esc(g.error)}</div>`;
-      html += rows.map(m => row(m, note || (g.only ? `Runs in ${harness(g.only).name}, which picks the model` : ""))).join("");
+      html += rows.map(m => row(m, note)).join("");
     }
     if (!html) html = `<div class="pe">No models match.</div>`;
     $("#ml").innerHTML = html; p._place();
@@ -860,7 +884,7 @@ async function useHome() {
   if (!await ask({title: "Give Meshpool your whole home folder?", text: "Agents can then read and, with your approval, change any of your files. You can still pick one folder per chat. On a Mac, also allow Full Disk Access in Settings, Permissions to reach Desktop, Documents and Downloads without a prompt each time.", ok: "Use my home folder"})) return;
   try {
     const r = await post("/api/projects", {action: "home"});
-    S.projects = r.projects; S.draft.project = r.picked; store("project", r.picked); renderSide(); newThread();
+    S.projects = r.projects; renderSide(); newThread(r.picked);
   } catch (e) { toast(e.message); }
 }
 
@@ -869,9 +893,10 @@ function restoreDraft() {
   let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || "new")) || ""; } catch (e) {}
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
-function newThread() {
+function newThread(project) {     // project: the folder for the new chat; without one, the open chat's folder
   if (S.cur) clearTimeout(S.cur.pollT);
-  if (S.cur?.view?.workdir) { S.draft.project = S.cur.view.workdir; store("project", S.draft.project); }
+  const p = project || S.cur?.view?.workdir;
+  if (p) { S.draft.project = p; store("project", p); }
   S.cur = null; S.attachments = []; renderAttach();
   S.draft.harness = modeHarness();
   if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
@@ -917,13 +942,23 @@ async function poll() {
   const cur = S.cur; if (!cur) return;
   let v;
   try { v = await api(`/api/agent/${cur.id}?since=${cur.total}`); }
-  catch (e) { if (S.cur !== cur) return; $("#col").insertAdjacentHTML("beforeend", `<div class="note bad">${esc(e.message)}</div>`); return; }
+  catch (e) {
+    if (S.cur !== cur) return;
+    if (/not found/i.test(e.message)) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); return; }
+    cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
+    let n = $("#pollErr"); if (!n && cur.fails > 1) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
+    if (n) n.textContent = `${e.message} Retrying…`;
+    cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
+    return;
+  }
   if (S.cur !== cur) return;
+  if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
   if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { cur.total = 0; cur.epoch = v.epoch; $("#col").innerHTML = ""; cur.live = null; cur.group = null; cur.tools = {}; cur.log = []; cur.next = 0; return poll(); }
   const first = !cur.view || cur.view.prefill || cur.view.state === "starting" && !cur.total;
   cur.epoch = v.epoch; cur.total = v.total;
   const prevState = cur.view?.state;
   cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
+  const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; inpEl.placeholder = v.readonly ? "This chat's folder is gone, so it can't continue. Start a new chat." : "Ask Meshpool anything. / for commands, $ for skills"; }
   cur.log = cur.log || [];
   for (const ev of v.events) {
     if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // two polls in flight
@@ -944,7 +979,7 @@ async function poll() {
   if (first && S.panel) renderPanel();
   scrollConv(first);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
-  cur.pollT = setTimeout(poll, busy ? 400 : 3000);
+  cur.pollT = setTimeout(poll, busy ? 400 : document.hidden ? 15000 : 3000);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
 }
 function scrollConv(force) { const c = $("#conv"); if (force || c.scrollHeight - c.scrollTop - c.clientHeight < 200) c.scrollTop = c.scrollHeight; }
@@ -1079,7 +1114,7 @@ function applyEv(ev) {
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
-    case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : ""), "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); break; }
+    case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
@@ -1257,7 +1292,7 @@ function panelProgress(body) {
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
-  $$("[data-open]", body).forEach(b => b.onclick = () => { toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(e => toast(e.message)); });
+  $$("[data-open]", body).forEach(b => b.onclick = () => { toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); });
   $("#cwOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
   $("#cwConnMgr").onclick = () => openSettings("connectors");
   (S.connCache ? Promise.resolve(S.connCache) : api("/api/connectors").then(r => (S.connCache = r.connectors))).then(cs => {
@@ -1270,7 +1305,7 @@ function panelOutputs(body) {
     ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to open it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto"><ul class="tree" id="tree"></ul></div><div class="viewer" id="viewer" hidden></div></div>`;
   $("#oOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
-  $$("[data-open]", body).forEach(b => b.onclick = () => post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(e => toast(e.message)));
+  $$("[data-open]", body).forEach(b => b.onclick = () => post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)));
   loadTree($("#tree"), "");
 }
 async function panelDiff(body) {
@@ -1284,7 +1319,7 @@ async function panelDiff(body) {
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
-    if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || sel ? "This reply didn't change any files." : "This chat hasn't changed any files yet. Other changes in this folder are under Git and CI.")}</div>`; return; }
+    if (!d.files.length) { $("#dbody").innerHTML = `<div class="pnote">${esc(d.note || S.cur.view?.checkpoints_note || (sel ? "This reply didn't change any files." : "This chat hasn't changed any files yet. Other changes in this folder are under Git and CI."))}</div>`; return; }
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
@@ -1455,17 +1490,14 @@ async function renderSection(sec) {
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
     b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
-      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box. A Claude subscription runs Claude Code only.</small></label>
+      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
       <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model, from any provider below, in the model picker in the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
-      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run. Connect as many as you like; each one's models show in the model picker. Claude and Google sign-ins run only in Claude Code and Gemini CLI, as Anthropic's and Google's terms require.</p>
-      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for every agent except Claude Code and Gemini CLI.", "signin"], ["claude", "Claude subscription", "Your Claude plan. Runs in Claude Code.", "signin"], ["google", "Gemini (Google sign-in)", "Your Google AI plan. Runs in Gemini CLI.", "signin"], ["ANTHROPIC_API_KEY", "Anthropic API key", "Claude models for every agent except Codex and Gemini CLI.", "key"], ["GEMINI_API_KEY", "Gemini API key", "Gemini models for every agent except Codex and Claude Code. Free at aistudio.google.com.", "key"]].map(([id, name, desc, kind]) => {
-        if (kind === "signin") return `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`;
-        const f = (S.settings.fields || []).find(x => x.key === id) || {};
-        return `<li><span class="tg"><b>${name}</b><small>${desc}</small><span class="keyrow" style="margin-top:6px"><input data-pkey="${id}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) + ". Paste a new key to replace it." : "Paste the key"}"><button class="btn" data-pkeysave="${id}" type="button">Save</button></span></span>${f.set ? `<span class="badge added">Saved</span>` : ""}</li>`;
-      }).join("")}</ul><div class="res" id="sProvRes"></div>`;
+      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
+      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].map(([id, name, desc]) =>
+        `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="sProvRes"></div>`;
     const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sProv").onchange = async () => {
@@ -1478,10 +1510,6 @@ async function renderSection(sec) {
       const id = x.dataset.psign; try { const r = await post("/api/harness-login", {id}); RES("sProvRes").className = "res" + (r.ok ? "" : " bad"); RES("sProvRes").textContent = r.message; } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; return; }
       const t0 = Date.now(); const tick = async () => { if (!RES("sProvRes")) return; await loadSettings(); if (S.settings.signed_in?.[id]) { await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
       setTimeout(tick, 3000);
-    });
-    $$("[data-pkeysave]", b).forEach(x => x.onclick = async () => {
-      const k = x.dataset.pkeysave, v = $(`[data-pkey="${k}"]`, b).value.trim(); if (!v) { $(`[data-pkey="${k}"]`, b).focus(); return; }
-      try { await post("/api/settings", {values: {[k]: v}}); await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Saved. Its models are in the model picker."); } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; }
     });
     const save = async () => {
       const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();
@@ -1580,11 +1608,10 @@ async function renderSection(sec) {
   } else if (sec === "about") {
     const a = await api("/api/about");
     b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
-      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a></p>
+      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
-      <h3 style="font-size:16px;margin:16px 0 6px">License</h3><pre class="lic">${esc(a.notice)}</pre>
-      <details style="margin-top:10px"><summary class="linkbtn" style="display:inline">Apache License 2.0, full text</summary><pre class="lic">${esc(a.license)}</pre></details>
-      <details style="margin-top:8px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
+      <details style="margin-top:16px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
+    $("#aboutReport").onclick = () => reportProblem();
     updatePanel(S.upd);
     $("#updCheck").onclick = async () => { RES("updRes").className = "res"; RES("updRes").textContent = "Checking..."; updatePanel(await checkUpdate(true)); };
   } else if (sec === "web") {
@@ -1699,7 +1726,7 @@ async function renderSection(sec) {
     return;
   } else if (sec === "skills") {
     await loadSkills();
-    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Claude and Codex, and Meshpool shares them with every agent.</p>
+    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and Meshpool shares them with every agent.</p>
       <div class="dropzone" id="skDrop" tabindex="0" role="button">Drop a skill folder, a .zip or a SKILL.md here, or click to choose files<input type="file" id="skFile" multiple hidden></div>
       <ul class="rows2" id="skl"></ul>
       <details><summary class="btn" style="display:inline-block">Write a new skill</summary>
@@ -1715,9 +1742,12 @@ async function renderSection(sec) {
       $$("#skl [data-rm]").forEach(x => x.onclick = async () => { if (await ask({title: "Remove this skill?", text: "Its folder is deleted from your skills folder. This can't be undone.", ok: "Remove skill", danger: true})) skillAct({action: "remove", id: x.dataset.rm}); });
       $$("#skl [data-edit]").forEach(x => x.onclick = async () => {
         const sk = await api("/api/skill?id=" + encodeURIComponent(x.dataset.edit));
-        const li = x.closest("li"); li.insertAdjacentHTML("afterend", `<li><div style="flex:1"><textarea class="code" id="skEd">${esc(sk.text)}</textarea><div style="display:flex;gap:6px;margin-top:6px"><button class="btn primary" id="skEdSave">Save</button><button class="btn" id="skEdCancel">Cancel</button></div></div></li>`);
-        $("#skEdSave").onclick = () => skillAct({action: "update", id: sk.id, text: $("#skEd").value});
-        $("#skEdCancel").onclick = drawSk;
+        $("#skl .sked")?.remove();                 // one editor at a time: its Save always saves its own skill
+        const li = x.closest("li"); li.insertAdjacentHTML("afterend", `<li class="sked"><div style="flex:1"><textarea class="code">${esc(sk.text)}</textarea><div style="display:flex;gap:6px;margin-top:6px"><button class="btn primary" data-sk="save">Save</button><button class="btn" data-sk="cancel">Cancel</button></div></div></li>`);
+        const ed = li.nextElementSibling;
+        $("[data-sk=save]", ed).onclick = () => skillAct({action: "update", id: sk.id, text: $("textarea", ed).value});
+        $("[data-sk=cancel]", ed).onclick = drawSk;
+        $("textarea", ed).focus();
       });
     };
     const skillAct = async body => { try { S.skills = (await post("/api/skills", body)).skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : ""; } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
@@ -1749,7 +1779,7 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: Codex on an API key or ChatGPT, Claude Code on a Claude sign-in or an Anthropic key, Gemini CLI on a Google sign-in or a Gemini key. Other agents can be added too.</p>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
@@ -1775,7 +1805,7 @@ async function renderSection(sec) {
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
-      <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">Same format as Claude Desktop. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
+      <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">The common mcpServers format most MCP apps use. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
@@ -1810,9 +1840,9 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "Standard"], ["responses", "Responses API"]], MH_HARNESS_PROFILE: [["minimal", "Recommended"], ["", "Older, stricter checks"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
-    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
+    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
@@ -1825,12 +1855,11 @@ async function renderSection(sec) {
 
 /* ================================== first run ================================== */
 const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
-// Providers: what the models run on. Agents (harnesses) are picked separately; the default agent follows the provider.
+// Providers: what the models run on. Agents (harnesses) are picked separately.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
-  ["custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."],
-  ["claude", "Claude subscription, runs Claude Code", "Your Claude Pro or Max plan. Anthropic allows it for Claude Code only."]];
-const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}, claude: {name: "Claude", harness: "claude-code"}};
+  ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
+const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
@@ -1854,7 +1883,7 @@ function showOnboarding() {
   const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
-    const what = prov === "claude" ? " It runs Claude Code, Anthropic's own agent: Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or ChatGPT." : " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
+    const what = " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
     $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
@@ -2106,7 +2135,7 @@ function permStep(host) {
     const res = $("#oScope", card);
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
-      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; S.draft.project = r.picked; store("project", r.picked); renderSide(); newThread(); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
+      else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
       else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
@@ -2176,7 +2205,7 @@ async function restartApp() {
 (async () => {
   shell();
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
-    toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).catch(err => toast(err.message)); });
+    toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(err => toast(err.message)); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
     .observe($("#col"), {childList: true});

@@ -21,7 +21,6 @@ def test_bad_input_never_raises(tmp_path):
     assert run_task("", workdir=str(tmp_path))["error"].startswith("ValueError")
     assert "unknown engine" in run_task("x", workdir=str(tmp_path), engine="nope")["error"]
     assert "does not exist" in run_task("x", workdir=str(tmp_path / "missing"))["error"]
-    assert "unknown preset" in run_task("x", workdir=str(tmp_path), preset="v99")["error"]
 
 
 def test_no_timing_file_unless_asked(tmp_path, monkeypatch):

@@ -178,3 +178,24 @@ def test_parts_gallery_renders_clean(tmp_path):
     r = VP.validate(str(out), render=True)
     for rule in ("P1", "P8", "P17"):
         assert r["rules"][rule] == "pass", [f["message"] for f in r["failures"] if f["rule"] == rule][:6]
+
+
+def test_harvey_scale_ignores_blanks_and_stats_show_zero(tmp_path):
+    from pptx import Presentation
+    from engines.forge.render import render
+    _register()
+    out = tmp_path / "hv.pptx"
+    hv = {"type": "harvey", "heading": "Capability today", "criteria": ["Data", "Process", "Tools"],
+          "rows": [{"label": "Price setting", "scores": [3, "2", None]},
+                   {"label": "Discount control", "scores": ["n/a", 1, 4]}]}
+    s = {"archetype": "grid", "layout": "halves", "title": "Discount control is the weakest capability today",
+         "source": SRC, "parts": [hv, {"type": "stats", "items": [{"value": 0, "label": "Write-offs"},
+                                                                  {"value": 0.0, "label": "Open claims"}]}]}
+    render([s], str(out), fix_labels=False)
+    sl = Presentation(str(out)).slides[0]
+    alts = [sh._element.xpath("./*[1]/p:cNvPr/@descr") for sh in sl.shapes if sh.name.startswith("ov_Hv")]
+    balls = [a[0] for a in alts if a and a[0].startswith("Harvey ball")]
+    assert balls[:3] == ["Harvey ball 75%", "Harvey ball 50%", "Harvey ball 0%"]
+    assert balls[3:] == ["Harvey ball 0%", "Harvey ball 25%", "Harvey ball 100%"]
+    stats = [sh.text_frame.text for sh in sl.shapes if sh.name.startswith("ov_role_numeral_Stat")]
+    assert stats and all(t.startswith("0") for t in stats), stats

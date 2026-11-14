@@ -11,7 +11,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 from __future__ import annotations
 
 import difflib
-import html
+import http.client
 import json
 import os
 import platform
@@ -27,19 +27,21 @@ from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import tools as T
+from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
 from meshpool_harness.core.wire import sse_to_chat
+from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
-READ_ONLY = {"read_file", "grep", "glob", "symbol", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
+READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user"}
-SAFE_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
-            "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__memory_save",
-            "mcp__meshpool_assistant__memory_forget", "mcp__meshpool_assistant__schedule_task",
-            "mcp__meshpool_assistant__list_scheduled_tasks", "mcp__meshpool_assistant__search_chats",
-            "mcp__meshpool_assistant__run_subtasks", "mcp__meshpool_office__read_document",
+# MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
+# tools that save or schedule things).
+PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
+            "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__list_scheduled_tasks",
+            "mcp__meshpool_assistant__search_chats", "mcp__meshpool_office__read_document",
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
             "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
             "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
@@ -53,8 +55,6 @@ BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many
 V3 = os.environ.get("MH_AGENT_V3", "1") != "0"
 if not V3:
     BUILTIN.remove("bash_many")
-if os.environ.get("MH_NAV") == "1":               # symbol: definition and uses in one call (core/diagnose.py)
-    BUILTIN.insert(BUILTIN.index("grep") + 1, "symbol")
 if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug before editing (core/observe.py)
     BUILTIN[BUILTIN.index("bash") + 1:BUILTIN.index("bash") + 1] = ["probe", "trace"]
 WORK_TOOLS = BUILTIN + ["office_task"]
@@ -226,6 +226,16 @@ class Interrupted(Exception):
 
 
 def _summary(name: str, args: dict) -> str:
+    """One line for the tool card. Arguments come from the model unchecked, so any value may be missing or of the
+    wrong type: never raise."""
+    try:
+        return str(_summary_of(name, {k: ("" if v is None else v) for k, v in args.items()}))
+    except Exception:  # noqa: BLE001
+        s = json.dumps(args, ensure_ascii=False, default=str)
+        return s if len(s) < 300 else s[:300] + "..."
+
+
+def _summary_of(name: str, args: dict) -> str:
     if name == "bash":
         return args.get("command", "")
     if name == "bash_many":
@@ -243,11 +253,11 @@ def _summary(name: str, args: dict) -> str:
     if name == "fetch_url":
         return args.get("url", "")
     if name == "office_task":
-        return f"{args.get('engine', '')}: {args.get('request', '')[:160]}"
+        return f"{args.get('engine', '')}: {str(args.get('request', ''))[:160]}"
     if name == "web_search":
         return args.get("query", "")
     if name == "web_research":
-        return args.get("question", "")[:160]
+        return str(args.get("question", ""))[:160]
     if name == "use_skill":
         return args.get("name", "")
     if name == "ask_user":
@@ -290,13 +300,69 @@ def _env_snapshot(root: Path) -> str:
     return "\n".join(lines)
 
 
-def _html_to_text(s: str) -> str:
-    s = re.sub(r"(?is)<(script|style|noscript|svg|head)\b.*?</\1>", " ", s)
-    s = re.sub(r"(?i)<br\s*/?>|</(p|div|li|h[1-6]|tr|section|article)>", "\n", s)
-    s = re.sub(r"(?s)<[^>]+>", " ", s)
-    s = html.unescape(s)
-    s = re.sub(r"[ \t\r\f\v]+", " ", s)
-    return re.sub(r"\n\s*\n+", "\n\n", s).strip()
+def _context_size(messages: list) -> int:
+    """Characters a request carries: text contents, text parts, tool-call arguments, and a share per image."""
+    n = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            n += len(c)
+        elif isinstance(c, list):
+            n += sum(len(str(p.get("text") or "")) if p.get("type") == "text" else 4000
+                     for p in c if isinstance(p, dict))
+        for tc in m.get("tool_calls") or []:
+            n += len(str((tc.get("function") or {}).get("arguments") or ""))
+    return n
+
+
+def _shrink_args(messages: list, keep: int = 200) -> None:
+    """Shorten long string values in the arguments of past tool calls (file contents written, long edits); the
+    arguments stay valid JSON."""
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            f = tc.get("function") or {}
+            raw = f.get("arguments") or ""
+            if len(raw) <= 3 * keep:
+                continue
+            try:
+                a = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(a, dict):
+                continue
+            for k, v in a.items():
+                if isinstance(v, str) and len(v) > 3 * keep:
+                    a[k] = v[:keep] + f" ...[{len(v) - keep} chars elided at compaction]"
+            f["arguments"] = json.dumps(a, ensure_ascii=False)
+
+
+def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
+    """Make the conversation fit: elide older tool outputs, keeping fewer recent ones verbatim until it is under
+    `limit`, then shorten long tool-call arguments. hard (the endpoint said the request is over the model's context):
+    all of that at once, whatever the size, keeping only the outputs of the latest step."""
+    if hard:
+        last = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
+        _compact(messages, keep_recent=sum(1 for m in messages[last + 1:] if m.get("role") == "tool"))
+        for m in messages[last + 1:]:
+            c = m.get("content")
+            if m.get("role") == "tool" and isinstance(c, str) and len(c) > T.MAX_TOOL_CHARS:
+                m["content"] = (c[:T.HEAD] + f"\n... [{len(c) - T.HEAD - T.TAIL} chars cut: the conversation was "
+                                "over the model's context] ...\n" + c[-T.TAIL:])
+        _shrink_args(messages)
+        _drop_images(messages, keep=0)
+        return
+    for keep in (12, 4, 1):
+        _compact(messages, keep_recent=keep)
+        if _context_size(messages) <= limit:
+            return
+    _shrink_args(messages)
+
+
+def _args_ok(call: dict) -> bool:
+    try:
+        return isinstance(json.loads((call.get("function") or {}).get("arguments") or "{}"), dict)
+    except (ValueError, TypeError):
+        return False
 
 
 def _has_images(messages: list) -> bool:
@@ -480,8 +546,24 @@ class Agent:
         self.save()                                  # the thread and its message survive a restart mid-turn
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0], "images": [im.get("name", "image") for im in images or []],
                    "plan": self.plan})
+        return self._turn()
+
+    def has_steers(self) -> bool:
+        """True when the user added something (steer) that no turn has read yet."""
+        with self._inbox_lock:
+            return bool(self._inbox)
+
+    def resume_steers(self) -> str | None:
+        """Answer what the user added after the last turn stopped reading (a steer that arrived just as send()
+        returned). Front ends call this when send() returns; None when nothing is waiting."""
+        if not self.has_steers():
+            return None
+        self._stop = False
+        return self._turn()
+
+    def _turn(self) -> str:
         turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
-        final = ""
+        final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
@@ -500,11 +582,15 @@ class Agent:
                     wrapped = True                      # a quick request ran long: answer now, no more tools
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                     self._no_tools = True
+                self._finish = None
                 try:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                cut_off = self._finish == "length"     # the reply hit the output limit (max_tokens)
+                cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
+                cut = {calls[i]["id"] for i in cut}
                 content = msg.get("content") or ""
                 keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
                 if calls:
@@ -512,8 +598,15 @@ class Agent:
                 self.messages.append(keep)
                 self.emit({"type": "assistant", "text": content, "streamed": streamed, "has_tools": bool(calls)})
                 if not calls:
-                    final = content
-                    if self._inbox:                 # the user added something while this reply was written
+                    final = said + content
+                    if cut_off and content and g.get("cont", 0) < 3:
+                        g["cont"] = g.get("cont", 0) + 1   # a long reply cut off mid-way: let it continue
+                        said = final
+                        self.messages.append({"role": "user", "content": (
+                            "[Meshpool] Your reply was cut off at the output limit. Continue exactly where it "
+                            "stopped, without repeating anything.")})
+                        continue
+                    if self.has_steers():           # the user added something while this reply was written
                         continue
                     if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan
                             and self.ws.edits > g["edits0"] and not g.get("scope_shown")):
@@ -531,11 +624,14 @@ class Agent:
                             + "\nComplete them now, or mark them completed if they are done. If one is not needed or "
                             "you need the user's answer, say so briefly and end your turn.")})
                         continue
+                    if self.has_steers():           # added while the checks above ran
+                        continue
                     break
+                said = ""
                 shots = []
                 for c in calls:
                     self._check_stop()
-                    out = self._run_tool(c)
+                    out = self._run_tool(c, cut=c["id"] in cut)
                     self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
                         shots += [(c.get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
@@ -622,9 +718,8 @@ class Agent:
 
     def _maybe_compact(self):
         limit = int(os.environ.get("MH_COMPACT_CHARS", "280000"))   # well under a 128K-token window
-        size = sum(len(m.get("content") or "") if isinstance(m.get("content"), str) else 0 for m in self.messages)
-        if size > limit:
-            _compact(self.messages, keep_recent=12)
+        if _context_size(self.messages) > limit:
+            _shrink_context(self.messages, limit)
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
 
     def _body(self) -> dict:
@@ -645,24 +740,18 @@ class Agent:
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
-        # The model's provider decides where the call goes (providers.py): the key endpoint in settings, the
-        # ChatGPT sign-in, or an Anthropic or Gemini key.
+        # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
+        # ChatGPT sign-in.
         from meshpool_harness import providers as PV
         prov, body["model"] = PV.split(body["model"])
-        if prov in PV.SIGNIN_ONLY:
-            raise RuntimeError(f"{PV.name(prov)} models run only in {'Claude Code' if prov == 'claude' else 'Gemini CLI'}. "
-                               "Choose that agent, or another model.")
-        base, key = PV.endpoint(prov)
-        base = base if prov != "key" else (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-                                           or base).rstrip("/")
-        key = key if prov != "key" else (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or key)
-        wire = "chatgpt" if prov == "chatgpt" else ("chat" if prov != "key" else os.environ.get("MH_WIRE", "chat"))
+        base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
+                                               # with OPENAI_BASE_URL, never with the Meshpool base)
+        wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
         if not key and wire != "chatgpt":
-            raise RuntimeError(PV.setup(prov) if prov != "key" else
-                               f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
+            raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
-        resp, streamed, cleaned = None, False, False
+        resp, streamed, cleaned, shrunk, last = None, False, False, False, None
         for attempt in range(8):
             self._check_stop()
             try:
@@ -688,19 +777,28 @@ class Agent:
             except (Interrupted, KeyboardInterrupt):
                 raise
             except RuntimeError as e:
-                msg = str(e)
+                last, msg = e, str(e)
                 if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
                     raise
-                if "HTTP 401" in msg or "HTTP 403" in msg:
+                kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                if kind == "auth":
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
-                if "HTTP 400" in msg and _has_images(body["messages"]) and not getattr(self, "_no_vision", False):
+                if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
+                    shrunk = True
+                    _shrink_context(self.messages, 0, hard=True)
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    self.emit({"type": "status", "text": "The conversation was longer than the model can take; "
+                                                         "older tool outputs were shortened before trying again."})
+                    continue
+                if kind == "vision" and _has_images(body["messages"]) and not getattr(self, "_no_vision", False):
                     self._no_vision = True                 # this model does not take images: continue without them
                     _drop_images(self.messages, keep=0)
                     _drop_images(body["messages"], keep=0)
                     self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left out. "
                                                          "For computer use, choose a vision model in Settings."})
                     continue
-                if "HTTP 400" in msg and "rejected as invalid" not in msg:
+                if kind in ("bad_request", "vision", "context"):
                     if cleaned:
                         raise
                     cleaned = True                         # control characters in a tool output: clean and retry
@@ -708,20 +806,13 @@ class Agent:
                         if isinstance(m.get("content"), str):
                             m["content"] = clean(m["content"])
                     continue
-                if "HTTP 429" in msg:
-                    n429 = getattr(self, "_n429", 0) + 1
-                    self._n429 = n429                      # no reset time: back off 3, 6, 12 ... 60 s (v4)
-                    wait = min(60, 3 * 2 ** (n429 - 1))
-                    mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg)
-                    if mt:
-                        import calendar
-                        wait = max(5, min(120, calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
-                                          - time.time() + 3))
+                if kind == "rate_limit":
+                    self._n429 = getattr(self, "_n429", 0) + 1   # no reset time: back off 3, 6, 12 ... 60 s (v4)
+                    wait = rate_limit_wait(msg, self._n429)
                     self.emit({"type": "status", "text": f"Rate limited by the endpoint. Waiting {int(wait)} s."})
                     self._sleep(wait)
                     continue
-                if "rejected as invalid" in msg and attempt >= 2:
-                    from meshpool_harness.core.client import _withhold_latest_output
+                if kind == "gateway_reject" and attempt >= 2:
                     if _withhold_latest_output(self.messages):   # content-tied gateway 400: drop the worst output
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
@@ -729,8 +820,7 @@ class Agent:
                 if attempt >= 5:
                     raise
                 if re.search(r"HTTP 5\d\d", msg) and attempt >= 1:   # a big request that keeps failing upstream:
-                    size = sum(len(m.get("content") or "") for m in self.messages if isinstance(m.get("content"), str))
-                    if size > 150000:                      # shrink it instead of resending the same thing
+                    if _context_size(self.messages) > 150000:   # shrink it instead of resending the same thing
                         _compact(self.messages, keep_recent=8)
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
@@ -740,6 +830,8 @@ class Agent:
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
+        else:                                              # every attempt waited or withheld: report the last error
+            raise last or RuntimeError("HTTP 0: the model call did not go through")
         self.emit({"type": "model_end"})
         self._n429 = 0
         u = resp.get("usage") or {}
@@ -754,8 +846,9 @@ class Agent:
             self._meter = CacheMeter()
         self._meter.observe(u, self.usage)                 # full_miss_calls / full_miss_tokens, as in the benchmark loop
         self.emit({"type": "usage", **d})
-        msg = (resp.get("choices") or [{}])[0].get("message") or {}
-        return msg, streamed
+        choice = (resp.get("choices") or [{}])[0]
+        self._finish = choice.get("finish_reason")
+        return choice.get("message") or {}, streamed
 
     def _sleep(self, s: float):
         end = time.time() + s
@@ -804,8 +897,8 @@ class Agent:
                 return resp, got_text
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-            if got_text:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
+            if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
 
@@ -848,7 +941,15 @@ class Agent:
         return decision in ("yes", "always"), note or ""
 
     def _diff(self, name: str, args: dict) -> str:
-        path = args.get("path", "")
+        """The change an edit or write_file would make, for the tool card and the approval prompt. Never raises:
+        the arguments may not have been validated yet."""
+        try:
+            return self._diff_text(name, args)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _diff_text(self, name: str, args: dict) -> str:
+        path = str(args.get("path", ""))
         try:
             p = self.ws._path(path, write=True)
             before = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
@@ -869,7 +970,7 @@ class Agent:
                 ("\n..." if len(lines) > 60 else "")
         return "\n".join(d[:200]) + ("\n..." if len(d) > 200 else "") if d else "(no change)"
 
-    def _run_tool(self, c: dict) -> str:
+    def _run_tool(self, c: dict, cut: bool = False) -> str:
         f = c.get("function") or {}
         name, raw = f.get("name", ""), f.get("arguments") or "{}"
         cid = c.get("id", "")
@@ -880,12 +981,26 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
+        bad = None                                   # validate first: the card shows the arguments that will run
+        if cut:
+            bad = ToolError(f"this {name} call was cut off at the model's output limit, so its arguments are "
+                            "incomplete and it was not run. Split the content into smaller pieces: write_file the "
+                            "first part, then write_file with append=true for each further part, or make several "
+                            "smaller edits.")
+        elif not is_mcp:
+            try:
+                args = validate(name, raw, self._tool_names())
+            except ToolError as e:
+                bad = e
+        elif self.plan and name.replace("-", "_") not in PLAN_MCP:
+            bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
+                            "read-only tools and write the plan; the user switches to building to run it.")
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
-                   "diff": self._diff(name, args) if name in ("edit", "write_file") else ""})
+                   "diff": self._diff(name, args) if name in ("edit", "write_file") and not bad else ""})
         ok, denied = True, False
         try:
-            if not is_mcp:
-                args = validate(name, raw, self._tool_names())
+            if bad:
+                raise bad
             allowed, note = self._permit(name, args)
             if not allowed:
                 denied, ok = True, False
@@ -894,6 +1009,7 @@ class Agent:
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
                 ok = not err
+                out = self.ws._cap(str(out), "mcp")    # head and tail; the full output goes to a file
             elif name == "fetch_url":
                 out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
                                  bool(args.get("links")))
@@ -958,8 +1074,9 @@ class Agent:
     def _ask_user(self, args: dict) -> str:
         return self._ask(ASK.normalize(args))[2]
 
-    def _ask(self, qs: list) -> tuple[list, str, str]:
-        """Ask the user and wait; returns (answers, source, tool result). Who answers: a front end's own
+    def _ask(self, qs: list) -> tuple[list, str, str, str]:
+        """Ask the user and wait; returns (answers, source, tool result, the text the user typed instead of picking
+        options or ""). Who answers: a front end's own
         `ask(qid, questions)` callback (the terminal), a page that calls reply() while this waits (`interactive`
         true: the web app), or no one (headless runs, ACP, tests, auto mode with MH_ASK_AUTO=1): then the
         recommended options, and the result says so."""
@@ -1000,7 +1117,8 @@ class Agent:
                 source = "timeout"
         answers, shown, result = ASK.finish(qs, raw, source, wait)
         self.emit({"type": "question_done", "id": qid, "source": source, "answers": answers, "text": shown})
-        return answers, source, result
+        typed = raw.strip()[:4000] if source == "user" and isinstance(raw, str) else ""
+        return answers, source, result, typed
 
     def _deck_brief(self, args: dict) -> str:
         """office_task with engine slides: settle the deck brief (engines/forge/brief.py) before building. The
@@ -1014,57 +1132,30 @@ class Agent:
         qs = BR.questions(req, args.get("files"), fields)
         if not qs or args.get("brief_ok") or BR.wants_defaults(req):
             return BR.complete(req, args.get("files"), fields)
-        answers, source, _ = self._ask(ASK.normalize({"questions": qs}))
+        answers, source, _, typed = self._ask(ASK.normalize({"questions": qs}))
+        if typed:                                    # the user wrote their own answer: it goes into the request,
+            req = f"{req}\n\nThe user's answer to the brief questions: {typed}"   # and only what it leaves open
+            return BR.complete(req, args.get("files"), fields)                     # gets a recommendation
         fields.update(BR.answers_from(qs, answers))
         return BR.complete(req, args.get("files"), fields)
 
     def _office(self, args: dict) -> tuple[str, bool]:
-        """Run a one-shot engine (slides, sheets, data) in its own process; files land in the working folder."""
-        import subprocess
-        import sys as _sys
+        """Run a one-shot engine (slides, sheets, data) in its own process; files land in the working folder. The
+        same runner and report as the Office MCP server (agent/office_jobs.py)."""
+        from meshpool_harness.agent import office_jobs as OJ
         engine = args["engine"]
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        out = self.root / "Meshpool outputs" / f"{stamp}-{engine}"
-        out.mkdir(parents=True, exist_ok=True)
-        files = []
-        for f in args.get("files") or []:
-            p = (self.root / f).resolve() if not Path(f).is_absolute() else Path(f)
-            if not p.exists():
-                return f"ERROR: input file not found: {f}", False
-            files.append(str(p))
-        cmd = [_sys.executable, "-m", "meshpool_harness", "run", args["request"], "--engine", engine, "--out", str(out)]
-        if files:
-            cmd += ["--files", *files]
-        env = dict(os.environ, PYTHONPATH=str(C.APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-        env.pop("MH_EVENT_LOG", None)
+        paths, missing = OJ.resolve_files(self.root, args.get("files"))
+        if missing:
+            return f"ERROR: input file not found: {missing}", False
+        jid = OJ.new_job(engine, args["request"], paths, self.root)
         self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
-        proc = subprocess.Popen(cmd, cwd=str(out), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, encoding="utf-8", errors="replace")
-        t0 = time.time()
-        while proc.poll() is None:
-            if self._stop:
-                proc.kill()
-                raise Interrupted()
-            if time.time() - t0 > float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")):
-                proc.kill()
-                return "ERROR: the engine took too long and was stopped.", False
-            time.sleep(0.5)
-        stdout, stderr = proc.communicate()
-        try:
-            res = json.loads(stdout[stdout.find("{"):]) if "{" in stdout else {}
-        except ValueError:
-            res = {}
-        made = [str(p.relative_to(self.root)) for p in sorted(out.rglob("*"))
-                if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)]
-        if not res:
-            return f"ERROR: the {engine} engine failed.\n{stderr[-1500:]}", False
-        steps = res.get("steps") or []
-        answer = "\n".join(s.get("answer") or "" for s in steps).strip()
-        checks = "passed" if res.get("ok") else "did not all pass"
-        return (f"{engine} engine finished; its checks {checks}.\nFiles:\n" + "\n".join(f"- {m}" for m in made)
-                + (f"\nEngine notes: {answer[:2000]}" if answer else "")), bool(made)
+        OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
+        if OJ.JOBS[jid].get("stopped"):
+            raise Interrupted()
+        text, failed = OJ.report(jid, rel_to=self.root)
+        return text, not failed
 
     def _search(self, query: str, n: int = 8, recency: str = "", site: str = "") -> str:
         from meshpool_harness import web as WEB

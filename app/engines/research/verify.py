@@ -24,6 +24,17 @@ CITE_RE = re.compile(r"\[((?:S\d+(?:\.p\d+)?)(?:\s*[;,]\s*S\d+(?:\.p\d+)?)*)\]")
 CALC_RE = re.compile(r"\[calc:\s*([^\]]+)\]", re.I)
 CONSTANTS = {0.0, 1.0, 2.0, 4.0, 12.0, 52.0, 100.0, 365.0, 1000.0, 1e6, 1e9}
 QUOTE_RE = re.compile(r"[\"“]([^\"“”]{20,})[\"”]")
+SOURCES_RE = re.compile(r"^## Sources[ \t\r]*$", re.M)   # exactly "Sources": not "## Sources and uses of funds"
+
+
+def split_sources(md: str) -> tuple[str, str | None]:
+    """(report body, text of the Sources section or None): split at the last heading that is exactly '## Sources'."""
+    last = None
+    for last in SOURCES_RE.finditer(md):
+        pass
+    if last is None:
+        return md, None
+    return md[:last.start()], md[last.end():].lstrip("\n")
 
 
 def citations_in(text: str) -> list[str]:
@@ -51,13 +62,16 @@ def safe_eval(expr: str) -> float:
         if isinstance(n, ast.UnaryOp) and type(n.op) in _OPS:
             return _OPS[type(n.op)](ev(n.operand))
         raise ValueError(f"not arithmetic: {expr}")
-    return ev(ast.parse(e, mode="eval"))
+    try:
+        return ev(ast.parse(e, mode="eval"))
+    except OverflowError:                              # 10^400: float overflow is a bad calc, not a crash
+        raise ValueError(f"result too large: {expr}") from None
 
 
-def units(md: str) -> list[tuple[int, str]]:
-    """(line number, text) checking units: sentences of prose paragraphs, each bullet, each table row. Headings,
-    code, the Sources section and HTML comments are skipped."""
-    md = md.split("\n## Sources")[0]
+def units(md: str, sentences: bool = True) -> list[tuple[int, str]]:
+    """(line number, text) checking units: sentences of prose paragraphs (whole paragraphs with sentences=False),
+    each bullet, each table row. Headings, code, the Sources section and HTML comments are skipped."""
+    md = split_sources(md)[0]
     out, in_code = [], False
     para: list[tuple[int, str]] = []
 
@@ -66,7 +80,7 @@ def units(md: str) -> list[tuple[int, str]]:
             return
         ln = para[0][0]
         text = " ".join(t for _, t in para)
-        for s in re.split(r"(?<=[.!?])\s+(?=[A-Z\"“(])", text):
+        for s in (re.split(r"(?<=[.!?])\s+(?=[A-Z\"“(])", text) if sentences else [text]):
             if s.strip():
                 out.append((ln, s.strip()))
         para.clear()
@@ -114,7 +128,7 @@ def check(report_md: str, corpus: Corpus, min_sources: int = 4) -> list[dict]:
 
     def bad(rule, line, detail):
         probs.append({"check": rule, "where": f"line {line}" if line else "report", "detail": detail})
-    body = report_md.split("\n## Sources")[0]
+    body, sources_list = split_sources(report_md)
     all_cites = citations_in(body)
     for c in sorted(set(all_cites)):
         if "." in c and c not in corpus.passages:
@@ -123,14 +137,7 @@ def check(report_md: str, corpus: Corpus, min_sources: int = 4) -> list[dict]:
             bad("R1 unknown citation", None, f"[{c}] is not a stored source")
     tier_of = lambda c: corpus.sources[c.split(".")[0]].tier if c.split(".")[0] in corpus.sources else 9  # noqa
     for ln, u in units(report_md):
-        cites = [c for c in citations_in(u) if c.split(".")[0] in corpus.sources]
-        texts = []
-        for c in cites:
-            if "." in c:
-                if c in corpus.passages:
-                    texts.append((c, corpus.passages[c].text))
-            else:                                               # source-level citation: all its passages
-                texts += [(p.id, p.text) for p in corpus.passages.values() if p.source_id == c]
+        cites, texts = _cited(u, corpus)
         src_nums = [n for pid, t in texts for n in parse_numbers(t, pid, keep_years=True)]
         calcs = []
         for m in CALC_RE.finditer(u):
@@ -162,6 +169,8 @@ def check(report_md: str, corpus: Corpus, min_sources: int = 4) -> list[dict]:
             elif all(tier_of(s.passage_id or "") >= 4 for s in ok):
                 bad("R5 weak source", ln, f"{n.raw} rests only on tier-4 sources ({', '.join(cites)}); confirm it "
                     "in a tier 1-3 source")
+    for ln, u in units(report_md, sentences=False):           # R3 on whole paragraphs: a quote may span sentences
+        _, texts = _cited(u, corpus)
         for m in QUOTE_RE.finditer(u):
             q = _norm_q(m.group(1))
             if len(q.split()) >= 5 and not any(q in _norm_q(t) for _, t in texts):
@@ -193,16 +202,28 @@ def check(report_md: str, corpus: Corpus, min_sources: int = 4) -> list[dict]:
     if all_cites and sum(tier_of(c) >= 4 for c in all_cites) / len(all_cites) > 0.25:
         bad("R4 weak sourcing", None, "more than a quarter of citations are tier-4 (forums, user content)")
     if all_cites:
-        m = re.search(r"\n## Sources\n(.*)\Z", report_md, re.S)
-        if not m:
+        if sources_list is None:
             bad("R6 no sources list", None, "end with the Sources section: run R.finalize(report_path, corpus)")
         else:
-            missing = sorted({c.split(".")[0] for c in all_cites} - set(re.findall(r"\[(S\d+)\]", m.group(1))),
+            missing = sorted({c.split(".")[0] for c in all_cites} - set(re.findall(r"\[(S\d+)\]", sources_list)),
                              key=lambda x: int(x[1:]))
             if missing:
                 bad("R6 sources list incomplete", None, f"Sources section misses {', '.join(missing)}; rerun "
                     "R.finalize")
     return probs
+
+
+def _cited(unit: str, corpus: Corpus) -> tuple[list[str], list[tuple[str, str]]]:
+    """The unit's citations of known sources, and the (passage id, text) pairs they point to."""
+    cites = [c for c in citations_in(unit) if c.split(".")[0] in corpus.sources]
+    texts = []
+    for c in cites:
+        if "." in c:
+            if c in corpus.passages:
+                texts.append((c, corpus.passages[c].text))
+        else:                                                   # source-level citation: all its passages
+            texts += [(p.id, p.text) for p in corpus.passages.values() if p.source_id == c]
+    return cites, texts
 
 
 def _answer_section(md: str) -> str:
@@ -218,6 +239,8 @@ def _same_bare(a: Number, b: Number) -> bool:
     ('revenue of 4.2 [bn]' style tables whose header carries the unit)."""
     if a.scale != 1 or b.scale == 1:
         return False
+    if a.unit and b.unit and a.unit != b.unit and not ({a.unit, b.unit} <= {"pp", "%"}):
+        return False                                   # '65%' is not '$65 million'
     return abs(a.value - b.value / b.scale) <= max(abs(b.value / b.scale) * 0.006, 0.5 * 10 ** (-a.decimals))
 
 

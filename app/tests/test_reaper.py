@@ -6,7 +6,7 @@ from meshpool_harness.ui import agent_api as A
 
 class Fake:
     def __init__(self, state="idle", age=0, pending=None, queue=None):
-        self.state, self.pending, self.queue = state, pending, queue or []
+        self.state, self.pendings, self.queue = state, ({1: pending} if pending else {}), queue or []
         self.touched = time.time() - age
         self.closed = False
 

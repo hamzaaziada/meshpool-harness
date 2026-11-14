@@ -13,7 +13,6 @@ import json
 import re
 import shutil
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -21,8 +20,23 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 FIX = HERE / "fixtures"
-sys.path.insert(0, str(HERE.parents[1] / "harness-lab" / "bench"))
-from spend import spend  # noqa: E402
+
+
+def spend() -> float | None:
+    """Key spend from the gateway's X-Litellm-Key-Spend header (one 1-token call, about $0.000002)."""
+    import os
+    base = os.environ.get("BENCH_BASE_URL", "https://llm.meshpool.ai/v1")
+    body = {"model": "deepseek-v4.1-flash", "messages": [{"role": "user", "content": "1"}], "max_tokens": 1}
+    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": "Bearer dummy", "Content-Type": "application/json"})
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                v = r.headers.get("X-Litellm-Key-Spend")
+                return float(v) if v else None
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 def client(base):

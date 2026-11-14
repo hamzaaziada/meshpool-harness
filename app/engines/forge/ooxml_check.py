@@ -205,7 +205,9 @@ def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
             continue
         # unique shape ids per slide-like part
         if re.match(r"ppt/(slides|slideLayouts|slideMasters|notesSlides)/", n):
-            ids = [el.get("id") for el in root.iter("{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr")]
+            # mc:AlternateContent holds one shape twice (Choice and Fallback, same id); only one is ever used
+            ids = [el.get("id") for el in root.iter("{http://schemas.openxmlformats.org/presentationml/2006/main}cNvPr")
+                   if not any(a.tag == f"{{{MC}}}Fallback" for a in el.iterancestors())]
             dup = {i for i in ids if ids.count(i) > 1}
             if dup:
                 problems.append({"part": n, "check": "duplicate_shape_id", "detail": f"ids {sorted(dup)[:5]}"})

@@ -30,9 +30,9 @@ and the mock model (no paid calls). The set-up is at the end of this page.
 | 23 | Web search answers or explains what is missing | n/a | `e2e_full.py` |
 | 24 | Make a Word document with Meshpool Work | Work | `journeys.py` |
 | 25 | Browser use: open a page, see its elements, fill a read-only date field | Code | `journeys.py` |
-| 26 | Subscriptions (Claude, ChatGPT): a thread opens and answers or asks the user to sign in | subscriptions | `e2e_full.py` |
+| 26 | A thread naming an agent an older version had (`claude-code`) opens in Meshpool Code | n/a | `e2e_full.py` |
 | 27 | Command line: `meshpool check`, `meshpool run` | CLI | `journeys.py` |
-| 28 | Code tools when turned on (`MH_OBSERVE`, `MH_NAV`, `MH_LINT_EDIT`): probe, symbol, edit check | Code | `journeys.py` (second app) |
+| 28 | Code tools when turned on (`MH_OBSERVE`): probe | Code | `journeys.py` (second app) |
 | 29 | Click every control in every state (home, finished thread, mid-run, waiting for approval), two levels deep | all | `crawl_all.js` |
 | 33 | Stop stops within 5 s for every harness, during a slow model reply, a long command or a slow tool; nothing from the stopped request appears later | Code, Work, Pi, Hermes | `stop_check.py` |
 | 30 | Nothing jumps or flickers: layout stays still while a task runs and settles in one step on every click; scroll, menus and typing survive live updates | all | `jitter.js` |
@@ -43,7 +43,7 @@ Not testable in this Linux container, so checked by other means:
 
 - **Computer use:** it controls macOS and Windows desktops only. `journeys.py` checks that it fails with a clear
   message here. A real check needs a Mac or Windows machine.
-- **Subscription sign-in:** it needs a real Claude or ChatGPT account. Journey 26 checks the signed-out path.
+- **ChatGPT sign-in:** it needs a real ChatGPT account. `app/tests/test_chatgpt_wire.py` checks it against a mock.
 - **Installers (dmg, exe):** `packaging/mac/test.sh` on a Mac, NSIS on Windows.
 
 ## Set-up (no paid calls)
@@ -57,9 +57,10 @@ Not testable in this Linux container, so checked by other means:
 2. Install Pi and Hermes as `docs/BUILDING.md` describes, then link them as `app/vendor/pi/node_modules` and
    `app/vendor/hermes`. Install `packaging/requirements-cli.txt` plus Hermes' own dependencies into the Python that
    runs the app.
-3. Make a fake home with one skill and one MCP server for each app the importer reads. Its layout is in
-   `harness-lab/notes/QA.md`.
-4. Remove every credential variable (`CLAUDE_*`, `ANTHROPIC_*`, `OPENAI_*`, cloud and GitHub tokens) from the
+3. Make a fake home with one skill and one MCP server for each app the importer reads, at `$QA_DIR/fakehome`
+   (`run_all.sh` sets it as `HOME`). `e2e_full.py` expects the skills `claude-skill` and `codex-skill` and the MCP
+   servers `desk-server`, `cursor-server` and `codex-server`.
+4. Remove every credential variable (`OPENAI_*`, `CODEX_*`, any other provider's, cloud and GitHub tokens) from the
    app's environment. Otherwise a subscription harness signs in with your own account and makes real, paid calls,
    and it can write that sign-in into the fake home. `run_all.sh` does this.
 5. Start the app with:
@@ -67,6 +68,6 @@ Not testable in this Linux container, so checked by other means:
    - `HOME` set to the fake home;
    - `MH_BROWSER_HEADLESS=1`.
 
-   For journey 28, start a second app with `MH_OBSERVE=1 MH_NAV=1 MH_LINT_EDIT=1`.
+   For journey 28, start a second app with `MH_OBSERVE=1`.
 6. Run, in order: `e2e_full.py`, `journeys.py`, `ui_crawl.js`, `about.js`, `intr.js`, `modes.js`, `v24.js`,
    `midrun.js`, `crawl_all.js`, `jitter.js`, `update_flow.sh`.

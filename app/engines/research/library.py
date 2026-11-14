@@ -30,7 +30,7 @@ import re
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 STORE = "sources.json"
@@ -48,7 +48,7 @@ TIER_RULES: list[tuple[int, str, str]] = [  # (tier, kind, host regex), first ma
         "europa.eu", "federalreserve.gov", "bankofengland.co.uk", "bis.org", "imf.org", "worldbank.org", "oecd.org",
         "un.org", "iea.org", "fred.stlouisfed.org", "stlouisfed.org", "ons.gov.uk", "ecb.europa.eu")),
     (1, "issuer release", _hosts("prnewswire.com", "businesswire.com", "globenewswire.com") +
-        r"|^(ir|investors?|investor-relations|newsroom)\."),
+        r"|^(ir|investors?|investor-relations|newsroom)\.[^.]+\."),     # ir.<company>.<tld>, not investors.com
     (2, "financial press / wire", _hosts(
         "reuters.com", "bloomberg.com", "ft.com", "wsj.com", "economist.com", "nytimes.com", "apnews.com",
         "cnbc.com", "barrons.com", "nikkei.com", "asia.nikkei.com", "handelsblatt.com", "lesechos.fr",
@@ -75,6 +75,15 @@ TIER_RULES: list[tuple[int, str, str]] = [  # (tier, kind, host regex), first ma
 ]
 ISSUER_PATH = re.compile(r"/(investor|investors|investor-relations|ir|annualreport|annual-report|earnings)(/|$|[-_])",
                          re.I)
+# Market-data sites, aggregators and blogs whose URLs carry /earnings-..., /investors/... pages about OTHER companies:
+# the issuer-path rule above only counts on a company's own domain.
+NOT_ISSUER = _hosts(
+    "nasdaq.com", "nyse.com", "marketbeat.com", "investing.com", "yahoo.com", "zacks.com", "marketscreener.com",
+    "stocktitan.net", "streetinsider.com", "gurufocus.com", "macrotrends.net", "stockanalysis.com", "finviz.com",
+    "simplywall.st", "earningswhispers.com", "wallstreethorizon.com", "thestreet.com", "insidermonkey.com",
+    "advfn.com", "investorshub.com", "msn.com", "google.com", "tradingview.com", "alphaspread.com",
+    "companiesmarketcap.com", "investors.com", "kiplinger.com", "quiverquant.com", "fintel.io", "barchart.com",
+    "cnn.com", "businessinsider.com", "linkedin.com", "x.com", "twitter.com", "youtube.com", "facebook.com")
 JUNK = re.compile(r"request (has been|was) blocked|access denied|are you a robot|verify you are (a )?human|"
                   r"enable javascript|captcha|sign in or create|403 forbidden|404 not found|page not found|"
                   r"subscribe to (continue|read)|this content is for subscribers", re.I)
@@ -90,7 +99,7 @@ def classify(url: str | None, publisher: str | None = None) -> tuple[int, str]:
     for tier, kind, rx in TIER_RULES:
         if re.search(rx, host):
             return tier, kind
-    if ISSUER_PATH.search(p.path):                    # a company's own investor-relations pages
+    if ISSUER_PATH.search(p.path) and not re.search(NOT_ISSUER, host):   # a company's own investor-relations pages
         return 1, "issuer release"
     return 3, "other"
 
@@ -290,7 +299,7 @@ class Corpus:
 
     # ---- persistence
     def load(self):
-        d = json.loads(self.path.read_text())
+        d = json.loads(self.path.read_text(encoding="utf-8"))
         self.sources = {s["id"]: Source(**s) for s in d.get("sources", [])}
         self.passages = {}
         for p in d.get("passages", []):
@@ -308,7 +317,7 @@ class Corpus:
         self.path.write_text(json.dumps({
             "created": self.now, "queries": self.queries, "failures": self.failures[-50:],
             "sources": [asdict(s) for s in self.sources.values()],
-            "passages": [p.to_json() for p in self.passages.values()]}, indent=1))
+            "passages": [p.to_json() for p in self.passages.values()]}, indent=1), encoding="utf-8")
         return str(self.path)
 
     # ---- adding sources
@@ -593,17 +602,16 @@ class Corpus:
                 age = _age_years(s.date, self.now)
                 if age is not None:
                     sc *= 1.0 if age <= 1 else max(0.7, 1 - 0.06 * (age - 1))
-            p.score, p.source = sc, s
-            scored.append(p)
-        scored.sort(key=lambda p: -p.score)
+            scored.append((sc, p, s))                           # local: find() runs from many threads (grid)
+        scored.sort(key=lambda x: -x[0])
         out, per, texts = [], {}, set()
-        for p in scored:
+        for sc, p, s in scored:
             key = re.sub(r"\W+", "", p.text.lower())[:300]
             if per.get(p.source_id, 0) >= per_source or key in texts:     # filings repeat risk factors verbatim
                 continue
             texts.add(key)
             per[p.source_id] = per.get(p.source_id, 0) + 1
-            out.append(p)
+            out.append(replace(p, source=s, score=sc))          # a copy: the shared passage is never mutated
             if len(out) >= k:
                 break
         return out
@@ -653,13 +661,12 @@ class Corpus:
 def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     """Append a Sources section listing every cited source (and a note of what could not be read), save the
     corpus, and write a .docx next to the report. Returns {"report", "docx", "cited"}."""
-    from .verify import citations_in
+    from .verify import citations_in, split_sources
     p = Path(report_path)
-    text = p.read_text()
-    text = re.sub(r"\n## Sources\n.*\Z", "", text, flags=re.S).rstrip() + "\n"
+    text = split_sources(p.read_text(encoding="utf-8"))[0].rstrip() + "\n"
     cited = {c.split(".")[0] for c in citations_in(text)}
     text += "\n## Sources\n" + corpus.bibliography(cited) + "\n"
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     corpus.save()
     out = {"report": str(p), "cited": sorted(cited, key=lambda x: int(x[1:]))}
     if docx:

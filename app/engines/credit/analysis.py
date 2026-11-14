@@ -152,7 +152,7 @@ def funded_debt(fin: Financials, y: str) -> float:
 
 def year_measures(fin: Financials, y: str, prev: str | None, pol: Policy) -> dict:
     e = ebitda(fin, y)
-    tax = _mag(fin.v(y, "income_tax", 0.0))
+    tax = max(0.0, -(fin.v(y, "income_tax", 0.0) or 0.0))     # expense is carried negative; a benefit is no cash tax
     capex = _mag(fin.v(y, "capex", 0.0))
     unfin = capex * (1 - pol.financed_capex_share)
     dist = _mag(fin.v(y, "dividends", 0.0)) + (_mag(fin.v(y, "buybacks", 0.0)) if pol.include_buybacks else 0.0)
@@ -176,7 +176,8 @@ def year_measures(fin: Financials, y: str, prev: str | None, pol: Policy) -> dic
         "interest": interest, "principal": principal, "debt_service": ds, "dscr": _div(cads, ds),
         "rent": rent, "fccr": _div(None if cads is None else cads + rent, ds + rent),
         "cfo": fin.v(y, "cfo"), "cfo_to_net_income": _div(fin.v(y, "cfo"), fin.v(y, "net_income")),
-        "funded_debt": debt, "leverage": _div(debt, e), "net_leverage": _div(debt - (fin.v(y, "cash", 0.0) or 0), e),
+        "funded_debt": debt, "leverage": _div(debt, e) if e and e > 0 else None,
+        "net_leverage": _div(debt - (fin.v(y, "cash", 0.0) or 0), e) if e and e > 0 else None,
         "interest_coverage": _div(e, interest), "tnw": tnw,
         "debt_tnw": _div(fin.v(y, "total_liabilities"), tnw) if tnw and tnw > 0 else None,
         "current_ratio": _div(fin.v(y, "current_assets"), cl),
@@ -211,8 +212,9 @@ def analyse(fin: Financials, loan: Loan | None = None, pol: Policy | None = None
     pf = {"existing_debt_service": existing_interest + existing_principal, "new_loan_payment": new_pmt,
           "debt_service": pf_ds, "dscr": _div(cads, pf_ds),
           "fccr": _div(None if cads is None else cads + last["rent"], pf_ds + last["rent"]),
-          "funded_debt": pf_debt, "leverage": _div(pf_debt, e),
-          "net_leverage": _div(pf_debt - (fin.v(y, "cash", 0.0) or 0), e)}
+          "funded_debt": pf_debt, "leverage": _div(pf_debt, e) if e and e > 0 else None,      # NM (and a fail)
+          "net_leverage": _div(pf_debt - (fin.v(y, "cash", 0.0) or 0), e) if e and e > 0 else None}
+    e_pos = e is not None and e > 0
     # capacity
     exist_ds = existing_interest + existing_principal
     cap_dscr = pv(loan.rate, loan.amort_years, cads / pol.min_dscr - exist_ds) if cads else 0.0
@@ -223,28 +225,31 @@ def analyse(fin: Financials, loan: Loan | None = None, pol: Policy | None = None
     # covenants on the pro forma latest year, with EBITDA cushion (how far EBITDA can fall before a breach)
     cov = []
 
-    def add(name, value, limit, kind, cushion):
-        ok = None if value is None else (value >= limit if kind == "min" else value <= limit)
+    def add(name, value, limit, kind, cushion, fail=False):
+        # fail: the measure is not meaningful because its base is zero or negative (EBITDA, TNW) - a breach, not n/a
+        ok = False if fail else None if value is None else (value >= limit if kind == "min" else value <= limit)
         cov.append({"covenant": name, "value": value, "limit": limit, "kind": kind, "pass": ok,
                     "ebitda_cushion": cushion})
     dscr_cushion = None
-    if e and cads is not None and pf_ds:
+    if e_pos and cads is not None and pf_ds:
         dscr_cushion = (cads - pol.min_dscr * pf_ds) / e          # CADS moves 1:1 with EBITDA (taxes held)
     add("Minimum DSCR (pro forma)", pf["dscr"], pol.min_dscr, "min", dscr_cushion)
     fc_cushion = None
-    if e and cads is not None:
+    if e_pos and cads is not None:
         fc_cushion = (cads + last["rent"] - pol.min_fccr * (pf_ds + last["rent"])) / e
     add("Minimum FCCR (pro forma)", pf["fccr"], pol.min_fccr, "min", fc_cushion)
     add("Maximum leverage (pro forma)", pf["leverage"], pol.max_leverage, "max",
-        1 - pf_debt / pol.max_leverage / e if e and e > 0 else None)
-    add("Maximum debt / TNW", last["debt_tnw"], pol.max_debt_tnw, "max", None)
+        1 - pf_debt / pol.max_leverage / e if e_pos else None, fail=e is not None and not e_pos)
+    add("Maximum debt / TNW", last["debt_tnw"], pol.max_debt_tnw, "max", None,
+        fail=last["tnw"] is not None and last["tnw"] <= 0)
     add("Minimum current ratio", last["current_ratio"], pol.min_current_ratio, "min", None)
     # stress: EBITDA down; rate up on a floating new loan
     stress = []
     for s in pol.ebitda_stress:
-        c2 = None if cads is None else cads - e * s
-        stress.append({"case": f"EBITDA -{s:.0%}", "ebitda": e * (1 - s) if e else None, "dscr": _div(c2, pf_ds),
-                       "leverage": _div(pf_debt, e * (1 - s)) if e else None})
+        e2 = None if e is None else e - abs(e) * s
+        c2 = None if cads is None or e is None else cads - abs(e) * s
+        stress.append({"case": f"EBITDA -{s:.0%}", "ebitda": e2, "dscr": _div(c2, pf_ds),
+                       "leverage": _div(pf_debt, e2) if e2 and e2 > 0 else None})
     if loan.floating and loan.amount:
         r2 = loan.rate + pol.rate_stress_bp / 10000
         ds2 = exist_ds + pmt(r2, loan.amort_years, loan.amount)
@@ -316,14 +321,38 @@ def _norm_label(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9& ]", " ", str(s).lower().replace("’", "").replace("'", ""))).strip()
 
 
+# a label containing one of these words is never that key, whatever synonym it also contains: 'Interest income' is
+# not interest expense, 'Accumulated depreciation' not D&A, 'Common stock' not inventory, 'Income tax payable' not
+# tax expense, 'Sales and marketing' not revenue
+_BALANCE_WORDS = r"payable|receivable|accrued|accumulated|deferred|prepaid|reserve|liabilit|asset"
+EXCLUDE = {
+    "revenue": re.compile(rf"\b(marketing|selling|expense|expenses|cost|costs|unearned|{_BALANCE_WORDS})"),
+    "cogs": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "sga": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "operating_income": re.compile(rf"\b(other|{_BALANCE_WORDS})"),
+    "interest_expense": re.compile(rf"^(?!.*\bexpense).*\b(income|earned)\b|\b(capitalized|capitalised|{_BALANCE_WORDS})"),
+    "pretax_income": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "income_tax": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "net_income": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "da": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "sbc": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "rent": re.compile(rf"\b(income|{_BALANCE_WORDS})"),
+    "inventory": re.compile(r"\b(common|treasury|preferred|ordinary|capital|share|shares|stockholders|options|"
+                            r"based|compensation|repurchase|repurchases|issued|issuance)\b"),
+}
+
+
 def match_label(label: str) -> str | None:
-    """Map a borrower's line label to a standard key (exact synonym first, then the longest synonym it contains)."""
+    """Map a borrower's line label to a standard key (exact synonym first, then the longest synonym it contains).
+    A key is skipped when the label carries one of its EXCLUDE words."""
     t = _norm_label(label)
     t = re.sub(r"\s*\(.*?\)\s*", " ", t).strip()
     if re.search(r"liabilities (and|&) ", t):            # total liabilities and equity is a check line, not a key
         return None
     best, blen = None, 0
     for k, syns in LABELS.items():
+        if k in EXCLUDE and EXCLUDE[k].search(t):
+            continue
         for s in syns:
             ns = _norm_label(s)
             if t == ns:
@@ -351,10 +380,12 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
     hdr = rows[hdr_i]
     cols = [(j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()) for j, c in enumerate(hdr)
             if j > 0 and c is not None and re.search(r"(19|20)\d{2}", str(c))]
+    cols.sort(key=lambda jc: int(re.search(r"(19|20)\d{2}", jc[1]).group(0)))   # oldest first, whatever the order
     years = [y if y.upper().startswith("FY") else f"FY{y}" for _, y in cols]
     vals = {y: {} for y in years}
     srcs: dict = {y: {} for y in years}
     unmapped = []
+    seen: dict[str, str] = {}
     for r in rows[hdr_i + 1:]:
         if not r or r[0] in (None, ""):
             continue
@@ -363,6 +394,12 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
             if not re.search(r"liabilities (and|&) ", _norm_label(r[0])):   # the L&E total is a check line
                 unmapped.append(str(r[0]))
             continue
+        if k in seen:                                    # the first row for a key is used; say which one was not
+            unmapped.append(f"{r[0]} (also maps to {k}; used '{seen[k]}')")
+            continue
+        seen[k] = str(r[0])
+        benefit = k == "income_tax" and re.search(r"\bbenefit\b", _norm_label(r[0])) and \
+            not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
         for (j, _), y in zip(cols, years):
             x = r[j] if j < len(r) else None
             try:
@@ -372,7 +409,7 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
                 v = None
             if v is None or k in vals[y]:
                 continue
-            vals[y][k] = -abs(v) if k in NEGATIVE else v
+            vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
             srcs[y][k] = f"{p.name}, row '{r[0]}', column {hdr[j]}"
     srcs["_unmapped"] = unmapped
     return Financials(name or p.stem, years, vals, srcs)

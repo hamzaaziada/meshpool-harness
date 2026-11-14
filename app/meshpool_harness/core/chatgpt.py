@@ -16,12 +16,13 @@ and writes the new pair back to auth.json so Codex keeps working too.
 
 Scope: OpenAI allows this for local and open-source apps and asks them to move to "Sign in with ChatGPT" (SIWC);
 it has never been allowed for hosted or commercial services. Meshpool runs it only on the user's own computer, with
-the user's own sign-in. Claude subscriptions are never used here (see harnesses.credentials).
+the user's own sign-in.
 """
 from __future__ import annotations
 
 import base64
 import contextlib
+import http.client
 import json
 import os
 import time
@@ -30,6 +31,8 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+
+from meshpool_harness.config import replace_file
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -161,7 +164,7 @@ def _write(d: dict) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
-    os.replace(tmp, p)
+    replace_file(tmp, p)
 
 
 @contextlib.contextmanager
@@ -413,6 +416,6 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
                 raise NotSignedIn(f"ChatGPT did not accept the sign-in. Sign in again: Settings, Account, Runs on. "
                                   f"({detail})")
             raise RuntimeError(f"chatgpt HTTP {e.code}: {detail[:400]}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as e:
             raise RuntimeError(f"chatgpt HTTP 0: timed out or connection lost: {e}")
     raise RuntimeError("chatgpt HTTP 401")

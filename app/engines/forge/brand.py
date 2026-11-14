@@ -27,6 +27,7 @@ import colorsys
 import hashlib
 import io
 import json
+import posixpath
 import re
 import shutil
 import uuid
@@ -195,15 +196,15 @@ def _usage(zf, theme: dict, cmap: dict, slide_parts: list[str]) -> Counter:
 
 
 def _rels(zf, part: str) -> dict:
-    p = Path(part)
-    rp = str(p.parent / "_rels" / (p.name + ".rels"))
+    folder, name = posixpath.split(part)                  # zip member names always use '/', on Windows too
+    rp = posixpath.join(folder, "_rels", name + ".rels")
     out = {}
     if rp in zf.namelist():
         for rel in etree.fromstring(zf.read(rp)):
             tgt = rel.get("Target", "")
             if rel.get("TargetMode") == "External":
                 continue
-            out[rel.get("Id")] = _norm(tgt.lstrip("/") if tgt.startswith("/") else f"{p.parent.as_posix()}/{tgt}")
+            out[rel.get("Id")] = _norm(tgt.lstrip("/") if tgt.startswith("/") else f"{folder}/{tgt}")
     return out
 
 
@@ -506,8 +507,8 @@ def _freeze_colors(prs, theme: dict, cmap: dict) -> None:
 def make_master(deck_path: str, out_path: str) -> tuple[bool, str, float | None]:
     """A template from a company deck: slides removed, size, layouts and artwork checked.
     (ok, why not, left edge of the master's artwork in the footer's right corner)."""
-    from pptx import Presentation
-    prs = Presentation(deck_path)
+    from .common import open_pptx
+    prs = open_pptx(deck_path)                            # a .potx too
     if abs(prs.slide_width - WIDE[0]) > WIDE[0] * 0.003 or abs(prs.slide_height - WIDE[1]) > WIDE[1] * 0.003:
         w, h = prs.slide_width / EMU, prs.slide_height / EMU
         return False, (f"its slides are {w:.2f} x {h:.2f} in; the forge layouts need 16:9 widescreen "

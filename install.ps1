@@ -5,6 +5,11 @@
 # It installs into %USERPROFILE%\.meshpool-cli and adds the `meshpool` command to your PATH, in this window too. It uses
 # your Python 3.10 or later if you have one; otherwise it downloads a private copy of Python into .meshpool-cli.
 # Settings: MESHPOOL_REF (branch or tag), MESHPOOL_DIR, MESHPOOL_NO_SETUP=1 (do not start setup).
+#
+# Everything runs inside one script block: under `irm | iex` this script runs in the user's own PowerShell session,
+# so its settings ($ErrorActionPreference and the rest) stay local, and a failure prints a message and returns
+# instead of closing the window.
+& {
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Repo = "hamzaaziada/meshpool-harness"
@@ -19,8 +24,29 @@ $Dim = "$E[2m"; $Off = "$E[0m"
 function Say($t) { Write-Host $t }
 function Ok($t) { Write-Host "  $Green✓$Off $t" }
 function Step($t) { Write-Host "  $Blue›$Off $t" }
-function Die($t) { Write-Host "  $Red✗$Off $t"; exit 1 }
+# Stops the install: the message is shown once, below, and the window stays open.
+function Die($t) { $x = New-Object System.Exception $t; $x.Data["meshpool"] = $true; throw $x }
 
+# Runs a program and returns its exit code. Windows PowerShell 5.1 turns anything a program writes to stderr (a pip
+# warning, say) into an error, which "Stop" would make fatal, so programs run with "Continue" and are judged by their
+# exit code alone. -Quiet hides their output.
+function Run {
+  param([string]$Exe, [string[]]$A = @(), [switch]$Quiet)
+  $eap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $global:LASTEXITCODE = 1
+    if ($Quiet) { & $Exe @A 2>$null | Out-Null } else { & $Exe @A | Out-Host }
+    return $LASTEXITCODE
+  } catch {
+    return 1
+  } finally {
+    $ErrorActionPreference = $eap
+  }
+}
+
+$Tmp = Join-Path $env:TEMP ("meshpool-" + [guid]::NewGuid())
+try {
 Say ""
 Say "     $E[38;2;30;132;250m▄$E[0m$E[38;2;43;149;251m$E[48;2;6;120;255m▀$E[0m$E[38;2;25;135;253m$E[48;2;0;99;254m▀$E[0m$E[38;2;17;128;252m$E[48;2;0;91;252m▀$E[0m$E[38;2;24;130;255m$E[48;2;2;91;255m▀$E[0m$E[38;2;10;94;255m▄$E[0m   $E[38;2;112;200;252m▄$E[0m$E[38;2;141;222;252m$E[48;2;119;216;255m▀$E[0m$E[38;2;170;231;253m$E[48;2;126;214;255m▀$E[0m$E[38;2;202;245;255m$E[48;2;165;236;255m▀$E[0m$E[38;2;205;244;255m▄$E[0m"
 Say "    $E[38;2;14;112;251m▄$E[0m$E[38;2;6;116;255m$E[48;2;1;89;253m▀$E[0m$E[38;2;0;87;250m$E[48;2;3;76;246m▀$E[0m$E[38;2;4;84;249m$E[48;2;3;70;239m▀$E[0m$E[38;2;4;76;245m$E[48;2;3;64;227m▀$E[0m$E[38;2;3;67;235m$E[48;2;3;57;215m▀$E[0m$E[38;2;1;66;240m$E[48;2;4;53;201m▀$E[0m$E[38;2;13;74;228m$E[48;2;0;45;197m▀$E[0m$E[38;2;61;122;224m▄$E[0m$E[38;2;96;184;251m$E[48;2;77;172;255m▀$E[0m$E[38;2;95;197;255m$E[48;2;71;167;251m▀$E[0m$E[38;2;94;187;250m$E[48;2;86;180;251m▀$E[0m$E[38;2;109;198;251m$E[48;2;100;190;251m▀$E[0m$E[38;2;131;210;250m$E[48;2;119;203;252m▀$E[0m$E[38;2;179;238;255m$E[48;2;144;215;251m▀$E[0m$E[38;2;215;245;253m$E[48;2;201;247;255m▀$E[0m$E[38;2;216;240;252m▄$E[0m"
@@ -34,67 +60,93 @@ Say "  ${Dim}Installing Meshpool for the terminal. This takes a minute the first
 Say ""
 
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-$Tmp = Join-Path $env:TEMP ("meshpool-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $Tmp | Out-Null
 
 # ---------- Python ----------
-$Py = $null
+$PyExe = $null; $PyArgs = @()
 foreach ($c in @("py -3.13", "py -3.12", "py -3.11", "py -3.10", "python")) {
   $parts = $c.Split(" ")
-  try {
-    & $parts[0] $parts[1..9] -c "import sys, venv; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 2>$null
-    if ($LASTEXITCODE -eq 0) { $Py = $parts; break }
-  } catch {}
+  $rest = @($parts | Select-Object -Skip 1)
+  $code = Run $parts[0] ($rest + @("-c", "import sys, venv; sys.exit(0 if sys.version_info >= (3, 10) else 1)")) -Quiet
+  if ($code -eq 0) { $PyExe = $parts[0]; $PyArgs = $rest; break }
 }
-if ($Py) {
-  Ok ("Python " + (& $Py[0] $Py[1..9] -c "import platform; print(platform.python_version())"))
+if ($PyExe) {
+  Ok ("Python " + (& $PyExe @PyArgs -c "import platform; print(platform.python_version())"))
 } elseif (Test-Path "$Dir\python\python.exe") {
-  $Py = @("$Dir\python\python.exe"); Ok "Python (Meshpool's own copy)"
+  $PyExe = "$Dir\python\python.exe"; Ok "Python (Meshpool's own copy)"
 } else {
   Step "Downloading Python (this computer does not have 3.10 or later)..."
-  try { Invoke-WebRequest $PyUrl -OutFile "$Tmp\python.tgz" } catch { Die "Could not download Python. Check your internet connection." }
+  try { Invoke-WebRequest -UseBasicParsing $PyUrl -OutFile "$Tmp\python.tgz" } catch { Die "Could not download Python. Check your internet connection." }
   if ((Get-FileHash "$Tmp\python.tgz" -Algorithm SHA256).Hash.ToLower() -ne $PySum) { Die "The Python download did not match its checksum. Run this again." }
-  tar -xzf "$Tmp\python.tgz" -C $Tmp
+  if ((Run "tar" @("-xzf", "$Tmp\python.tgz", "-C", $Tmp)) -ne 0) { Die "Could not unpack Python. Run this again." }
   if (Test-Path "$Dir\python") { Remove-Item -Recurse -Force "$Dir\python" }
   Move-Item "$Tmp\python" "$Dir\python"
-  $Py = @("$Dir\python\python.exe"); Ok "Python (Meshpool's own copy)"
+  $PyExe = "$Dir\python\python.exe"; Ok "Python (Meshpool's own copy)"
 }
 
 # ---------- Meshpool ----------
 Step "Downloading Meshpool ($Ref)..."
-try { Invoke-WebRequest "https://codeload.github.com/$Repo/zip/$Ref" -OutFile "$Tmp\src.zip" } catch { Die "Could not download Meshpool. Check your internet connection." }
+try { Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$Repo/zip/$Ref" -OutFile "$Tmp\src.zip" } catch { Die "Could not download Meshpool. Check your internet connection." }
 Expand-Archive "$Tmp\src.zip" -DestinationPath $Tmp
 $Src = Get-ChildItem $Tmp -Directory | Where-Object Name -like "meshpool-harness-*" | Select-Object -First 1
+if (-not $Src) { Die "The download was incomplete. Run this again." }
 if (Test-Path "$Dir\app") { Remove-Item -Recurse -Force "$Dir\app" }
 Copy-Item -Recurse "$($Src.FullName)\app" "$Dir\app"
-Copy-Item "$($Src.FullName)\LICENSE", "$($Src.FullName)\NOTICE", "$($Src.FullName)\THIRD_PARTY_NOTICES.md" "$Dir\app\"
+Copy-Item "$($Src.FullName)\THIRD_PARTY_NOTICES.md" "$Dir\app\"
+# The package list this copy is installed from: the in-app update compares it with a new release's list.
+Copy-Item "$($Src.FullName)\packaging\requirements-cli.txt" "$Dir\app\requirements-cli.txt"
+# The command runs this file rather than `python -m`: Python then puts the app folder first on sys.path, never the
+# folder the command is typed in, so a project's own json.py or argparse.py is not imported in place of Python's.
+# (`python -P` does the same, but only from Python 3.11, and this installer accepts 3.10.)
+Set-Content -Encoding ASCII "$Dir\app\meshpool_launch.py" "import runpy`r`n`r`nrunpy.run_module(`"meshpool_harness`", run_name=`"__main__`", alter_sys=True)"
 Ok "Meshpool"
 
 Step "Installing its Python packages..."
-if (-not (Test-Path "$Dir\venv\Scripts\python.exe")) { & $Py[0] $Py[1..9] -m venv "$Dir\venv" }
-& "$Dir\venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check --upgrade pip 2>$null | Out-Null
-& "$Dir\venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r "$($Src.FullName)\packaging\requirements-cli.txt"
-if ($LASTEXITCODE -ne 0) { Die "Installing the Python packages failed (see above). Run this again." }
+# Reuse the environment only while it still works: it breaks when the Python it was made from is removed or upgraded.
+$VPy = "$Dir\venv\Scripts\python.exe"
+if (-not (Test-Path $VPy) -or (Run $VPy @("-c", "import sys") -Quiet) -ne 0) {
+  if (Test-Path "$Dir\venv") { Remove-Item -Recurse -Force "$Dir\venv" }
+  if ((Run $PyExe ($PyArgs + @("-m", "venv", "$Dir\venv"))) -ne 0 -or -not (Test-Path $VPy)) {
+    Die "Could not create a Python environment with $PyExe $PyArgs."
+  }
+}
+Run $VPy @("-m", "pip", "install", "-q", "--disable-pip-version-check", "--upgrade", "pip") -Quiet | Out-Null   # best effort
+if ((Run $VPy @("-m", "pip", "install", "-q", "--disable-pip-version-check", "-r", "$($Src.FullName)\packaging\requirements-cli.txt")) -ne 0) {
+  Die "Installing the Python packages failed (see above). Run this again."
+}
 Ok "Packages"
 
 # ---------- the command, on PATH now and in new windows ----------
 $Bin = Join-Path $Dir "bin"
 New-Item -ItemType Directory -Force -Path $Bin | Out-Null
-Set-Content -Encoding ASCII "$Bin\meshpool.cmd" "@echo off`r`nset PYTHONPATH=$Dir\app`r`n`"$Dir\venv\Scripts\python.exe`" -m meshpool_harness %*"
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (($UserPath -split ";") -notcontains $Bin) { [Environment]::SetEnvironmentVariable("Path", (($UserPath.TrimEnd(";"), $Bin) -join ";").TrimStart(";"), "User") }
+# Paths relative to the command's own folder (%~dp0), so the file is plain ASCII whatever the profile folder is called.
+Set-Content -Encoding ASCII "$Bin\meshpool.cmd" ("@echo off`r`nsetlocal`r`nset `"PYTHONPATH=%~dp0..\app`"`r`nset `"PYTHONUTF8=1`"`r`nset `"PYTHONIOENCODING=utf-8`"`r`n" +
+  "`"%~dp0..\venv\Scripts\python.exe`" `"%~dp0..\app\meshpool_launch.py`" %*`r`nexit /b %ERRORLEVEL%")
+# The user's Path as stored, %VARIABLES% unexpanded (reading it through [Environment] would expand them for good).
+$Key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+try {
+  $UserPath = [string]$Key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  $Parts = @($UserPath -split ";" | Where-Object { $_ })
+  if ($Parts -notcontains $Bin) {
+    $Key.SetValue("Path", (($Parts + $Bin) -join ";"), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    try {   # tell Explorer, so terminals opened from now on see the new Path
+      Add-Type -Namespace MeshpoolInstall -Name Win32 -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);'
+      $r = [UIntPtr]::Zero
+      [MeshpoolInstall.Win32]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$r) | Out-Null
+    } catch {}
+  }
+} finally { $Key.Close() }
 if (($env:Path -split ";") -notcontains $Bin) { $env:Path = "$env:Path;$Bin" }
 Ok "The meshpool command"
-Remove-Item -Recurse -Force $Tmp
 Say ""
 
 $Config = Join-Path $Dir "meshpool.config"
-function Ready { (Test-Path $Config) -and (Select-String -Path $Config -Pattern '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=(claude|chatgpt))' -Quiet) }
+function Ready { (Test-Path $Config) -and (Select-String -Path $Config -Pattern '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' -Quiet) }
 
 # Straight into setup: pick how Meshpool runs, where it works, and what it may do. Then the session starts.
 if (-not $env:MESHPOOL_NO_SETUP -and -not (Ready)) {
   $env:MESHPOOL_FROM_INSTALLER = "1"
-  & "$Bin\meshpool.cmd" setup
+  try { & "$Bin\meshpool.cmd" setup } catch {}
   Remove-Item Env:\MESHPOOL_FROM_INSTALLER -ErrorAction SilentlyContinue
   Say ""
 }
@@ -102,3 +154,12 @@ if (Ready) { Say "  ${Blue}Meshpool is ready.$Off Go to a project folder and typ
 else { Say "  ${Blue}Meshpool is installed.$Off Type ${Blue}meshpool$Off to set it up and start." }
 Say "  ${Dim}meshpool ui opens the full app in your browser. meshpool setup changes your choices.$Off"
 Say ""
+} catch {
+  $m = if ($_.Exception.Data["meshpool"]) { $_.Exception.Message } else { "The install stopped: $($_.Exception.Message)" }
+  Write-Host "  $Red✗$Off $m"
+  Write-Host ""
+  $global:LASTEXITCODE = 1
+} finally {
+  if (Test-Path $Tmp) { Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue }
+}
+}

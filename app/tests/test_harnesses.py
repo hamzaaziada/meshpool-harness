@@ -98,4 +98,51 @@ def test_registry_add_remove_and_defaults(home):
     HR.remove("my-agent")
     assert not any(h["id"] == "my-agent" for h in HR.load_all())
     assert {e["id"] for e in HR.examples()} >= {"goose"}
-    assert any(h["id"] == "gemini-cli" for h in HR.load_all())          # built in now, no longer an example
+    assert not {"claude-code", "gemini-cli"} & {e["id"] for e in HR.examples()}
+    for old in ("claude-code", "gemini-cli"):          # a file an older version copied in is skipped, not loaded
+        (HR.folder() / f"{old}.json").write_text(json.dumps({"id": old, "name": old, "command": "npx"}))
+    assert not {"claude-code", "gemini-cli"} & {h["id"] for h in HR.load_all()}
+
+
+def test_a_bad_harness_file_does_not_break_the_registry(home):
+    HR.folder().mkdir(parents=True, exist_ok=True)
+    (HR.folder() / "numeric.json").write_text(json.dumps({"id": 5, "name": "x", "command": "y"}))
+    (HR.folder() / "listcmd.json").write_text(json.dumps({"id": "listcmd", "name": "x", "command": ["y"]}))
+    rows = {h["id"]: h for h in HR.load_all()}
+    assert rows["numeric"]["error"] and rows["listcmd"]["error"] and "meshpool-code" in rows
+
+
+@pytest.mark.parametrize("bad", ["../meshpool.config", "..", "a/b", "x\\y", ""])
+def test_remove_and_add_example_refuse_paths(home, bad):
+    with pytest.raises(KeyError):
+        HR.remove(bad)
+    with pytest.raises(KeyError):
+        HR.add_example(bad)
+
+
+def test_relay_status_follows_the_stream_error():
+    from meshpool_harness.core.chatgpt_relay import _status
+    assert _status(RuntimeError('chatgpt HTTP 500: {"code": "rate_limit_exceeded"}')) == 429
+    assert _status(RuntimeError('chatgpt HTTP 500: {"code": "usage_limit_reached"}')) == 429
+    assert _status(RuntimeError('chatgpt HTTP 500: {"code": "context_length_exceeded"}')) == 400
+    assert _status(RuntimeError('chatgpt HTTP 500: {"code": "server_error"}')) == 500
+    assert _status(RuntimeError("chatgpt HTTP 0: timed out")) == 502
+
+
+def test_opencode_runs_on_the_key_endpoint_with_the_key_kept_out_of_its_config(tmp_path, monkeypatch):
+    import json
+    from meshpool_harness import config as C
+    from meshpool_harness import harnesses as HR
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setattr(C, "home", lambda: tmp_path)
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-secret")
+    monkeypatch.setenv("MESHPOOL_BASE_URL", "https://example.test/v1")
+    h = HR.get("opencode", "deepseek-v4.1-flash")
+    assert h["type"] == "acp" and h["args"][-1] == "acp" and h["prepare"] == "opencode"
+    assert h["env"]["OPENCODE_CONFIG"].endswith("opencode.json")
+    HR.prepare_opencode("deepseek-v4.1-flash")
+    text = (tmp_path / "opencode" / "opencode.json").read_text()
+    cfg = json.loads(text)
+    assert cfg["model"] == "meshpool/deepseek-v4.1-flash"
+    assert cfg["provider"]["meshpool"]["options"]["baseURL"] == "https://example.test/v1"
+    assert "sk-test-secret" not in text and "{env:MESHPOOL_API_KEY}" in text

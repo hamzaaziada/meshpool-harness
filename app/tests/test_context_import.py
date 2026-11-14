@@ -94,3 +94,45 @@ def test_bundled_professional_skills_ship_with_their_licence():
                  "finance-dcf-valuation", "finance-assumption-book", "finance-three-statement-model",
                  "finance-valuation-method-selection", "finance-research-method"):
         assert (d / name / "SKILL.md").exists()
+
+
+def test_imported_skill_front_matter_is_quoted_yaml(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    import yaml
+    from meshpool_harness import importer as IM, skills as SK
+    sid = IM._write_skill("project-x", "Board memos: answer first # always\nthen reasons", "Body.")
+    text = (SK.folder() / sid / "SKILL.md").read_text()
+    assert yaml.safe_load(text.split("---")[1])["description"] == "Board memos: answer first # always then reasons"
+    assert IM._write_skill("project-x", "Second import", "New body.") == sid       # re-import rewrites
+    assert SK.get(sid)["description"] == "Second import"
+
+
+def test_memory_matches_whole_lines(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    from meshpool_harness import assistant as AS
+    assert AS.remember("Dislikes tea") == "Saved to memory."
+    assert AS.remember("likes tea") == "Saved to memory."          # not a duplicate of "Dislikes tea"
+    assert AS.remember("Likes tea.") == "Already in memory."
+    AS.remember("Works at Acme")
+    r = AS.forget("likes tea")
+    assert "likes tea" in r and "Dislikes tea" in AS.memory() and "- likes tea" not in AS.memory()
+    r = AS.forget("acme")                                          # no exact line: the single best match
+    assert "Works at Acme" in r and "Acme" not in AS.memory()
+    assert AS.forget("zebra stripes") == "Nothing in memory matched that."
+
+
+def test_update_task_validates_and_reschedules_a_fired_once_task(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    import pytest
+    from meshpool_harness import assistant as AS
+    t = AS.add_task("ping", "Say hi", "once", at="2020-01-01T09:00")
+    assert [x["id"] for x in AS.due()] == [t["id"]]                # fires once and switches off
+    assert AS.due() == []
+    u = AS.update_task(t["id"], at="2099-01-01T09:00", enabled=True)
+    assert u["last_run"] is None and u["next_run"] is not None
+    with pytest.raises(ValueError):
+        AS.update_task(t["id"], when="weekly", day="someday")
+    with pytest.raises(ValueError):
+        AS.update_task(t["id"], when="fortnightly")
+    assert next(x for x in AS.tasks() if x["id"] == t["id"])["when"] == "once"     # nothing saved on error
+    assert not list(tmp_path.glob("*.tmp")) and not list(tmp_path.glob(".schedules.json.*"))

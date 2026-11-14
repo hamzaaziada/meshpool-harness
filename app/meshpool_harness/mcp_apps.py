@@ -198,14 +198,27 @@ def _read(p: Path) -> dict:
 
 
 def _write(p: Path, d: dict):
+    """Owner-only (0600) from the first byte, and atomic: a unique temporary file next to it, then a rename. These
+    files hold access tokens, refresh tokens and client secrets."""
+    import tempfile
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")   # mkstemp creates it 0600
     try:
-        os.chmod(tmp, 0o600)
-    except OSError:
-        pass
-    tmp.replace(p)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(d, indent=1))
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        C.replace_file(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _custom() -> list[dict]:
@@ -536,16 +549,18 @@ def finish(state: str, code: str | None, error: str | None = None) -> str:
     return name
 
 
-def _fresh_token(cid: str) -> str | None:
+def _fresh_token(cid: str, force: bool = False) -> str | None:
+    """The connector's access token, refreshed when it has expired (or, with force, because the server just refused
+    it). None when there is none or the refresh failed: the user signs in again."""
     with _LOCK:
         store = _read(_auth_file())
         e = store.get(cid)
         if not e or not e.get("access_token"):
             return None
-        if time.time() < float(e.get("expires_at") or 0):
+        if not force and time.time() < float(e.get("expires_at") or 0):
             return e["access_token"]
-        if not e.get("refresh_token"):
-            return e["access_token"]                  # let the server decide; it may still accept it
+        if not e.get("refresh_token") or not e.get("token_endpoint") or not e.get("client"):
+            return None if force else e["access_token"]   # let the server decide; it may still accept it
         form, hdr = _client_auth(e["client"], {"grant_type": "refresh_token", "refresh_token": e["refresh_token"],
                                                "resource": e.get("resource", "")})
         s, _, tok = _http(e["token_endpoint"], form=form, headers=hdr)
@@ -557,6 +572,19 @@ def _fresh_token(cid: str) -> str | None:
                   "expires_at": time.time() + float(tok.get("expires_in") or 3600) - 60, "expired": False})
         _write(_auth_file(), store)
         return e["access_token"]
+
+
+def refresh_headers(cid: str) -> dict | None:
+    """Fresh request headers for a connector whose server refused the ones it was started with (an OAuth access
+    token lasts about an hour). None when there is nothing better to send: the user signs in again."""
+    try:
+        c = get(cid)
+    except KeyError:
+        return None
+    if c["auth"] == "oauth" and not _fresh_token(cid, force=True):
+        return None
+    spec = spec_for(cid)
+    return (spec or {}).get("headers") or None
 
 
 def _token_for(c: dict) -> str | None:
@@ -597,9 +625,10 @@ def listing() -> list[dict]:
 
 def set_enabled(cid: str, on: bool):
     get(cid)
-    st = _read(_state_file())
-    st.setdefault("enabled", {})[cid] = bool(on)
-    _write(_state_file(), st)
+    with _LOCK:
+        st = _read(_state_file())
+        st.setdefault("enabled", {})[cid] = bool(on)
+        _write(_state_file(), st)
 
 
 def disconnect(cid: str):

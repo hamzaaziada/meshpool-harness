@@ -11,7 +11,7 @@ def cached_tokens(usage: dict) -> int:
 
 class CacheMeter:
     """Counts full cache misses: calls where under half of the previous prompt was cached. In run C, 73% of avoidable
-    miss tokens came right after a cut-off call (harness-lab/findings/002); this makes that visible on every run."""
+    miss tokens came right after a cut-off call; this makes that visible on every run."""
 
     def __init__(self):
         self.last_prompt = 0

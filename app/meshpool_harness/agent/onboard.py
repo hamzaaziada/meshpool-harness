@@ -73,9 +73,40 @@ def _short(p: Path) -> str:
 
 # ---------- step 1: the key ---------------------------------------------------------------------------------------
 
+KEY_ENV = ("MESHPOOL_BASE_URL", "MH_MODEL", "MESHPOOL_API_KEY")
+
+
 def key_step(st, header: bool = False, n: int | None = None, custom: bool = False) -> bool:
     """Ask for the key, check it with one tiny model call, save it only if it works. With custom, ask for another
-    provider's OpenAI-compatible address first."""
+    provider's OpenAI-compatible address first. The endpoint, model and key in this process change only when a key is
+    saved: a cancel (Ctrl+C, end of input) or failed keys put the old ones back, so a running session never sends the
+    old key to the new address."""
+    before = {k: os.environ.get(k) for k in KEY_ENV}
+    ok = False
+    try:
+        ok = _key_step(st, header, n, custom)
+        return ok
+    finally:
+        if not ok:
+            for k, v in before.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+def _check_model(custom: bool) -> str:
+    """A model for the key check that the endpoint just entered serves: never a chatgpt: model, which would
+    test that sign-in instead of the pasted key."""
+    from meshpool_harness import providers as PV
+    m = (os.environ.get("MH_MODEL") or "").strip()
+    head, sep, bare = m.partition(":")
+    if sep and head in PV.PREFIXED:
+        return bare if custom and bare else "deepseek-v4.1-flash"
+    return m or "deepseek-v4.1-flash"
+
+
+def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
     from meshpool_harness.cli import ping
     if header:
         _p()
@@ -112,7 +143,6 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
         _p(f"  No key yet? Get one at {st.blue(KEY_URL)} and run every model 20% cheaper.")
         _p(st.dim("  Press Enter with nothing typed to open it."))
         _p()
-    old = os.environ.get("MESHPOOL_API_KEY")
     reset = {}
     saved_base = (C.read().get("MESHPOOL_BASE_URL") or "").rstrip("/")
     if not custom and saved_base not in ("", "https://llm.meshpool.ai/v1"):
@@ -138,7 +168,7 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
             continue
         os.environ["MESHPOOL_API_KEY"] = key
         _p(st.dim("    Checking your key..."))
-        r = ping()
+        r = ping(_check_model(custom))
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"])
@@ -157,12 +187,7 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
         _p(st.amber(f"    Saved, but Meshpool could not reach the model: {msg[:200]}"))
         _p(st.dim("    Check your internet connection. `meshpool check --live` tests it again."))
         return True
-    for k, v in (("MESHPOOL_API_KEY", old), ("MESHPOOL_BASE_URL", old_base)):
-        if v:
-            os.environ[k] = v
-        else:
-            os.environ.pop(k, None)
-    return False
+    return False                                  # key_step puts the old endpoint, model and key back
 
 
 def _use(which: str) -> None:
@@ -170,12 +195,11 @@ def _use(which: str) -> None:
     HR.use_provider(which)
 
 
-SUBS = {"claude": ("Claude", "Claude Pro or Max", "@anthropic-ai/claude-code@latest"),
-        "chatgpt": ("ChatGPT", "ChatGPT Plus, Pro or Business", "@openai/codex@latest")}
+SUBS = {"chatgpt": ("ChatGPT", "ChatGPT Plus, Pro or Business", "@openai/codex@latest")}
 
 
 def sub_step(st, which: str) -> bool:
-    """Sign in to a Claude or ChatGPT subscription with the official Claude Code or Codex sign-in, right here."""
+    """Sign in to a ChatGPT subscription with the official Codex sign-in, right here."""
     import shutil
     import subprocess
     from meshpool_harness import harnesses as HR
@@ -192,17 +216,9 @@ def sub_step(st, which: str) -> bool:
         _p(st.dim("    The Meshpool desktop app includes it."))
         return False
     _p(f"  Usage comes out of your {plans} plan. No API key needed.")
-    if which == "claude":
-        _p(st.dim("  A Claude subscription runs Claude Code, Anthropic's own agent. Meshpool never uses its sign-in"))
-        _p(st.dim("  for anything else."))
     _p()
-    if which == "chatgpt":
-        _p(st.dim("    Your browser opens for the ChatGPT sign-in. Come back here when it says you are signed in."))
-        cmd = [npx, "-y", pkg, "login"]
-    else:
-        _p(st.dim("    Claude Code opens here. Sign in with your Claude account (type /login if it does not ask),"))
-        _p(st.dim("    then type /exit to come back to Meshpool."))
-        cmd = [npx, "-y", pkg]
+    _p(st.dim("    Your browser opens for the ChatGPT sign-in. Come back here when it says you are signed in."))
+    cmd = [npx, "-y", pkg, "login"]
     if _ask(st, "Press Enter to sign in") is None:
         return False
     try:
@@ -218,28 +234,24 @@ def sub_step(st, which: str) -> bool:
 
 
 def _agent_note(st) -> None:
-    """Say which agent the provider gives: the default agent is chosen from the provider."""
+    """Say which agent runs by default, and on what."""
     from meshpool_harness import harnesses as HR
     try:
         h = HR.get(HR.default_for("code"))
     except (KeyError, ValueError):
         return
     _p(f"    {st.green('✓')} Your agent: {h['name']}" + (f", on {h['runs_on']}." if h.get("runs_on") else "."))
-    if HR.provider() == "claude":
-        _p(st.dim("    Anthropic's terms let a Claude subscription run only Claude Code, so Meshpool Code, Work, Pi"))
-        _p(st.dim("    and Hermes need an API key or a ChatGPT sign-in. Add one any time with `meshpool setup`."))
 
 
 def provider_step(st, n: int = 1) -> bool:
-    """Step 1: what Meshpool runs on. The Meshpool key is the default; any other key or a subscription also works."""
+    """Step 1: what Meshpool runs on. The Meshpool key is the default; another OpenAI-compatible key or a ChatGPT
+    sign-in also works."""
     _step(st, n, "Choose how Meshpool runs", "You can change this any time with `meshpool setup`.")
     from meshpool_harness import harnesses as HR
     opts = [("meshpool", "Meshpool API key", "recommended: every model on one key, 20% cheaper"),
-            ("custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider"),
+            ("custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider"),
             ("chatgpt", "ChatGPT subscription", "your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, "
-                                                "Pi, Hermes and Codex"),
-            ("claude", "Claude subscription, runs Claude Code", "your Claude Pro or Max plan; only Claude Code "
-                                                                "can use it")]
+                                                "Pi, Hermes and Codex")]
     cur = HR.provider()
     d = next((i for i, o in enumerate(opts, 1) if o[0] == cur), 1)
     while True:

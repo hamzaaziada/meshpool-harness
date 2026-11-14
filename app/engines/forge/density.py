@@ -230,7 +230,7 @@ def _part(p: dict, lim: dict, notes: _Notes) -> dict:
 
 def _table(t: dict, k: int, notes: _Notes) -> dict:
     rows = list(t.get("rows") or [])
-    if len(rows) <= k:
+    if len(rows) <= k or t.get("keep_table"):          # a computed table (sensitivity grid, statements) stays whole
         return t
     hl = [i for i in t.get("highlight_rows") or [] if isinstance(i, int) and i < len(rows)]
     it = [i for i in t.get("italic_rows") or [] if isinstance(i, int) and i < len(rows)]

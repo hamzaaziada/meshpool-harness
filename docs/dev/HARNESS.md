@@ -33,22 +33,16 @@ Each line: what we built, why, and where the idea came from. Numbers live in `re
 - **Model-free helpers.** Locate hints from the issue's identifiers; issue code examples executed before turn 0
   (each expression prints its value or exception); banker-style workbook builder; deterministic deck renderer.
 
-## 3. Memory and context (`meshpool_harness/memory.py`, prompt layout)
+## 3. Context (prompt layout)
 
-- **Context layout.** [stable system + tools] → [task + hints + lessons] → [history]. Variable content never enters
+- **Context layout.** [stable system + tools] → [task + hints] → [history]. Variable content never enters
   the cached prefix.
 - **Compaction only when it pays.** Old tool outputs are elided only above ~150k tokens. On DeepSeek, re-reading
   cached history costs ~1/50 of fresh input, so compacting earlier costs more than it saves for typical tasks.
   (Hermes compresses at 50% of the window; we measured that this is not the cheap choice for DeepSeek.)
-- **Lessons memory.** After each graded dev task, one cheap DeepSeek call writes at most two generic lessons; they
-  are stored in SQLite FTS5 (deduplicated, ≤ 300 chars, screened for prompt-injection text) and the top 3 by BM25
-  are added to the next task's message. Frozen before test runs. (Hermes Agent: bounded memory + FTS store;
-  Harness²: lessons carried from task to task.)
 - **Subagents get packets, not chats.** Planner jobs and reviewers see only their sub-request and exact inputs.
 
 ## Not built (on purpose)
 
-- **Computer use / GUI control.** None of the target work (coding, analysis, decks, workbooks) needs it; everything
-  is reachable through files and shells. Can be added as a local Playwright tool if a use case appears.
 - **Reasoning-mode switching.** Meshpool does not expose a distinct DeepSeek reasoning mode (probed: no reasoning
   tokens at any `reasoning_effort`).

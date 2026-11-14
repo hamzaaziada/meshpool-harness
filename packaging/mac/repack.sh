@@ -9,16 +9,20 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 W="${1:-$HOME/Meshpool-Build/v4/work}"; OUT="$W/out"
 rm -rf "${OUT:?}"; mkdir -p "$OUT"
 PY="$W/app-mac-arm64/Meshpool.app/Contents/Resources/python/bin/python3"
+# The version comes from one place, app/meshpool_harness/__init__.py; Info.plist holds placeholders for it.
+VER="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$REPO/app/meshpool_harness/__init__.py")"
+NUM="$(printf '%s' "$VER" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
+[ -n "$NUM" ] || { echo "Could not read the version from app/meshpool_harness/__init__.py"; exit 1; }
 for a in arm64 x64; do
   APP="$W/app-mac-$a/Meshpool.app"; R="$APP/Contents/Resources"
-  for d in meshpool_harness engines profiles memory defaults; do
+  for d in meshpool_harness engines profiles defaults; do
     rm -rf "${R:?}/app/$d"; rsync -a --exclude __pycache__ --exclude '*.pyc' "$REPO/app/$d/" "$R/app/$d/"
   done
-  cp "$REPO/LICENSE" "$REPO/NOTICE" "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$R/app/"
+  cp "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$REPO/packaging/requirements-cli.txt" "$R/app/"
   cp "$REPO/packaging/hermes-NOTICE-MESHPOOL.txt" "$R/app/vendor/hermes/NOTICE-MESHPOOL.txt"
   (cd "$R/app/vendor/hermes" && patch -p1 -N -s < "$REPO/packaging/hermes-acp-server.patch" >/dev/null 2>&1 || true)
-  cp "$REPO/packaging/mac/Info.plist" "$APP/Contents/Info.plist"
-  for d in meshpool_harness engines profiles memory vendor/hermes/acp_adapter; do
+  sed -e "s/@VERSION_NUM@/$NUM/g" -e "s/@VERSION@/$VER/g" "$REPO/packaging/mac/Info.plist" > "$APP/Contents/Info.plist"
+  for d in meshpool_harness engines profiles vendor/hermes/acp_adapter; do
     PYTHONPATH= "$PY" -m compileall -q -j0 --invalidation-mode unchecked-hash -x 'tests?/|test_' \
       -s "$R" -p /Applications/Meshpool.app/Contents/Resources "$R/app/$d" >/dev/null 2>&1
   done

@@ -18,24 +18,15 @@ FIELDS = [
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
-     "provider's key), chatgpt (your ChatGPT sign-in) or claude (your Claude sign-in, for Claude Code only)."),
-    ("ANTHROPIC_API_KEY", "Anthropic API key", "", "Optional. Claude models on your own Anthropic key, for Meshpool's "
-     "agents, Pi, Hermes and Claude Code."),
-    ("GEMINI_API_KEY", "Gemini API key", "", "Optional. Gemini models on your own Google AI Studio key, for "
-     "Meshpool's agents, Pi, Hermes and Gemini CLI."),
+     "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
-    ("MH_HARNESS_PROFILE", "Agent setup", "minimal", "The tuned setup Meshpool uses by default. Leave it as is."),
-    ("MH_STREAM", "Show replies as they are written", "1", "On is faster and lets you see progress. Leave it on."),
-    ("MH_CACHE_KEY", "Reuse context between messages", "1", "Saves cost on long chats. Leave it on."),
-    ("MH_WIRE", "Connection type", "chat", "How Meshpool talks to the endpoint. Leave it on Standard unless "
-                                           "your provider says otherwise."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
-    ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your other subscriptions", "0",
-     "On: Meshpool Auto may pick Claude Code or Codex on a Claude or ChatGPT sign-in you did not choose as the "
-     "provider (it uses that plan's limits). Off: Auto stays on the provider you chose."),
+    ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
+     "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
+     "uses that plan's limits). Off: Auto stays on the provider you chose."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),
@@ -44,8 +35,26 @@ FIELDS = [
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
 ]
-SECRET = {"MESHPOOL_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
+SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
+
+
+def replace_file(src, dst) -> None:
+    """os.replace that survives Windows: a reader, the search indexer or antivirus holding the target or the fresh
+    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up."""
+    import time
+    for i in range(20 if os.name == "nt" else 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == (19 if os.name == "nt" else 0):
+                try:
+                    os.unlink(src)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05)
 
 
 def home() -> Path:
@@ -91,46 +100,50 @@ def _upgrade_mcp(path: Path) -> None:
     built-in ones and drop the other Node-only entries the user never turned on."""
     import json
     try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
         new = json.loads((APP / "defaults" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     except (OSError, ValueError, KeyError):
         return
-    servers = cfg.get("mcpServers")
-    if not isinstance(servers, dict):
-        return
-    changed = False
-    for name in ("browser", "computer-use"):
-        cur = servers.get(name)
-        if not isinstance(cur, dict) or cur.get("command") in ("npx", "npx.cmd"):
-            servers[name] = new[name]
-            changed = True
-    for name in ("meshpool-web", "meshpool-assistant"):        # 2.4: shared web and assistant tools
-        if name not in servers and name in new:
-            servers[name] = new[name]
-            changed = True
-    if not cfg.get("_upgraded_24"):                          # 2.4: computer use is opt-in; research uses web tools
-        cu = servers.get("computer-use")
-        if isinstance(cu, dict) and not cu.get("disabled"):
-            cu["disabled"] = True
+
+    def upgrade(servers: dict, cfg: dict) -> None:
+        changed = False
         for name in ("browser", "computer-use"):
-            if isinstance(servers.get(name), dict) and name in new:
-                servers[name]["description"] = new[name]["description"]
-        cfg["_upgraded_24"] = True
-        changed = True
-    gh = servers.get("github")
-    if isinstance(gh, dict) and gh.get("disabled") and gh.get("url") == "https://api.githubcopilot.com/mcp/":
-        del servers["github"]                      # GitHub is a connector now (Settings, Connectors)
-        changed = True
-    for name in ("memory", "sequential-thinking", "filesystem", "fetch"):
-        cur = servers.get(name)
-        if isinstance(cur, dict) and cur.get("disabled") and cur.get("command") in ("npx", "uvx"):
-            del servers[name]
+            cur = servers.get(name)
+            if not isinstance(cur, dict) or cur.get("command") in ("npx", "npx.cmd"):
+                servers[name] = new[name]
+                changed = True
+        for name in ("meshpool-web", "meshpool-assistant"):        # 2.4: shared web and assistant tools
+            if name not in servers and name in new:
+                servers[name] = new[name]
+                changed = True
+        if not cfg.get("_upgraded_24"):                          # 2.4: computer use is opt-in; research uses web tools
+            cu = servers.get("computer-use")
+            if isinstance(cu, dict) and not cu.get("disabled"):
+                cu["disabled"] = True
+            for name in ("browser", "computer-use"):
+                if isinstance(servers.get(name), dict) and name in new:
+                    servers[name]["description"] = new[name]["description"]
+            cfg["_upgraded_24"] = True
             changed = True
-    if changed:
-        order = {k: servers[k] for k in new if k in servers}
-        order.update({k: v for k, v in servers.items() if k not in order})
-        cfg["mcpServers"] = order
-        path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        gh = servers.get("github")
+        if isinstance(gh, dict) and gh.get("disabled") and gh.get("url") == "https://api.githubcopilot.com/mcp/":
+            del servers["github"]                      # GitHub is a connector now (Settings, Connectors)
+            changed = True
+        for name in ("memory", "sequential-thinking", "filesystem", "fetch"):
+            cur = servers.get(name)
+            if isinstance(cur, dict) and cur.get("disabled") and cur.get("command") in ("npx", "uvx"):
+                del servers[name]
+                changed = True
+        if changed:                                    # the default servers first, in their order
+            order = {k: servers[k] for k in new if k in servers}
+            order.update({k: v for k, v in servers.items() if k not in order})
+            servers.clear()
+            servers.update(order)
+
+    from meshpool_harness.agent import mcp as M
+    try:
+        M.edit_config(upgrade, path=path, create=False, whole=True)
+    except (OSError, ValueError):
+        return
 
 
 def config_path() -> Path:
@@ -257,7 +270,11 @@ def system_check() -> list[dict]:
 
 
 def packaged() -> bool:
-    """True inside the installed app (Meshpool.app or the Windows install), where Python is Meshpool's own."""
+    """True inside the installed app (Meshpool.app or the Windows install), where Python is Meshpool's own. A
+    command-line install (its own venv, or the launcher the installers write) is not the app, even when it
+    downloaded its own Python."""
+    if (APP.parent / "venv").is_dir() or (APP / "meshpool_launch.py").exists():
+        return False
     return (APP.parent / "python").is_dir() or (APP.parent / "runtime").is_dir()
 
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "meshpool:forge/workbook_block",
   "title": "Forge workbook model block",
-  "description": "What the content model writes for a workbook. The builder turns it into sheets, styles, named ranges and formulas; the model never writes cell addresses. Extends the existing sheets pipeline spec (engines/sheets/pipeline.py) with roles, sources, checks and a dashboard.",
+  "description": "What the content model writes for a workbook. The builder turns it into sheets, styles, named ranges and formulas; the model never writes cell addresses. Carries roles, sources, checks and a dashboard alongside the rows and inputs.",
   "type": "object",
   "required": ["title", "periods", "inputs", "calc", "checks"],
   "additionalProperties": false,

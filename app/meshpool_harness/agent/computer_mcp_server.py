@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -268,10 +270,15 @@ class Win:
         self._send(*seq)
 
     def open_app(self, name: str) -> str:
+        name = _check_app_name(name)
         try:
-            os.startfile(name)  # noqa: S606  an app name on PATH, a file or a URL
-        except OSError:
-            subprocess.Popen(["cmd", "/c", "start", "", name], creationflags=0x08000000)
+            os.startfile(name)  # noqa: S606  ShellExecute: an app name, a file or a URL; no shell parses it
+        except OSError as e:
+            exe = shutil.which(name)           # a program on PATH that ShellExecute did not find by name
+            if not exe or exe.lower().endswith((".bat", ".cmd")):     # scripts would run through cmd.exe
+                raise ToolFailed(f"Could not open {name}: {e}")
+            # an argument list, never through cmd; its own console, so a console program shows instead of hiding
+            subprocess.Popen([exe], creationflags=0x00000010)
         return f"Opened {name}."
 
     def frontmost(self) -> str:
@@ -282,6 +289,20 @@ class Win:
 
     def can_control(self) -> bool:
         return True
+
+
+_BAD_APP = re.compile(r'[&|<>^%"\'`\r\n\x00]')
+
+
+def _check_app_name(name: str) -> str:
+    """An app name, file or web address to open. Shell metacharacters (x&calc) are refused, so a name can never run
+    a second command whatever opens it."""
+    name = str(name or "").strip()
+    if not name:
+        raise ToolFailed("Name the app, file or web address to open.")
+    if not re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", name) and _BAD_APP.search(name):   # URLs keep their & and %
+        raise ToolFailed(f"Refused to open {name!r}: app names cannot contain & | < > ^ % or quotes.")
+    return name
 
 
 _OS = None

@@ -17,10 +17,9 @@ from hashlib import sha256 as _sha
 from pathlib import Path
 
 from lxml import etree
-from pptx import Presentation
 from pptx.oxml.ns import qn
 
-from .common import EMU_PER_IN, evidence_id, font_file, load_rules, sha256, wrap_lines
+from .common import EMU_PER_IN, evidence_id, font_file, load_rules, open_pptx, sha256, wrap_lines
 
 NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
       "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -222,9 +221,13 @@ def _chart_info(gf, slide_part) -> dict:
                     continue
                 ref = v.find("c:numRef/c:f", NS)
                 lit = v.find("c:numLit", NS) is not None
-                vals = [float(p.text) for p in v.findall(".//c:pt/c:v", NS) if _isnum(p.text)]
+                pts = {int(p.get("idx", i)): float(p.findtext("c:v", namespaces=NS))
+                       for i, p in enumerate(v.findall(".//c:pt", NS)) if _isnum(p.findtext("c:v", namespaces=NS))}
+                cnt = v.find(".//c:ptCount", NS)
                 series.append({"name": name, "field": key[2:], "ref": ref.text if ref is not None else None,
-                               "literal": lit, "values": vals})
+                               "literal": lit, "values": [pts[i] for i in sorted(pts)],
+                               "points": pts,                  # by c:pt idx: a blank point is absent, not shifted
+                               "count": int(cnt.get("val")) if cnt is not None else None})
     ext = x.find(".//c:externalData", NS)
     embedded = None
     if ext is not None:
@@ -276,7 +279,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
     rules = rules or load_rules()
     R = rules["pptx"]
     file_sha = sha256(path)
-    prs = Presentation(path)
+    prs = open_pptx(path)                                 # .pptx or .potx
     W, H = _in(prs.slide_width), _in(prs.slide_height)
     theme = _theme(prs)
     pres_el = prs.part._element

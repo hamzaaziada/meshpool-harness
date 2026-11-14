@@ -60,15 +60,9 @@ def plan(messages, tools):
             ref = (_re.search(r"\[(e\d+)\][^\n]*Date", done[-1]["content"]) or [None, "e1"])[1]
             return ("tool", ty, {"ref": ref, "text": "10/23/2016"})
         return ("text", "Browser: " + " || ".join(m["content"][:300].replace("\n", " ") for m in done))
-    if "check the code" in u:                            # MH_OBSERVE / MH_NAV / MH_LINT_EDIT tools in the app agent
+    if "check the code" in u:                            # MH_OBSERVE tools in the app agent
         if step == 0 and "probe" in names:
             return ("tool", "probe", {"command": "python3 -m pytest -q"})
-        if step == 1 and "symbol" in names:
-            return ("tool", "symbol", {"name": "add"})
-        if step == 2 and "edit" in names:
-            return ("tool", "read_file", {"path": "calc.py"})
-        if step == 3:
-            return ("tool", "edit", {"path": "calc.py", "old": "return a + b", "new": "return a + bb"})
         return ("text", "Code tools: " + " || ".join(m["content"][:400].replace("\n", " ") for m in done))
     if "take a screenshot of my screen" in u:            # computer use
         sc = next((n for n in names if n.endswith("screenshot") and "browser" not in n), None)
@@ -104,7 +98,7 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("anthropic/claude-sonnet-4.6","anthropic"),("anthropic/claude-haiku-4.5","anthropic"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("google/gemini-3-pro","google"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
+        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 

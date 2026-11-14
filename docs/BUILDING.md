@@ -1,3 +1,5 @@
+<img src="../app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Building Meshpool
 
 The repository holds Meshpool's own code. The installers also bundle third-party runtimes, which are kept out of git. Put them in a `deps` folder at the repo root, or point `MESHPOOL_DEPS` at another folder.
@@ -14,7 +16,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied; the runtime also needs Hermes' dependencies with its `acp` and `mcp` extras (without `mcp`, Hermes connects to no MCP servers) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
 | `ocr-models` | PP-OCRv5 recognition models for RapidOCR | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) model releases |
 | `git-win` | MinGit for Windows (Git and Bash) | [git-for-windows](https://github.com/git-for-windows/git/releases) |
-| `win/Meshpool` | `Meshpool.exe` and `meshpool.cmd` | Build `packaging/win/launcher` with Go (`GOOS=windows go build`) |
+| `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
 
 ## Build
 
@@ -24,7 +26,9 @@ The repository holds Meshpool's own code. The installers also bundle third-party
    python packaging/build_all.py
    ```
 
-   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`.
+   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).
+
+   In the Windows tree, the terminal command is `bin\meshpool.cmd` (from `packaging/win/meshpool.cmd`). The installer puts only that `bin` folder on PATH: next to `Meshpool.exe`, typing `meshpool` would start the app, because Windows tries `.exe` before `.cmd`.
 
 2. **Windows installer.** Compile the Python code with the bundled runtime, then build the installer with NSIS:
 
@@ -33,7 +37,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
    makensis installer.nsi
    ```
 
-   The result is `Meshpool Setup.exe`. Publish it as `Meshpool-Setup.exe`.
+   The result is `Meshpool Setup.exe`. Publish it as `Meshpool-Setup.exe`. `installer.nsi` needs `winsetup.ps1` beside it (`build_all.py` copies it there): the installer and uninstaller use it to close running Meshpool programs and to edit the user's PATH.
 
 3. **Mac apps**, on a Mac:
    1. Compile `packaging/mac/launcher/main.c` into `Contents/MacOS/Meshpool` for each architecture.

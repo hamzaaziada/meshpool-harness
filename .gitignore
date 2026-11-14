@@ -7,18 +7,23 @@ dist-src/
 *.exe
 !packaging/win/*.exe
 .DS_Store
-app/memory/*.sqlite
 mcp-health.json
 /runs/
 /skills/
-app/routing.csv
-harness-lab/bench/results/raw/
 app/vendor/
 app/engines/forge/schemas/ooxml/
 /projects.json
 # the app run from source keeps its settings and data in the repo root (MESHPOOL_HOME defaults there)
 /meshpool.config
 /mcp.json
+/mcp.json.*.tmp
+# connector sign-ins: access and refresh tokens and client secrets (mcp_apps), and which connectors are on
+/mcp-auth.json
+/mcp-auth.tmp
+/mcp-auth.json.*.tmp
+/connectors.json
+/connectors.tmp
+/connectors.json.*.tmp
 /harnesses/
 /memory/
 /brand/
@@ -27,7 +32,5 @@ app/engines/forge/schemas/ooxml/
 app/timing.jsonl
 app/failures.csv
 app/mh_out/
-harness-lab/bench/results/patches/
-harness-lab/bench/results/transcripts/
 app/build/
 *.egg-info/

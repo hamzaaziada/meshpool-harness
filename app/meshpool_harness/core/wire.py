@@ -1,8 +1,9 @@
 """Stand-alone model transport: any OpenAI-compatible endpoint (chat-completions or Responses API). No eval/ needed.
-Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses.
-A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in, an Anthropic or a Gemini key."""
+Env: MESHPOOL_BASE_URL and MESHPOOL_API_KEY (or OPENAI_BASE_URL with OPENAI_API_KEY: providers.key_base/key), MH_WIRE=chat|responses.
+A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -11,7 +12,10 @@ import urllib.request
 
 
 def to_responses(body: dict) -> dict:
-    """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable)."""
+    """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable).
+    Content parts (text and images) convert as for the ChatGPT sign-in (chatgpt._parts); unlike that endpoint, system
+    messages stay in the input and the output limit and temperature are sent."""
+    from .chatgpt import _parts
     items = []
     for m in body.get("messages", []):
         role = m.get("role")
@@ -20,7 +24,9 @@ def to_responses(body: dict) -> dict:
                           "output": str(m.get("content") or "")})
             continue
         if m.get("content"):
-            items.append({"role": role, "content": m["content"] if isinstance(m["content"], str) else json.dumps(m["content"])})
+            c = m["content"]
+            items.append({"role": role, "content": c if isinstance(c, str) else
+                          json.dumps(c) if role in ("assistant", "tool") else _parts(c)})
         for c in m.get("tool_calls") or []:
             f = c.get("function", {})
             items.append({"type": "function_call", "call_id": c.get("id", ""), "name": f.get("name", ""),
@@ -135,9 +141,8 @@ class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
 
     def __init__(self, phase: str = "run"):
-        self.base_url = (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-                         or "https://llm.meshpool.ai/v1").rstrip("/")
-        self.api_key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
+        self.base_url, self.api_key = PV.key_base(), PV.key()
 
     def chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
              temperature=None, extra=None, timeout=600, retries=2, **_):
@@ -158,10 +163,6 @@ class SimpleLedger:
             log_usage_line(task_id, body["model"], out["usage"])
             return out
         base_url, api_key = self.base_url, self.api_key
-        if prov in ("anthropic", "gemini"):
-            (base_url, api_key), wire = PV.endpoint(prov), "chat"
-        elif prov in PV.SIGNIN_ONLY:
-            raise RuntimeError(f"{PV.name(prov)} models run only in their maker's agent.")
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
         stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"
@@ -187,8 +188,8 @@ class SimpleLedger:
                            else r.read())
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as e:
+                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429) or attempt == retries:
                 break
             time.sleep(1.5 * (attempt + 1))

@@ -198,6 +198,8 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", s
                 row[i] = fmt(lab, bk.name(f"{prefix}{key}_{sk}"))
         stats.append(row)
     m, p25, p75 = (bk.name(f"{prefix}ev_ebitda_{k}") for k in ("median", "p25", "p75"))
+    if any(_num(v) is None for v in (m, p25, p75)):     # not recalculated: no statistics to show, no page
+        return None
     what = "Precedent deals paid" if is_prec else "Peers are valued at"
     title = f"{what} a median {_x(m)} EV/EBITDA, with the middle half at {_x(p25)}-{_x(p75)}"
     prov = [bk.fact(f"{kind} EV/EBITDA median {_x(m)}, 25th percentile {_x(p25)}, 75th percentile {_x(p75)}",

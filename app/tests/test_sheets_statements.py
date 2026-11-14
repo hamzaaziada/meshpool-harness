@@ -104,6 +104,36 @@ def test_spread_fallbacks_restatements_and_gaps():
 
 
 @lo
+def test_52_53_week_years_get_valid_labels_and_names():
+    ends = [("2020-01-05", "2021-01-02"), ("2021-01-03", "2022-01-01"), ("2022-01-02", "2022-12-31")]
+    facts = _facts(Revenues=[_fact(100e6 + i, e, s) for i, (s, e) in enumerate(ends)],
+                   NetIncomeLoss=[_fact(10e6, e, s) for s, e in ends])
+    sp = S.spread(facts, years=3)
+    assert sp.years == ["FY2020", "FY2021", "FY2022"] and sp.ends["FY2021"] == "2022-01-01"
+    wb = B.banker_workbook("52/53", "Spread", "T", "2026-11-13", middle=("Historicals",))
+    S.write_spread(wb["Historicals"], 4, sp)
+    import re
+    assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", n) for n in wb.defined_names.keys())
+    assert "h_revenue_fy2021" in wb.defined_names
+    assert S.name_part("FY2022-12-31") == "fy2022_12_31"
+    assert S.calendarize({"2022-01-01": 90.0, "2022-12-31": 100.0}, 2021)[0] == 90.0   # early January is December
+
+
+def test_q4_share_count_is_not_full_year_less_three_quarters():
+    qs = [("2025-01-01", "2025-03-31"), ("2025-04-01", "2025-06-30"), ("2025-07-01", "2025-09-30")]
+    rev = [_fact(400e6, "2024-12-31", "2024-01-01"), _fact(440e6, "2025-12-31", "2025-01-01")] + \
+        [_fact(100e6, e, s, form="10-Q") for s, e in qs]
+    sh = [_fact(50e6, "2025-12-31", "2025-01-01")] + [_fact(49e6 + i * 1e6, e, s, form="10-Q")
+                                                      for i, (s, e) in enumerate(qs)]
+    facts = _facts(Revenues=rev, WeightedAverageNumberOfDilutedSharesOutstanding=sh)
+    q = S.spread_quarters(facts, 4, ["revenue", "diluted_shares"])
+    assert q.labels == ["Q1 FY2025", "Q2 FY2025", "Q3 FY2025", "Q4 FY2025"]
+    assert q.value("revenue", "Q4 FY2025") == pytest.approx(140.0)                      # flows: FY less Q1-Q3
+    c = q.cells["diluted_shares"]["Q4 FY2025"]
+    assert c.value == pytest.approx(50.0) and "weighted average" in c.derived           # not 50 - 49 - 50 - 51
+    assert S.ltm(q, "diluted_shares") == (pytest.approx(50.0), "latest quarter, Q4 FY2025")
+
+
 def test_write_spread_is_sourced_and_checks_recalculate(tmp_path):
     sp = S.spread(S.load_companyfacts(AAPL), 3)
     wb = B.banker_workbook("Apple history", "Spread", "T", "2026-11-13", middle=("Historicals", "Inputs"))
@@ -281,7 +311,7 @@ def recompute(case: str) -> dict:
 
     def value(w, g):
         pv = sum(f / (1 + w) ** (t - x["mid_year"] / 2) for t, f in enumerate(o["fcf"], start=1))
-        tv = o["fcf"][-1] * (1 + g) / (w - g) / (1 + w) ** n
+        tv = o["fcf"][-1] * (1 + g) / (w - g) / (1 + w) ** (n - x["mid_year"] / 2)   # Gordon: final-year timing
         return pv, tv
     pv, pvtv = value(wacc, x["terminal_growth"])
     ev = pv + pvtv
