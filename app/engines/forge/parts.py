@@ -240,6 +240,8 @@ def p_chart(ctx, sl, n, part, box, look, i, s, card):
 def p_table(ctx, sl, n, part, box, look, i, s, card):
     x, y, w, h = box
     t = dict(part.get("table") if isinstance(part.get("table"), dict) else part)
+    if part.get("_bump"):                                   # the composition's type step (measure() uses the same)
+        t["size"] = R.T["cell"] + int(part["_bump"])
     t["columns"] = [R._txt(c) for c in t.get("columns") or []]
     rows = [[R._cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
     dropped = []
@@ -272,50 +274,96 @@ def _stat_grid(k, w, h, gap):
     return best[1], best[2]
 
 
-def p_stats(ctx, sl, n, part, box, look, i, s, card):
-    x, y, w, h = box
-    items = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
-    if len(items) > 6:
-        _note(s, f"part {i}: {len(items) - 6} figures left out: " + "; ".join(_txt(v) for v in items[6:]))
-        items = items[:6]
+STAT_VALUE_SIZES = (40, 36, 32, 28, 24, 22, 20)
+STAT_GROW = 1.3            # a tile may be this much taller than its content (centred air), never more
+
+
+def _stat_items(part):
+    return [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []][:6]
+
+
+def _stat_rest(it, size_label):
+    rest = [{"text": it.get("label") or "", "size": size_label, "numbers": False, "space_before": 4}]
+    if it.get("delta"):
+        rest.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2})
+    return [b for b in rest if b["text"]]
+
+
+def stats_plan(items, w, boxed, h=None) -> dict:
+    """How k figures sit in a w-wide box: (cols, rows), 'stack' tiles (figure over its label) or 'row' tiles (figure
+    left, label right, for wide boxes), the figure size, and the natural tile height. With `h`, the arrangement whose
+    natural height uses h best without exceeding it; without, the best-proportioned one."""
     k = max(1, len(items))
-    boxed = LOOKS[look]["card"]
     gap = 0.15 if boxed else 0.2
-    cols, rows = _stat_grid(k, w, h, gap)
-    tw, th = (w - gap * (cols - 1)) / cols, (h - gap * (rows - 1)) / rows
     pad = 0.12 if boxed else 0.06
-    iw = tw - 2 * pad
-    # one value size for every tile: the largest that fits the widest value and the tallest tile text
-    vsize = 20
-    for z in (40, 36, 32, 28, 24, 22, 20):
-        ok = True
-        for it in items:
-            rest = [{"text": it.get("label") or "", "size": R.bump(12), "numbers": False, "space_before": 4}]
-            if it.get("delta"):
-                rest.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2})
-            need = (_lines(it.get("value", ""), iw, z, head=True) * R._pitch(z, 1.0) / 72 + R._need(rest, iw))
-            if _head_w(it.get("value", ""), z) > iw * 0.97 or need > th - 0.1:
-                ok = False
-                break
-        if ok:
-            vsize = z
-            break
+    cands = []
+    for cols in range(1, k + 1):
+        rows = -(-k // cols)
+        tw = (w - gap * (cols - 1)) / cols
+        for style in ("stack", "row") if tw >= 4.0 else ("stack",):
+            vw_max = (tw - 2 * pad) * (0.97 if style == "stack" else 0.42)
+            vsize = next((z for z in STAT_VALUE_SIZES if all(_head_w(it.get("value", ""), z) <= vw_max for it in items)),
+                         None)
+            if vsize is None:
+                continue
+            vw = max(_head_w(it.get("value", ""), vsize) for it in items) + 0.15
+            lab = R.bump(12) + (2 if style == "row" else 0)
+            if style == "stack":
+                th = max(R._pitch(vsize, 1.0) / 72 + R._need(_stat_rest(it, lab), tw - 2 * pad) for it in items) + 0.2
+            else:
+                th = max(max(R._pitch(vsize, 1.0) / 72, R._need(_stat_rest(it, lab), tw - 2 * pad - vw)) for it in items) + 0.22
+            total = rows * th + gap * (rows - 1)
+            shape = abs(math.log(max(tw, 0.01) / max(th, 0.01) / (1.6 if style == "stack" else 4.0)))
+            cands.append({"cols": cols, "rows": rows, "style": style, "vsize": vsize, "vw": vw, "label": lab,
+                          "th": th, "tw": tw, "gap": gap, "pad": pad, "total": total,
+                          "score": shape + 0.4 * (cols * rows - k) - vsize / 60})
+    if not cands:                                          # a figure too wide for any tile: the smallest size, one column
+        return {"cols": 1, "rows": k, "style": "stack", "vsize": 20, "vw": w, "label": R.bump(12), "th": 0.9, "tw": w,
+                "gap": gap, "pad": pad, "total": k * 0.9 + gap * (k - 1), "score": 0}
+    if h is None:
+        return min(cands, key=lambda c: c["score"])
+    fit = [c for c in cands if c["total"] <= h + 0.01]
+    if not fit:
+        return min(cands, key=lambda c: c["total"])
+    return max(fit, key=lambda c: (min(h, c["total"] * STAT_GROW) - 0.15 * c["score"], -c["score"]))
+
+
+def p_stats(ctx, sl, n, part, box, look, i, s, card):
+    """Figures as tiles sized to their content (at most STAT_GROW taller), figures aligned across a row."""
+    x, y, w, h = box
+    raw = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
+    if len(raw) > 6:
+        _note(s, f"part {i}: {len(raw) - 6} figures left out: " + "; ".join(_txt(v) for v in raw[6:]))
+    items = raw[:6]
+    boxed = LOOKS[look]["card"]
+    P = stats_plan(items, w, boxed, h)
+    cols, rows, gap, pad = P["cols"], P["rows"], P["gap"], P["pad"]
+    th = min(P["th"] * (STAT_GROW if boxed else 3.0), max(P["th"], (h - gap * (rows - 1)) / rows))   # no card: the
+                                                                                    # hairlined figures may spread
+    tw = P["tw"]
+    used = rows * th + gap * (rows - 1)
+    y += max(0.0, (h - used) / 2) if card is None else 0.0
+    top_pad = (th - P["th"]) / 2 + 0.08                   # every figure in a row starts on the same line
     for j, it in enumerate(items):
         r_, c_ = divmod(j, cols)
         tx, ty = x + c_ * (tw + gap), y + r_ * (th + gap)
         tile = _shape(sl, MSO_SHAPE.RECTANGLE, tx, ty, tw, th, f"ov_role_numeral_Stat{i}_{j + 1}",
                       fill=TC.BACKGROUND_1 if boxed else None)
-        bl = [{"text": _plain(it.get("value", "")), "size": vsize, "bold": True, "heading": True, "numbers": False,
-               "color": TC.ACCENT_1, "line_spacing": 1.0, "prov": it.get("prov")}]
-        if it.get("label"):
-            bl.append({"text": it["label"], "size": R.bump(12), "numbers": False, "space_before": 4})
-        if it.get("delta"):
-            bl.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2,
-                       "color": TC.TEXT_2})
-        rest, ok = R._fit(bl[1:], iw, th - 0.1 - R._pitch(vsize, 1.0) / 72, FLOOR)
+        val = [{"text": _plain(it.get("value", "")), "size": P["vsize"], "bold": True, "heading": True, "numbers": False,
+                "color": TC.ACCENT_1, "line_spacing": 1.0, "prov": it.get("prov")}]
+        rest = _stat_rest(it, P["label"])
+        if P["style"] == "stack":
+            iw = tw - 2 * pad
+            rest, ok = R._fit(rest, iw, th - 0.1 - R._pitch(P["vsize"], 1.0) / 72, FLOOR)
+            _in_shape(tile, val + rest, ctx, n, (pad, top_pad, pad, 0.04), MSO_ANCHOR.TOP)
+        else:                                             # figure left, its label right, both centred on the row
+            _in_shape(tile, val, ctx, n, (pad, 0.04, tw - pad - P["vw"], 0.04), MSO_ANCHOR.MIDDLE)
+            iw = tw - 2 * pad - P["vw"]
+            rest, ok = R._fit(rest, iw, th - 0.12, FLOOR)
+            R._write(R._box(sl, tx + pad + P["vw"], ty + 0.04, iw, th - 0.08, f"ov_StatLabel{i}_{j + 1}",
+                            MSO_ANCHOR.MIDDLE), rest, ctx, n)
         if not ok:
             ctx.miss(n, f"figure {j + 1} of part {i}", 3)
-        _in_shape(tile, bl[:1] + rest, ctx, n, (pad, 0.05, pad, 0.05), MSO_ANCHOR.MIDDLE)
         if not boxed:                                    # hairlines between tiles, not boxes around them
             if c_ < cols - 1 and j + 1 < len(items):
                 _vline(sl, tx + tw + gap / 2, ty + 0.08, th - 0.16, name=f"ov_StatRuleV{i}_{j + 1}")
@@ -324,7 +372,8 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
 
 
 def _text_blocks(part, color=TC.TEXT_1, lead_size=None, size=None):
-    lead_size, size = lead_size or R.bump(14), size or R.bump(12)
+    up = int(part.get("_bump") or 0)                      # the composition's type step for this part
+    lead_size, size = (lead_size or R.bump(14)) + up, (size or R.bump(12)) + up
     bl = []
     lead = part.get("lead") or part.get("title")
     if lead:
@@ -694,6 +743,206 @@ def _layout_for(s, k):
     return lay
 
 
+# Column model of each layout on the 24-column grid: ((first col, last col), [part slots top to bottom]).
+COLUMNS = {
+    "full": [((0, 23), [0])],
+    "halves": [((0, 11), [0]), ((12, 23), [1])],
+    "halves_v": [((0, 23), [0, 1])],
+    "thirds": [((0, 7), [0]), ((8, 15), [1]), ((16, 23), [2])],
+    "quarters": [((0, 11), [0, 2]), ((12, 23), [1, 3])],
+    "main_side": [((0, 15), [0]), ((16, 23), [1])],
+    "side_main": [((0, 7), [0]), ((8, 23), [1])],
+    "main_stack": [((0, 11), [0]), ((12, 23), [1, 2])],
+    "stack_main": [((0, 11), [0, 1]), ((12, 23), [2])],
+}
+FLEX = ("chart", "process", "timeline", "matrix2x2")        # exhibits that take the height they are given
+MIN_H = {"chart": 2.0, "process": 1.3, "timeline": 1.4, "matrix2x2": 2.6}
+MAX_PARTS = 4
+BUMPS = (0, 1, 2, 3)                                         # type steps a text part may take to use its column
+
+
+def _overhead(part, w, look) -> tuple[float, float]:
+    """(height the frame takes above and below the body, horizontal padding per side), as _frame draws it."""
+    L = LOOKS[look]
+    card = L["card"] and part.get("type") != "callout"
+    head = _plain(part.get("heading") or "").strip()
+    used = 0.0
+    ww = w - (L["inset"] or 0)
+    if head:
+        if L["heading"] == "tab":
+            bl, _ = R._fit([{"text": head, "size": R.bump(13), "bold": True}], ww - 0.24, 0.62, 11)
+            used = max(0.36, R._need(bl, ww - 0.24) + 0.1)
+        else:
+            bl, _ = R._fit([{"text": head, "size": R.bump(14), "bold": True}], ww, 0.62, 12)
+            used = R._need(bl, ww) + 0.02 + (0.03 if L["heading"] == "rule" else 0)
+        used += L["after"]
+    pad = L["pad"] if card else 0.0
+    return used + (pad if head else 2 * pad) + (L["inset"] or 0), pad
+
+
+def _chart_of(part):
+    return part.get("chart") if isinstance(part.get("chart"), dict) else {k: v for k, v in part.items()
+                                                                         if k not in ("type", "heading")}
+
+
+def measure(part, w, look, bump=0) -> tuple[float, float, float]:
+    """(min, natural, max) height of a part drawn w wide, frame included. Text, callouts, tables and quotes have one
+    natural height (they never stretch); figures may grow a little; charts, processes, timelines and 2x2s are
+    exhibits that take what they are given."""
+    oh, pad = _overhead(part, w, look)
+    iw = w - 2 * pad
+    t = part.get("type")
+    if t == "chart":
+        c = _chart_of(part)
+        if c.get("kind") not in ("stats", "bubble") and R.chart_problems(c):
+            st = R.stat_stack(c)
+            if st["items"]:
+                return measure({"type": "stats", "heading": part.get("heading"), "items": st["items"]}, w, look)
+        unit = (R._need([{"text": part["unit"], "size": R.bump(11)}], iw) + 0.06) if part.get("unit") else 0
+        nat = R.chart_natural_h(c, iw)
+        if nat:
+            return oh + unit + nat, oh + unit + nat, oh + unit + nat
+        return oh + unit + MIN_H["chart"], oh + unit + 3.2, 99.0
+    if t in FLEX:
+        return oh + MIN_H[t], oh + MIN_H[t] + 0.8, 99.0
+    if t == "stats":
+        P = stats_plan(_stat_items(part), iw, LOOKS[look]["card"])
+        return oh + P["total"], oh + P["total"], oh + P["total"] * (STAT_GROW if LOOKS[look]["card"] else 3.0)
+    if t == "text":
+        need = R._need(_text_blocks(dict(part, _bump=bump)), iw) + 0.04
+        return oh + need, oh + need, oh + need
+    if t == "callout":
+        need = R._need(_text_blocks(dict(part, _bump=bump), TC.BACKGROUND_1, R.bump(16), R.bump(13)), iw - 0.5) + 0.32
+        return oh + need, oh + need, oh + need
+    if t == "table":
+        tb = dict(part.get("table") if isinstance(part.get("table"), dict) else part)
+        tb["columns"] = [R._txt(c) for c in tb.get("columns") or []]
+        tb["rows"] = [[R._cell(c) for c in (r if isinstance(r, list) else [r])] for r in tb.get("rows") or []]
+        if bump:
+            tb["size"] = R.T["cell"] + bump
+        from types import SimpleNamespace
+        ctx = SimpleNamespace(carry_rows=None)
+        need = R._table(ctx, None, 0, dict(tb), 0, 0, iw, 20.0, dry=True) * 1.06 + 0.1   # rendered rows run a little
+        return oh + need, oh + need, oh + need                                           # taller than measured
+    if t == "harvey":
+        k = len(part.get("rows") or [])
+        nat = 0.5 + 0.5 * k
+        return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 0.8 * k
+    if t == "quote":
+        bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18 + bump, "italic": True}]
+        if part.get("attribution"):
+            bl.append({"text": _txt(part["attribution"]), "size": R.bump(12), "space_before": 10})
+        need = R._need(bl, iw - 0.6) + 0.2
+        return oh + need, oh + need, oh + need * 1.2
+    return oh + 1.0, oh + 1.0, 99.0
+
+
+ALTERNATIVES = {1: ["full"], 2: ["halves", "main_side", "side_main", "halves_v"],
+                3: ["main_stack", "stack_main", "thirds", "main_side", "side_main", "halves", "halves_v"],
+                4: ["quarters", "main_stack", "stack_main", "main_side", "side_main"]}
+TEXTY = ("text", "callout", "quote")      # tables keep their size: a wrapped header is hard to measure dry
+KEEP_EMPTY = 0.10                # the asked-for layout stays when it leaves at most this share of the body empty
+
+
+def _compose_one(parts, lay, look, top, bottom):
+    """One layout's composition: (placements, overflow in inches, empty share of the body)."""
+    cols = [[span, list(slots)] for span, slots in COLUMNS[lay]]
+    nreg = sum(len(sl_) for _, sl_ in cols)
+    H = bottom - top
+    widths = [R.span24(*sp)[1] for sp, _ in cols]
+    for extra in range(nreg, min(len(parts), MAX_PARTS)):   # an extra part goes where it fits best at that width
+        room = [H - sum(measure(parts[j], widths[c], look)[1] + GAP for j in cols[c][1] if j < len(parts))
+                - measure(parts[extra], widths[c], look)[1] - GAP for c in range(len(cols))]
+        cols[max(range(len(cols)), key=lambda c: room[c])][1].append(extra)
+    out, over_all, empty = [], 0.0, 0.0
+    for (sp, slots), w in zip(cols, widths):
+        x = R.span24(*sp)[0]
+        slots = [j for j in slots if j < len(parts)]
+        if not slots:
+            empty += H * w
+            continue
+        gaps = GAP * (len(slots) - 1)
+        bumps = {j: 0 for j in slots}
+        ms = {j: measure(parts[j], w, look) for j in slots}
+        # step text and tables up the type scale while the column has room and no exhibit would take it anyway
+        if not any(parts[j].get("type") in FLEX and ms[j][2] > ms[j][1] for j in slots):
+            for b in BUMPS[1:]:
+                trial = {j: (measure(parts[j], w, look, min(b, 2) if parts[j].get("type") == "callout" else b)
+                             if parts[j].get("type") in TEXTY else ms[j]) for j in slots}
+                if sum(m[1] for m in trial.values()) + gaps > H:
+                    break
+                ms = trial
+                bumps = {j: ((min(b, 2) if parts[j].get("type") == "callout" else b)
+                             if parts[j].get("type") in TEXTY else 0) for j in slots}
+        hs = {j: ms[j][1] if parts[j].get("type") not in FLEX else ms[j][0] for j in slots}
+        slack = H - sum(hs.values()) - gaps
+        for _ in range(4):                                 # exhibits take the room first, then figures (capped)
+            grow_ = [j for j in slots if ms[j][2] > hs[j] + 0.01]
+            grow_ = [j for j in grow_ if parts[j].get("type") in FLEX] or grow_
+            if slack <= 0.01 or not grow_:
+                break
+            share = slack / len(grow_)
+            for j in grow_:
+                add = min(share, ms[j][2] - hs[j])
+                hs[j] += add
+                slack -= add
+        over = sum(hs.values()) + gaps - H
+        if over > 0.01:                                    # too tall: exhibits to their minimum, then the tallest part
+            for j in slots:
+                if parts[j].get("type") in FLEX and over > 0:
+                    take = min(over, hs[j] - ms[j][0])
+                    hs[j] -= take
+                    over -= take
+            if over > 0.01:
+                over_all += over
+                last = max(slots, key=lambda j: hs[j])
+                hs[last] = max(0.6, hs[last] - over)       # the part fits what it can and notes the rest
+        y = top
+        for j in slots:
+            out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
+            y += hs[j] + GAP
+        empty += max(0.0, H - (y - GAP - top)) * w
+    # side-by-side single cards of nearly one height share it (aligned feet); a much shorter card keeps its own
+    xs = {}
+    for o in out:
+        xs[o[1][0]] = xs.get(o[1][0], 0) + 1
+    row = [o for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1 and o[2].get("type") not in FLEX]
+    if len(row) >= 2:
+        tallest = max(o[1][3] for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1)
+        for k_, (j, (x, y, w, h), p) in enumerate(out):
+            if (j, (x, y, w, h), p) in row and h >= 0.8 * tallest:
+                out[k_] = (j, (x, y, w, tallest), p)
+    return out, over_all, empty / (H * (R.RIGHT - R.LEFT))
+
+
+def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dict]]:
+    """The slide's parts as one composition: each column of the layout stacks its parts at one gap; text, tables and
+    figures take their natural height (stepping up the type scale while the column has room); exhibits take the
+    rest; parts beyond the layout's regions are stacked where they fit best, never dropped. When the asked-for
+    layout would overflow or leave much of the body empty, the layout that fits the content best is used instead
+    (deterministic, scored on overflow and empty area). Returns [(part index, (x, y, w, h), part with its type
+    step)]."""
+    if len(parts) > MAX_PARTS:
+        _note(s, "parts left out (at most four on a slide): "
+              + "; ".join(str(p.get("heading") or p.get("type")) for p in parts[MAX_PARTS:]))
+        parts = parts[:MAX_PARTS]
+    k = len(parts)
+    best = None
+    for cand in [lay] + [c for c in ALTERNATIVES.get(k, []) if c != lay]:
+        if LAYOUTS[cand] > k:
+            continue
+        placed, over, empty = _compose_one(parts, cand, look, top, bottom)
+        if cand == lay and (any(p.get("type") == "table" for p in parts) or over <= 0.01 and empty <= KEEP_EMPTY):
+            return placed                                  # the asked-for layout fits (and fills): keep it; a table
+                                                           # is never moved into a narrower column for fill alone
+        score = 10 * over + empty + (0 if cand == lay else 0.06)
+        if best is None or score < best[0] - 1e-9:
+            best = (score, cand, placed)
+    if best[1] != lay:
+        _note(s, f"layout '{lay}' changed to '{best[1]}': the parts fit it better (no overflow, less empty space)")
+    return best[2]
+
+
 def a_grid(ctx, s, sl, n):
     R._header(ctx, s, sl, n)
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
@@ -702,13 +951,15 @@ def a_grid(ctx, s, sl, n):
         _note(s, f"look '{look}' is not one of {', '.join(LOOKS)}; used editorial")
         look = "editorial"
     lay = _layout_for(s, len(parts))
-    boxes = regions(lay)
-    if len(parts) > len(boxes):
-        _note(s, f"layout '{lay}' has {len(boxes)} regions; parts left out: "
-              + "; ".join(str(p.get("heading") or p.get("type")) for p in parts[len(boxes):]))
-        parts = parts[:len(boxes)]
-    for i, (p, b) in enumerate(zip(parts, boxes), 1):
-        render_part(ctx, sl, n, p, b, look, i, s)
+    if len(parts) > LAYOUTS[lay]:
+        _note(s, f"layout '{lay}' has {LAYOUTS[lay]} regions for {len(parts)} parts; the extra parts were stacked")
+    notes = s.get("footnotes") or []
+    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    bottom = R.FOOT_RULE_Y - 0.08 - notes_h if notes else R.BODY_B
+    if notes:
+        ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h
+    for j, box, p in compose(parts, lay, look, R.BODY_Y, bottom, s):
+        render_part(ctx, sl, n, p, box, look, j + 1, s)
 
 
 # ------------------------------------------------------------------ schema gate

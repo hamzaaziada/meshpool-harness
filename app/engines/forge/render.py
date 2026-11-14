@@ -587,8 +587,18 @@ def _header(ctx, s, sl, n, title_w=None):
         x -= 0.3
 
 
+_NOTE_MARK = re.compile(r"^\s*(?:\^?\d{1,2}[.):]?|[¹²³⁴⁵⁶⁷⁸⁹]+)\s+(?=\S)")
+_NOTE_TAIL = re.compile(r"\s*(?:\^\d{1,2}|[¹²³⁴⁵⁶⁷⁸⁹]+)\s*$")
+
+
+def footnote_text(t) -> str:
+    """A footnote without the marker the writer typed ("1. ", "^1 ", "¹ ") or a stray one at its end: the footer
+    numbers the notes itself."""
+    return _NOTE_TAIL.sub("", _NOTE_MARK.sub("", str(t or ""))).strip()
+
+
 def _footer(ctx, s, sl, n):
-    notes = s.get("footnotes") or []
+    notes = [footnote_text(t) for t in s.get("footnotes") or [] if footnote_text(t)]
     lc = getattr(ctx, "label_col_notes", None)
     ctx.label_col_notes = None
     if notes and lc:                                  # dense matrix: footnotes in the bottom of the label column
@@ -615,6 +625,14 @@ def _footer(ctx, s, sl, n):
         label = f"{n}"
     else:
         label = f"{n}" if BRAND.get("footer_right") else f"{_firm_label(s)}      {n}"
+    x = RIGHT
+    for k, tag in enumerate(reversed(getattr(ctx, "stamps", None) or [])):   # the deck's stamp, on every content
+        tw = 0.12 + _need_w(tag, T["tag"], True)                               # slide, above the title glyphs
+        x -= tw
+        _write(_box(sl, x, 0.02, tw, 0.18, f"ov_Tag{k}", MSO_ANCHOR.BOTTOM),
+               [{"text": tag, "size": T["tag"], "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
+        _rule(sl, x, 0.21, tw, TC.TEXT_1, 0.75, f"ov_TagRule{k}")
+        x -= 0.3
     if right - colx(10) >= 0.3:
         _write(_box(sl, colx(10), SRC_Y, right - colx(10), 0.25, "Firm"),
                [{"text": label, "size": T["src"] + 1, "numbers": False, "align": PP_ALIGN.RIGHT}])
@@ -891,6 +909,25 @@ def _chart_box(kind, ncat, nser, x, y, w, h):
     return x, y, w, h
 
 
+def _stands_up(kind, cats) -> bool:
+    """A few bars read better as columns standing up, full height (labels wrap under them)."""
+    return kind == "bar" and (len(cats) <= 5 and max((len(str(v)) for v in cats), default=0) <= 22
+                              or len(cats) <= 4 and max((len(str(v)) for v in cats), default=0) <= 34)
+
+
+def chart_natural_h(c: dict, w: float) -> float | None:
+    """The height a chart's data sets (horizontal bars: one slot per category; a football field: one row per
+    method), or None for charts that take the height they are given (columns, lines, waterfalls)."""
+    kind = c.get("kind", "column")
+    cats = c.get("categories") or []
+    nser = len(c.get("series") or [])
+    if kind == "range":
+        return 0.42 + 0.34 + 0.7 * max(1, len(cats))
+    if kind in ("bar", "stacked_bar") and not _stands_up(kind, cats):
+        return _chart_box(kind, len(cats), nser, 0, 0, w, 99.0)[3]
+    return None
+
+
 def _gap_for(kind, ncat, nser, w, h):
     """Gap width (% of a bar) that keeps columns at most ~0.95in and bars ~0.45in thick inside a full frame."""
     clustered = kind in ("bar", "column")
@@ -935,17 +972,27 @@ def _nice_bounds(lo: float, hi: float) -> tuple[float, float]:
 
 
 def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
-    """Football field: one floating bar per method (low to high) as a native stacked bar chart (editable), the low
-    and high written at the bar ends, and an optional marker line (current price, offer) across all bars."""
-    cats = [str(v) for v in c["categories"]]
-    lows = [float(v) for v in c["series"][0]["values"]]
-    highs = [float(v) for v in c["series"][1]["values"]]
+    """Football field, drawn the banker's way: one floating bar per method (low to high) as a native stacked bar
+    chart (editable), methods sorted by their midpoint (highest first), the low and high written at the bar ends, a
+    value axis with ticks under the bars, and every reference price (offer, current price) as a labelled vertical
+    line. The axis spans every value, markers included. Returns the frame; its drawn height is `gf.drawn_h`."""
+    order = sorted(range(len(c["categories"])), key=lambda j: -(float(c["series"][0]["values"][j])
+                                                                + float(c["series"][1]["values"][j])))
+    cats = [str(c["categories"][j]) for j in order]
+    lows = [float(c["series"][0]["values"][j]) for j in order]
+    highs = [float(c["series"][1]["values"][j]) for j in order]
     unit, dec = c.get("unit", "$"), c.get("decimals")
-    mk = c.get("marker") or {}
-    pts = lows + highs + ([float(mk["value"])] if mk.get("value") is not None else [])
+    marks = range_markers(c)
+    pts = lows + highs + [m["value"] for m in marks]
     amin, amax = _nice_bounds(min(pts), max(pts))
-    slot = min(0.8, (h - 0.5) / max(1, len(cats)))
-    h = min(h, slot * len(cats) / RANGE_PLOT[3] + 0.1)
+    head = 0.42 if marks else 0.1                              # marker labels above the bars
+    axis = 0.34                                                # tick labels under them
+    slot = max(0.5, min(0.85, (h - head - axis) / max(1, len(cats))))
+    ph = slot * len(cats)
+    h = head + ph + axis
+    lab_w = max(_need_w(t, T["label"]) for t in cats) + 0.25   # method names on the left
+    px0 = max(0.18, min(0.42, lab_w / w))
+    plot = (px0, head / h, 0.97 - px0 - 0.03, ph / h)
     cd = CategoryChartData()
     cd.categories = cats
     cd.add_series("Low", lows)
@@ -966,21 +1013,28 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
     for e in list(lay):
         lay.remove(e)
     ml = lay.makeelement(qn("c:manualLayout"), {})
-    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", RANGE_PLOT[0]),
-                     ("c:y", RANGE_PLOT[1]), ("c:w", RANGE_PLOT[2]), ("c:h", RANGE_PLOT[3])):
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", round(plot[0], 4)),
+                     ("c:y", round(plot[1], 4)), ("c:w", round(plot[2], 4)), ("c:h", round(plot[3], 4))):
         ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
     lay.append(ml)
-    plot = ch.plots[0]
-    plot.gap_width = 70
-    plot.overlap = 100
+    pl = ch.plots[0]
+    pl.gap_width = 60
+    pl.overlap = 100
     va, ca = ch.value_axis, ch.category_axis
     va.minimum_scale, va.maximum_scale = amin, amax
-    va.has_major_gridlines = False
-    va.visible = False
+    va.has_major_gridlines = True                              # faint verticals: values read against the axis
+    va.major_gridlines.format.line.color.theme_color = TC.ACCENT_5
+    va.major_gridlines.format.line.width = Pt(0.5)
+    va.visible = True
+    va.tick_labels.number_format = ('"$"#,##0' if str(unit).startswith("$") else "#,##0") + \
+        {"x": '"x"', "%": '"%"'}.get(str(unit), "")
+    va.tick_labels.number_format_is_linked = False
+    va.tick_label_position = XL_TICK_LABEL_POSITION.NONE    # the bars carry their values; ticks would meet the
+    va.format.line.fill.background()                        # marker labels above the plot
     ca.reverse_order = True
     ca.tick_labels.font.size = Pt(T["label"])
     ca.format.line.color.theme_color = TC.TEXT_1
-    base, rng = plot.series
+    base, rng = pl.series
     base.format.fill.background()
     base.format.line.fill.background()
     rng.format.fill.solid()
@@ -991,25 +1045,33 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
             f = rng.points[j].format
             f.fill.solid()
             f.fill.fore_color.theme_color = TC.ACCENT_3
-    px = lambda v: x + w * (RANGE_PLOT[0] + RANGE_PLOT[2] * (v - amin) / (amax - amin))  # noqa: E731
-    top, ph = y + h * RANGE_PLOT[1], h * RANGE_PLOT[3]
+    px = lambda v: x + w * (plot[0] + plot[2] * (v - amin) / (amax - amin))  # noqa: E731
+    top = y + head
     band = ph / len(cats)
     pre = OVERLAY                                              # data-placed labels: exempt from the grid snap
-    if mk.get("value") is not None:                            # marker first: it reads before the bars below it
-        mx = px(float(mk["value"]))
-        val = fmt_value(float(mk["value"]), unit, dec)
-        name_ = str(mk.get("label") or "Marker").strip()
+    placed = []                                                # marker labels, staggered when they would touch
+    for k, mk in enumerate(sorted(marks, key=lambda m: m["value"])):
+        mx = px(mk["value"])
+        val = fmt_value(mk["value"], unit, dec)
         shown = re.sub(r"[^\d.]", "", val).rstrip(".")
-        lab = name_ if shown and shown in re.sub(r"[^\d.]", "", name_) else f"{name_}: {val}"   # never "$48.42: $48.42"
-        _write(_box(sl, mx - 1.4, top - 0.34, 2.8, 0.26, pre + "MarkerLabel", MSO_ANCHOR.BOTTOM),
-               [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False}], ctx, n)
-        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(top - 0.05), Inches(mx),
+        name_ = mk["label"] or "Reference"
+        lab = name_ if shown and shown in re.sub(r"[^\d.]", "", name_) else f"{name_}: {val}"   # never "$48: $48"
+        tw = _need_w(lab, T["label"], True) + 0.12
+        row = 0 if not placed or all(abs(mx - p_) > (tw + w_) / 2 + 0.05 for p_, w_, r_ in placed if r_ == 0) else 1
+        placed.append((mx, tw, row))
+        ly = y + (0.0 if row else 0.2) if head > 0.3 else y
+        lx = min(max(mx - tw / 2, x), x + w - tw)
+        _write(_box(sl, lx, ly, tw, 0.2, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
+               [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False,
+                 "color": TC.ACCENT_3 if k == len(marks) - 1 else TC.TEXT_1}], ctx, n)
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(ly + 0.21), Inches(mx),
                                      Inches(top + ph + 0.02))
-        ln.name = pre + "Marker"
-        ln.line.color.theme_color = TC.ACCENT_3
+        ln.name = f"{pre}Marker{k + 1}"
+        ln.line.color.theme_color = TC.ACCENT_3 if k == len(marks) - 1 else TC.TEXT_1
         ln.line.width = Pt(1.5)
         ln.line.dash_style = 4                                 # dash
-    def label(xx, txt, name, right):
+
+    def label(xx, cy, txt, name, right):
         tw = _need_w(txt, T["label"]) + 0.1                    # as wide as its text, opaque: the marker runs behind
         bx = _box(sl, xx - tw if right else xx, cy - 0.12, tw, 0.24, name, MSO_ANCHOR.MIDDLE)
         bx.fill.solid()
@@ -1018,9 +1080,11 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
                      "numbers": False}], ctx, n)
     for j, (lo, hi) in enumerate(zip(lows, highs)):
         cy = top + band * (j + 0.5)
-        label(px(lo) - 0.04, fmt_value(lo, unit, dec), f"{pre}RangeLow{j + 1}", True)
-        label(px(hi) + 0.04, fmt_value(hi, unit, dec), f"{pre}RangeHigh{j + 1}", False)
-    _alt(gf, c.get("alt") or "Valuation ranges by method (football field)" + (f"; {mk.get('label')} marked" if mk else ""))
+        label(px(lo) - 0.04, cy, fmt_value(lo, unit, dec), f"{pre}RangeLow{j + 1}", True)
+        label(px(hi) + 0.04, cy, fmt_value(hi, unit, dec), f"{pre}RangeHigh{j + 1}", False)
+    _alt(gf, c.get("alt") or "Valuation ranges by method (football field)"
+         + (f"; {', '.join(m['label'] for m in marks)} marked" if marks else ""))
+    gf.drawn_h = h
     return gf
 
 
@@ -1068,7 +1132,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     kind = c.get("kind", "column")
     cats = [str(v) for v in c["categories"]]
     series = c["series"]
-    if kind == "bar" and len(cats) <= 5 and max((len(v) for v in cats), default=0) <= 22:
+    if _stands_up(kind, cats):
         kind = "column"                                   # a few short bars read better standing up, full height
     x, y, w, h = _chart_box(kind, len(cats), len(series), x, y, w, h)
     cd = CategoryChartData()
@@ -1473,8 +1537,13 @@ def _emptied(d: dict) -> bool:
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
+    ex = s.get("exhibit")
+    if not s.get("chart") and isinstance(ex, dict) and isinstance(ex.get("chart"), dict):
+        s["chart"] = ex["chart"]                          # the model nested the chart in the exhibit: same chart
     if s.get("archetype") == "football_field" and isinstance(s.get("chart"), dict):
         s["chart"] = dict(s["chart"], kind="range")
+    if isinstance(s.get("chart"), dict) and _is_bridge(s["chart"]):
+        s["chart"] = dict(s["chart"], kind="waterfall")   # start + steps = end: draw it as the bridge it is
     t = s.get("table")
     if isinstance(t, dict):
         t = dict(t)
@@ -1538,24 +1607,78 @@ REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": [
             "grid": ["parts"]}
 
 
+_BRIDGE_END = re.compile(r"(?i)total|offer|end|pro ?forma|implied|result|=|price|value|net|after|exit|target")
+
+
+def _is_bridge(c: dict) -> bool:
+    """A single-series bar/column chart whose first value plus the middle steps equals its last value, ending on a
+    total-like category (unaffected price + premium = offer price): a bridge, drawn as a waterfall."""
+    if c.get("kind") not in (None, "bar", "column") or len(c.get("series") or []) != 1:
+        return False
+    cats = [str(x) for x in c.get("categories") or []]
+    v = c["series"][0].get("values") if isinstance(c["series"][0], dict) else None
+    if not v or len(v) != len(cats) or not 3 <= len(v) <= 8 or not all(isinstance(x, (int, float)) for x in v):
+        return False
+    if not _BRIDGE_END.search(cats[-1]) or abs(v[-1]) < 1e-9:
+        return False
+    return abs(v[0] + sum(v[1:-1]) - v[-1]) <= 0.002 * abs(v[-1]) and any(abs(x) > 0 for x in v[1:-1])
+
+
+FF_MIN_METHODS = 3          # a football field is a comparison of methods: fewer than three is a range, not a field
+
+
+def range_problems(c: dict) -> list[str]:
+    """Football field: two series (low, high), one value each per method, >= 3 methods, and every range and marker in
+    one unit (a per-share offer against enterprise-value ranges in $B is not one chart)."""
+    se = [x for x in c.get("series") or [] if isinstance(x, dict)]
+    cats = c.get("categories") or []
+    if len(se) != 2 or any(len(x.get("values") or []) != len(cats) for x in se):
+        return ["a football field needs two series (low, high) with one value per method"]
+    if any(not isinstance(v, (int, float)) for x in se for v in x["values"]):
+        return ["football field values must be numbers"]
+    bad = [cats[i] for i, (a, b) in enumerate(zip(se[0]["values"], se[1]["values"])) if a > b]
+    if bad:
+        return [f"low above high for {', '.join(map(str, bad))}"]
+    out = []
+    if len(cats) < FF_MIN_METHODS:
+        out.append(f"a football field with {len(cats)} method{'s' if len(cats) != 1 else ''} is not a valuation "
+                   f"comparison; it needs >= {FF_MIN_METHODS} methods (comps, precedents, DCF, ...) in the offer's unit")
+    lo, hi = min(se[0]["values"]), max(se[1]["values"])
+    for m in range_markers(c):
+        v = m["value"]
+        if hi > 0 and (v > 2.5 * hi or (lo > 0 and v < lo / 2.5)):
+            out.append(f"the {m['label'] or 'marker'} ({v:g}) is not in the ranges' unit ({lo:g}-{hi:g}); per-share "
+                       "values and enterprise values cannot share one axis")
+            break
+    if re.search(r"(?i)\$\s?b\b|bn|billion|\bEV\b|enterprise", " ".join(map(str, cats))) and \
+            re.search(r"(?i)per share|/\s*sh", json.dumps(c.get("unit", "")) + json.dumps(range_markers(c))):
+        out.append("the methods mix enterprise values and per-share values; one unit per football field")
+    return out
+
+
+def range_markers(c: dict) -> list[dict]:
+    """The vertical reference lines of a football field (offer, current price, ...): `markers` or one `marker`."""
+    ms = c.get("markers") if isinstance(c.get("markers"), list) else [c.get("marker")] if c.get("marker") else []
+    out = []
+    for m in ms:
+        if isinstance(m, dict) and isinstance(m.get("value"), (int, float)):
+            out.append({"label": str(m.get("label") or "").strip(), "value": float(m["value"])})
+    return out
+
+
 def chart_problems(c: dict) -> list[str]:
     """Charts that would mislead: one bar, mixed units in one series, ranks drawn as quantities, short lines."""
     if not c or c.get("kind") == "bubble":
         return []
     if c.get("kind") == "range":
-        se = [x for x in c.get("series") or [] if isinstance(x, dict)]
-        cats = c.get("categories") or []
-        if len(se) != 2 or any(len(x.get("values") or []) != len(cats) for x in se):
-            return ["a football field needs two series (low, high) with one value per method"]
-        if any(not isinstance(v, (int, float)) for x in se for v in x["values"]):
-            return ["football field values must be numbers"]
-        bad = [cats[i] for i, (a, b) in enumerate(zip(se[0]["values"], se[1]["values"])) if a > b]
-        return [f"low above high for {', '.join(map(str, bad))}"] if bad else []
+        return range_problems(c)
     cats = [str(x) for x in c.get("categories") or []]
     series = [se for se in c.get("series") or [] if isinstance(se, dict)]
     out = []
     vals = [float(v) for se in series for v in se.get("values") or [] if isinstance(v, (int, float))]
-    units = {m.group(0).lower() for cat in cats for m in re.finditer(r"\(([^)]*)\)|%|\$|thousand|million|share", cat, re.I)}
+    # a parenthetical with digits is a qualifier ("Premium (35%)", "Unaffected (5 Nov 2026)"), not a unit
+    units = {m.group(0).lower() for cat in cats
+             for m in re.finditer(r"\(([^)\d]*)\)|%|\$|thousand|million|share", re.sub(r"\([^)]*\d[^)]*\)", "", cat), re.I)}
     bad = [v for se in series for v in se.get("values") or []
            if not isinstance(v, (int, float)) and not (v is None and c.get("kind") == "line")]
     if bad:
@@ -1697,6 +1820,36 @@ def schema_errors(s: dict) -> list[str]:
     return errs
 
 
+def football_fallback(s: dict) -> dict:
+    """A football field without >= 3 comparable methods becomes figures beside the argument (a grid of stats and
+    text): each method's range and each reference price as a figure, the takeaway and bullets as the argument."""
+    c = s.get("chart") or {}
+    unit, dec = c.get("unit", "$"), c.get("decimals")
+    items = [{"value": fmt_value(m["value"], unit, dec), "label": re.sub(r"\s*[$€£]?\d[\d,.]*\s*$", "", m["label"])
+              or "Reference price", "prov": c.get("prov")} for m in range_markers(c)]
+    se = [x for x in c.get("series") or [] if isinstance(x, dict)]
+    if len(se) == 2:
+        for cat, lo, hi in zip(c.get("categories") or [], se[0].get("values") or [], se[1].get("values") or []):
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+                items.append({"value": f"{fmt_value(lo, unit, dec)}–{fmt_value(hi, unit, dec)}", "label": str(cat),
+                              "prov": c.get("prov")})
+    tk = s.get("takeaway") or {}
+    text = {"type": "text", "lead": tk.get("text", ""), "prov": tk.get("prov"),
+            "bullets": [b if isinstance(b, dict) else {"text": str(b)} for b in s.get("bullets") or []]}
+    out = {k: v for k, v in s.items() if k not in ("chart", "takeaway", "bullets")}
+    out["notes"] = (s.get("notes", "") + "\n[QA] football field shown as figures: "
+                    + "; ".join(chart_problems(c))).strip()
+    if not items:
+        return dict(out, archetype="argument_only", blocks=[{"text": text["lead"], "bullets": text["bullets"]}])
+    parts = [{"type": "stats", "heading": c.get("title") or s.get("subtitle") or "Valuation reference points",
+              "items": items[:4]}]
+    if text["lead"] or text["bullets"]:
+        parts.append(text)
+    out.update(archetype="grid", layout="side_main" if len(parts) == 2 else "full", look="editorial", parts=parts)
+    out.pop("subtitle", None)
+    return out
+
+
 def fallback(s: dict) -> dict:
     """When a slide cannot satisfy its archetype, render the evidence it has in the simplest faithful layout."""
     s = dict(s)
@@ -1704,6 +1857,8 @@ def fallback(s: dict) -> dict:
         from .parts import grid_fallback
         return grid_fallback(s)
     c = s.get("chart") or {}
+    if c.get("kind") == "range" and chart_problems(c):
+        return football_fallback(s)
     if c and chart_problems(c):                        # a misleading chart becomes a stat stack, layout kept
         st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
         if len(st["items"]) < 2:                       # one number is not an exhibit: full-width argument instead
@@ -1711,9 +1866,9 @@ def fallback(s: dict) -> dict:
             s["archetype"] = "argument_only"
             if not s.get("blocks"):
                 s["blocks"] = [{"text": "", "bullets": list(s.get("bullets") or [])}]
-            if s.get("title_right"):                        # the right half's title leads the text, not the title:
-                tr = s.pop("title_right").strip(" .…")      # glued on, it made two sentences with no stop
-                s["blocks"] = [{"text": f"**{tr[0].upper() + tr[1:]}**."}] + list(s["blocks"])
+            if s.get("title_right"):                        # the right half's title leads the text as its intro
+                tr = s.pop("title_right").strip(" .…")      # line (glued onto the title it made two sentences)
+                s["intro"] = f"**{tr[0].upper() + tr[1:]}**."
             return s                                        # the callout stays a callout (so-what band)
         s["chart"] = st
         if s.get("archetype") in ("exhibit_argument",) and s.get("blocks") and s.get("title_right"):
@@ -1746,32 +1901,9 @@ def fallback(s: dict) -> dict:
 
 
 def a_argument_only(ctx, s, sl, n):
-    _header(ctx, s, sl, n)
-    blocks = []
-    for blk in s.get("blocks") or []:
-        if blk.get("text"):
-            blocks.append({"text": blk["text"], "size": ARGUMENT["intro"], "numbers": False, "space_before": 10})
-        for b in blk.get("bullets") or []:
-            b = b if isinstance(b, dict) else {"text": b}
-            blocks.append({"text": b["text"], "size": ARGUMENT["bullet"] + 2, "bullet": True, "space_before": 4,
-                           "prov": b.get("prov")})
-    x, w = span(0, 8)
-    top_h = BODY_B - BODY_Y
-    co = [b["text"] if isinstance(b, dict) else str(b) for b in (s.get("callout") or {}).get("bullets") or []]
-    if co:                                               # so-what band across the foot of the body
-        cbl = [{"text": t, "size": ARGUMENT["callout"] + 1, "bullet": True, "space_before": 3,
-                "color": TC.BACKGROUND_1} for t in co[:3]]
-        cw = RIGHT - LEFT - 0.5
-        ch = min(1.6, _need(cbl, cw) + 0.25)
-        cy = BODY_B - ch
-        band = _fill(sl, LEFT, cy, RIGHT - LEFT, ch, TC.TEXT_2, "ov_SoWhat")
-        _shape_text(band, cbl, ctx, n, (LEFT + 0.25, cy + 0.06, cw, ch - 0.1), MSO_ANCHOR.MIDDLE)
-        top_h = cy - 0.2 - BODY_Y
-    blocks, dropped = _trim_to_fit(_grow(blocks, w, top_h), w, top_h, 11)
-    if dropped:
-        ctx.miss(n, "the argument", 10)
-        _cut_note(s, dropped)
-    _write(_box(sl, x, BODY_Y, w, top_h, "Argument"), blocks, ctx, n)
+    """Words-led slide, composed with a visual per block (compose.py): stat figures, a process or icons."""
+    from .compose import argument_layout
+    argument_layout(ctx, s, sl, n)
 
 
 # ------------------------------------------------------------------ archetypes
@@ -2133,20 +2265,31 @@ def _fill_text(blocks, w, h, max_bump=5):
     return best
 
 
-def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel"):
-    """The so-what panel: a shaded box that runs to the bottom of the body, holding the takeaway (bold, full width)
-    and the bullets (one or two columns), grown to fill it and centred. The text is written into the shaded shapes
-    themselves (they edit and move as one). Text that cannot fit goes to the notes."""
+PANEL_FILL = 0.8          # a panel's text fills at least this share of its interior: it grows, then the panel shrinks
+
+
+def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel", dry=False, anchor="top", grow=True,
+           shrink=False):
+    """The so-what panel: a shaded box holding the takeaway (bold, full width) and the bullets (one or two columns).
+    The text first steps up the type scale (and paragraph spacing) to use the room it has; with shrink=True the panel
+    then shrinks to its text, so it never shows an empty interior: `h` is the most it may take, not what it takes. anchor "bottom"
+    keeps the panel's foot at y + h (a band under an exhibit), "top" keeps its head at y. Returns the height drawn
+    (with dry=True nothing is drawn: the composition is measured first). Text that cannot fit goes to the notes."""
     if h < 0.35 or not (lead or bullets):
-        return
-    iw, ih = w - 2 * PANEL_PAD, h - 0.24
+        return 0.0
+    iw = w - 2 * PANEL_PAD
     two = len(bullets) >= 3 and iw > 6
     if not two:
-        blocks, dropped = _trim_to_fit(lead + bullets, iw, ih, 10)
+        blocks, dropped = _trim_to_fit(lead + bullets, iw, h - 0.24, 10)
+        blocks = _fill_text(blocks, iw, h - 0.24) if grow else blocks
+        ph = min(h, _need(blocks, iw) / 0.95 + 0.24) if (shrink or dry) else h
+        if dry:
+            return ph
         _cut_note(s, dropped)
-        box = _fill(sl, x, y, w, h, TC.BACKGROUND_2, name)
-        _shape_text(box, _fill_text(blocks, iw, ih), ctx, n, (x + PANEL_PAD, y + 0.12, iw, ih), MSO_ANCHOR.MIDDLE)
-        return
+        y0 = y + h - ph if anchor == "bottom" else y
+        box = _fill(sl, x, y0, w, ph, TC.BACKGROUND_2, name)
+        _shape_text(box, blocks, ctx, n, (x + PANEL_PAD, y0 + 0.12, iw, ph - 0.24), MSO_ANCHOR.MIDDLE)
+        return ph
     lh = 0.0
     if lead:
         lead = [dict(b, size=T["head"]) for b in lead]
@@ -2160,22 +2303,29 @@ def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel"):
         c2, d = _trim_to_fit(c, icw, ibh, 10)
         fitted.append(c2)
         dropped += d
-    _cut_note(s, dropped)
     bump_ok = 0                                        # both columns grow by the same step, on the type scale
-    for bump in (0, T["head"] - T["body"]):
+    for bump in (0, T["head"] - T["body"]) if grow else (0,):
         if all(_need([dict(b, size=b.get("size", T["body"]) + bump) for b in c], icw) <= 0.92 * ibh for c in fitted):
             bump_ok = bump
         else:
             break
     fitted = [[dict(b, size=b.get("size", T["body"]) + bump_ok) for b in c] for c in fitted]
+    if shrink or dry:
+        bh = min(bh, max(_need(c, icw) for c in fitted) / 0.95 + 0.24)
+    ph = lh + bh
+    if dry:
+        return ph
+    _cut_note(s, dropped)
+    y0 = y + h - ph if anchor == "bottom" else y
     if lead:
-        top = _fill(sl, x, y, w, lh, TC.BACKGROUND_2, name + "Lead")
-        _shape_text(top, lead, ctx, n, (x + PANEL_PAD, y + 0.12, iw, lh - 0.12), MSO_ANCHOR.BOTTOM)
+        top = _fill(sl, x, y0, w, lh, TC.BACKGROUND_2, name + "Lead")
+        _shape_text(top, lead, ctx, n, (x + PANEL_PAD, y0 + 0.12, iw, lh - 0.12), MSO_ANCHOR.BOTTOM)
     for i, c in enumerate(fitted):
         cx = x + i * cw
-        box = _fill(sl, cx, y + lh, cw, bh, TC.BACKGROUND_2, f"{name}Col{i + 1}")
-        _shape_text(box, c, ctx, n, (cx + (PANEL_PAD if i == 0 else PANEL_PAD / 2), y + lh + 0.12, icw, ibh),
+        box = _fill(sl, cx, y0 + lh, cw, bh, TC.BACKGROUND_2, f"{name}Col{i + 1}")
+        _shape_text(box, c, ctx, n, (cx + (PANEL_PAD if i == 0 else PANEL_PAD / 2), y0 + lh + 0.12, icw, bh - 0.24),
                     MSO_ANCHOR.MIDDLE)
+    return ph
 
 
 def a_table_focus(ctx, s, sl, n):
@@ -2222,15 +2372,18 @@ def a_table_focus(ctx, s, sl, n):
             side = None
     if as_chart or side:
         if as_chart:                                       # a small all-number table reads better as a chart
-            _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
+            gf = _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
             ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
+            eh = gf.height / 914400
         else:                                              # short table: table left, its argument right
-            _table(ctx, sl, n, dict(side_t, _pad=0.16), tx, y, tw, hgt)
+            eh = _table(ctx, sl, n, dict(side_t, _pad=0.16), tx, y, tw, hgt).rendered_h
         lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
                 if tk.get("text") else [])
         bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
               for b in bullets]
-        _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl)
+        # the panel aligns to the exhibit's height (taller only when its text needs it), never to the whole body
+        need = _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True, grow=False)
+        _panel(ctx, s, sl, n, ax, y, aw, max(eh, min(hgt, need)), [], lead + bl, shrink=True)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
         return
     # Full width (wide or long table): the table at its natural size, then the so-what panel down to the bottom of
@@ -2241,17 +2394,16 @@ def a_table_focus(ctx, s, sl, n):
     bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 4, "prov": b.get("prov")}
           for b in bullets]
     reserve = 0.0
-    if lead or bl:
-        cw = (RIGHT - LEFT - 2 * PANEL_PAD - (GUT if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
-        half = bl[: (len(bl) + 1) // 2] if len(bl) >= 3 else bl
-        reserve = min(_need(lead, RIGHT - LEFT - 2 * PANEL_PAD) + _need(half, cw) + 0.5, 0.45 * (bottom_all - y))
+    if lead or bl:                                      # the panel as tall as its text: the table takes the rest
+        reserve = _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.45 * (bottom_all - y), lead, bl, dry=True,
+                         grow=False) + 0.2
     bottom = bottom_all - reserve
     if not t.get("size") and len(t.get("rows") or []) <= 14:     # room to spare: a step up the type scale first
         base = T["cell"]
         for z, pad in [(z, 0.16) for z in sorted({T["head"], T["body"], base}, reverse=True) if z >= base]:
             need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
             ctx.carry_rows = None
-            if need <= 0.85 * (bottom - y):                 # margin for header wrapping the dry run cannot see
+            if need <= 0.95 * (bottom - y):                 # margin for header wrapping the dry run cannot see
                 t = dict(t, size=z, _pad=pad)
                 break
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)
@@ -2259,7 +2411,7 @@ def a_table_focus(ctx, s, sl, n):
         ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]), bullets=[],
                          title=_cont_title(s["title"]), _cont=True)
     ptop = min(bottom + 0.1, y + gf.rendered_h + 0.2)
-    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl)
+    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl, shrink=True)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 
@@ -2433,7 +2585,11 @@ def a_benchmark(ctx, s, sl, n):
     bottom_all = FOOT_RULE_Y - 0.04 - notes_h
     rows_n = len(names) + 1
     head_h = 0.42
-    want_h = min(rows_n * 0.42, bottom_all - BODY_Y - head_h - (1.05 if (lead or bl) else 0))
+    # one composition: the panel's own height first (shrink-wrapped), the peers' rows take the rest (up to 0.62in a
+    # row, so bars stay bars), and the panel follows the bars at one gap
+    need = (_panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.45 * (bottom_all - BODY_Y), lead, bl, dry=True, grow=False)
+            if (lead or bl) else 0)
+    want_h = min(rows_n * 0.62, max(rows_n * 0.36, bottom_all - BODY_Y - head_h - (need + 0.25 if need else 0)))
     top = BODY_Y + head_h
     gap = 0.3
     pw = (RIGHT - LEFT - BENCH_LABEL_W - gap * (len(panels) - 1)) / len(panels)
@@ -2460,14 +2616,29 @@ def a_benchmark(ctx, s, sl, n):
         _rule(sl, x, top - 0.04, pw, TC.TEXT_1, 0.75, f"ov_BenchRule{i + 1}")
         _bench_panel(ctx, sl, n, dict(pn, highlight=b.get("highlight")), x, top, pw, want_h, rows_n, f"Bench{i + 1}")
         ctx.track(n, " ".join(str(v) for v in pn.get("values") or []), pn.get("prov"))
-    ptop = top + want_h + 0.2
-    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl)
+    ptop = top + want_h + 0.25
+    _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl, shrink=True)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 
 def a_football_field(ctx, s, sl, n):
-    """Valuation summary: the floating-bar ranges on the left two thirds, the takeaway and bullets on the right."""
-    a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="range")), sl, n)
+    """Valuation summary: the football field across the full width (methods sorted, reference prices as labelled
+    lines), the takeaway band directly under it. Only reached with >= 3 methods in one unit (else football_fallback)."""
+    _header(ctx, s, sl, n)
+    tk = s.get("takeaway") or {}
+    lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
+            if tk.get("text") else [])
+    bl = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": T["body"], "bullet": True, "space_before": 4,
+           "prov": b.get("prov") if isinstance(b, dict) else None} for b in s.get("bullets") or []]
+    notes = s.get("footnotes") or []
+    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    bottom = FOOT_RULE_Y - 0.04 - notes_h
+    need = _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.5 * (bottom - BODY_Y), lead, bl, dry=True, grow=False)
+    gf = _range_chart(ctx, sl, n, dict(s["chart"], kind="range"), LEFT, BODY_Y, RIGHT - LEFT,
+                      bottom - BODY_Y - need - 0.25)
+    top = BODY_Y + gf.drawn_h + 0.25
+    _panel(ctx, s, sl, n, LEFT, top, RIGHT - LEFT, bottom - top, lead, bl, shrink=True)
+    ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 
 def a_grid(ctx, s, sl, n):
@@ -2609,10 +2780,16 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     errors = []
     queue = list(slides)
     n = 0
+    from collections import Counter
+    used = Counter(str(t) for s0 in slides if s0.get("archetype") not in DIVIDERS
+                   for t in set(s0.get("tags") or []) if str(t).strip())
+    deck_stamps = [t for t, k in used.most_common() if k >= 2][:2]   # "Preliminary" marks the deck: every slide (P19)
     while queue:
         s = queue.pop(0)
         mode = set_density(s.get("density") or DENSITY.get("deck"))
-        s = condense(normalize(s), mode)
+        own = [str(t) for t in s.get("tags") or [] if str(t).strip() and str(t) not in deck_stamps]
+        ctx.stamps = (deck_stamps + own)[:2]               # a slide's own qualifier stays on that slide
+        s = dict(condense(normalize(s), mode), tags=[])
         n += 1
         ctx.carry = None
         if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
