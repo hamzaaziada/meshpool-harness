@@ -1,10 +1,12 @@
-# Helper for the Meshpool installer and uninstaller. They unpack it to a temporary folder and run it from there:
+# Helper for the Meshpool installer and uninstaller. They unpack it to a temporary folder and run its text through
+# -Command (see the WinSetup macro in installer.nsi), passing the inputs as MP_STOP, MP_ADDPATH and MP_REMOVEPATH
+# environment variables, or as these parameters:
 #   -Stop DIR               close every program running from DIR (the app, its Python, Node, Git), so files can go
 #   -AddPath DIR            add DIR to the user's Path
 #   -RemovePath "A;B"       take these folders off the user's Path
 # The Path is read and written as stored in the registry (%VARIABLES% stay unexpanded) and kept as REG_EXPAND_SZ.
 # Keep this file plain ASCII: Windows PowerShell reads a script without a byte order mark in the ANSI code page.
-param([string]$Stop = "", [string]$AddPath = "", [string]$RemovePath = "")
+param([string]$Stop = $env:MP_STOP, [string]$AddPath = $env:MP_ADDPATH, [string]$RemovePath = $env:MP_REMOVEPATH)
 $ErrorActionPreference = "Continue"
 
 function Norm([string]$p) { $p.Trim().TrimEnd("\") }

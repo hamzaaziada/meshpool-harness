@@ -32,6 +32,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from meshpool_harness.config import replace_file
+
 BASE_URL = "https://chatgpt.com/backend-api/codex"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"        # the public Codex CLI OAuth client its auth.json tokens belong to
@@ -111,7 +113,7 @@ def _write(d: dict) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2)
-    os.replace(tmp, p)
+    replace_file(tmp, p)
 
 
 @contextlib.contextmanager

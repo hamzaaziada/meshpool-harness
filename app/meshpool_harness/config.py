@@ -48,6 +48,24 @@ SECRET = {"MESHPOOL_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GITHUB_TOK
           "INSTANTLY_API_KEY"}
 
 
+def replace_file(src, dst) -> None:
+    """os.replace that survives Windows: a reader, the search indexer or antivirus holding the target or the fresh
+    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up."""
+    import time
+    for i in range(20 if os.name == "nt" else 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == (19 if os.name == "nt" else 0):
+                try:
+                    os.unlink(src)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05)
+
+
 def home() -> Path:
     """Where settings, MCP config and runs live. The zip install uses its own folder; the desktop apps set
     MESHPOOL_HOME to the user's app-data folder."""

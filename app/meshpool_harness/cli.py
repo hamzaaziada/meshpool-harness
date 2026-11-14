@@ -142,12 +142,21 @@ def _agent_parser():
     return ap
 
 
+def _no_console() -> bool:
+    """Windows: this process has no console (the app, or the app restarted after an update)."""
+    try:
+        import ctypes
+        return not ctypes.windll.kernel32.GetConsoleWindow()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
         import time
         time.sleep(3)
-    if os.name == "nt" and sys.executable.lower().endswith("pythonw.exe"):
+    if os.name == "nt" and (sys.executable.lower().endswith("pythonw.exe") or _no_console()):
         # The Windows app runs windowless under pythonw.exe, whose children get no usable stdin/stdout. Launch child
         # Pythons (Hermes, MCP servers, engines) with python.exe; their console windows are suppressed.
         from meshpool_harness.ui.desktop import _hide_child_consoles

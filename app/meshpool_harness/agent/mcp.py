@@ -86,7 +86,7 @@ def write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
             os.chmod(tmp, 0o644 if mode is None else mode)
         except OSError:
             pass
-        os.replace(tmp, path)
+        C.replace_file(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

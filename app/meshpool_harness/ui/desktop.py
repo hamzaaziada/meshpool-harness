@@ -414,8 +414,19 @@ def reveal(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def cli_status() -> dict:
+def _cli_path() -> str:
+    """The meshpool terminal command shipped with the app. The launcher names it; on Windows it is bin\\meshpool.cmd
+    next to the app folder, which also covers a launcher built before the command moved there."""
     cli = os.environ.get("MESHPOOL_CLI", "")
+    if os.name == "nt" and not (cli and Path(cli).exists()):
+        alt = C.APP.parent / "bin" / "meshpool.cmd"
+        if alt.exists():
+            return str(alt)
+    return cli
+
+
+def cli_status() -> dict:
+    cli = _cli_path()
     if not cli or not Path(cli).exists():
         return {"available": False}
     if os.name == "nt":
@@ -453,7 +464,7 @@ def ensure_cli() -> None:
 
 
 def install_cli(admin: bool = False) -> dict:
-    cli = os.environ.get("MESHPOOL_CLI", "")
+    cli = _cli_path()
     if not cli or not Path(cli).exists():
         raise ValueError("The terminal command is only available in the installed app.")
     if sys.platform == "darwin" and (cli.startswith("/Volumes/") or "/AppTranslocation/" in cli):

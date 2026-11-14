@@ -275,9 +275,10 @@ class Win:
             os.startfile(name)  # noqa: S606  ShellExecute: an app name, a file or a URL; no shell parses it
         except OSError as e:
             exe = shutil.which(name)           # a program on PATH that ShellExecute did not find by name
-            if not exe:
+            if not exe or exe.lower().endswith((".bat", ".cmd")):     # scripts would run through cmd.exe
                 raise ToolFailed(f"Could not open {name}: {e}")
-            subprocess.Popen([exe], creationflags=0x08000000)   # an argument list, never through cmd
+            # an argument list, never through cmd; its own console, so a console program shows instead of hiding
+            subprocess.Popen([exe], creationflags=0x00000010)
         return f"Opened {name}."
 
     def frontmost(self) -> str:

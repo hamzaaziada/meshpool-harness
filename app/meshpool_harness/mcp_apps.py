@@ -212,7 +212,7 @@ def _write(p: Path, d: dict):
             os.chmod(tmp, 0o600)
         except OSError:
             pass
-        os.replace(tmp, p)
+        C.replace_file(tmp, p)
     except BaseException:
         try:
             os.unlink(tmp)

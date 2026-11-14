@@ -47,33 +47,59 @@ def _private_allowed() -> bool:
     return os.environ.get("MH_ALLOW_PRIVATE_FETCH", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+_FAKE_IP = ipaddress.ip_network("198.18.0.0/15")   # answers from proxy apps' fake-IP DNS (Clash, Surge...)
+
+
+def _refuse(url: str, host: str, ip) -> None:
+    raise WebError(f"refused {url}: {host} is a local or private network address ({ip}). Only public web pages can "
+                   "be read (set MH_ALLOW_PRIVATE_FETCH=1 to allow local addresses).")
+
+
+def _check_ip(url: str, host: str, ip) -> None:
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if ip in _FAKE_IP:
+        return                                   # a local proxy app stands in for a public host: it fetches the page
+    if not ip.is_global or ip.is_multicast:
+        _refuse(url, host, ip)
+
+
 def check_public(url: str) -> None:
-    """Refuse URLs whose host resolves to this computer or a private network (loopback, RFC 1918, link-local such
-    as the 169.254.169.254 cloud metadata address, reserved ranges). Agents call fetch() without asking, so a page
-    or a prompt must not be able to make them read local services. MH_ALLOW_PRIVATE_FETCH=1 turns the check off."""
+    """Refuse URLs that point at this computer or a private network (loopback, RFC 1918, link-local such as the
+    169.254.169.254 cloud metadata address, reserved ranges). Agents call fetch() without asking, so a page or a prompt
+    must not be able to make them read local services. Behind a system proxy (common on company Macs and PCs) the
+    proxy resolves the name, so only literal addresses and local names are checked. MH_ALLOW_PRIVATE_FETCH=1 turns the
+    check off."""
     if _private_allowed():
         return
     u = urllib.parse.urlparse(url)
-    if u.scheme.lower() not in ("http", "https"):
+    scheme = u.scheme.lower()
+    if scheme not in ("http", "https"):
         raise WebError(f"refused {url}: only http and https links can be read")
-    host = u.hostname
+    host = (u.hostname or "").rstrip(".").lower()
     if not host:
         raise WebError(f"refused {url}: no host name")
     try:
-        port = u.port or (443 if u.scheme.lower() == "https" else 80)
+        _check_ip(url, host, ipaddress.ip_address(host.split("%", 1)[0]))
+        return                                   # a literal address: checked without DNS
+    except ValueError:
+        pass
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".lan", ".home.arpa")) or "." not in host:
+        _refuse(url, host, "a local name")
+    proxied = urllib.request.getproxies().get(scheme) and not urllib.request.proxy_bypass(host)
+    try:
+        port = u.port or (443 if scheme == "https" else 80)
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError, ValueError, OSError) as e:
+        if proxied:
+            return                               # only the proxy can resolve outside names here
         raise WebError(f"could not reach {host}: {e}")
     for info in infos:
         try:
             ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
         except ValueError:
             raise WebError(f"refused {url}: unexpected address for {host}")
-        if ip.version == 6 and ip.ipv4_mapped:
-            ip = ip.ipv4_mapped
-        if not ip.is_global or ip.is_multicast:
-            raise WebError(f"refused {url}: {host} is a local or private network address ({ip}). Only public web "
-                           "pages can be read (set MH_ALLOW_PRIVATE_FETCH=1 to allow local addresses).")
+        _check_ip(url, host, ip)
 
 
 class _PublicRedirects(urllib.request.HTTPRedirectHandler):

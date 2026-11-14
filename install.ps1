@@ -120,7 +120,7 @@ Ok "Packages"
 $Bin = Join-Path $Dir "bin"
 New-Item -ItemType Directory -Force -Path $Bin | Out-Null
 # Paths relative to the command's own folder (%~dp0), so the file is plain ASCII whatever the profile folder is called.
-Set-Content -Encoding ASCII "$Bin\meshpool.cmd" ("@echo off`r`nsetlocal`r`nset `"PYTHONPATH=%~dp0..\app`"`r`n" +
+Set-Content -Encoding ASCII "$Bin\meshpool.cmd" ("@echo off`r`nsetlocal`r`nset `"PYTHONPATH=%~dp0..\app`"`r`nset `"PYTHONUTF8=1`"`r`nset `"PYTHONIOENCODING=utf-8`"`r`n" +
   "`"%~dp0..\venv\Scripts\python.exe`" `"%~dp0..\app\meshpool_launch.py`" %*`r`nexit /b %ERRORLEVEL%")
 # The user's Path as stored, %VARIABLES% unexpanded (reading it through [Environment] would expand them for good).
 $Key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")

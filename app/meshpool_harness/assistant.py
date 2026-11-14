@@ -52,7 +52,7 @@ def _write(p: Path, text: str):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.replace(tmp, p)
+        C.replace_file(tmp, p)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

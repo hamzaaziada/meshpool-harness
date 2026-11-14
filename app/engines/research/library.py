@@ -299,7 +299,7 @@ class Corpus:
 
     # ---- persistence
     def load(self):
-        d = json.loads(self.path.read_text())
+        d = json.loads(self.path.read_text(encoding="utf-8"))
         self.sources = {s["id"]: Source(**s) for s in d.get("sources", [])}
         self.passages = {}
         for p in d.get("passages", []):
@@ -317,7 +317,7 @@ class Corpus:
         self.path.write_text(json.dumps({
             "created": self.now, "queries": self.queries, "failures": self.failures[-50:],
             "sources": [asdict(s) for s in self.sources.values()],
-            "passages": [p.to_json() for p in self.passages.values()]}, indent=1))
+            "passages": [p.to_json() for p in self.passages.values()]}, indent=1), encoding="utf-8")
         return str(self.path)
 
     # ---- adding sources
@@ -663,10 +663,10 @@ def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     corpus, and write a .docx next to the report. Returns {"report", "docx", "cited"}."""
     from .verify import citations_in, split_sources
     p = Path(report_path)
-    text = split_sources(p.read_text())[0].rstrip() + "\n"
+    text = split_sources(p.read_text(encoding="utf-8"))[0].rstrip() + "\n"
     cited = {c.split(".")[0] for c in citations_in(text)}
     text += "\n## Sources\n" + corpus.bibliography(cited) + "\n"
-    p.write_text(text)
+    p.write_text(text, encoding="utf-8")
     corpus.save()
     out = {"report": str(p), "cited": sorted(cited, key=lambda x: int(x[1:]))}
     if docx:

@@ -192,17 +192,21 @@ def _installer(v: dict, why: str) -> dict:
     if sums is not None and a["name"] not in sums:
         return {"ok": False, "error": f"The release's checksums do not list {a['name']}. Download it from the release "
                                       "page.", "url": v["url"]}
-    d = Path.home() / "Downloads"
-    d = d if d.is_dir() else Path(tempfile.gettempdir())
-    p = d / a["name"]
+    dl = Path.home() / "Downloads"
+    p = (dl if dl.is_dir() else Path(tempfile.gettempdir())) / a["name"]
     part = p.with_name(p.name + ".part")
     try:
-        _download(a["url"], part)
+        try:
+            _download(a["url"], part)
+        except PermissionError:                 # macOS privacy settings can refuse the Downloads folder
+            p = Path(tempfile.gettempdir()) / a["name"]
+            part = p.with_name(p.name + ".part")
+            _download(a["url"], part)
         if sums is not None and _sha256(part) != sums[a["name"]]:
             part.unlink()
             return {"ok": False, "error": f"The download of {a['name']} did not match the release's checksum, so it "
                                           "was deleted. Try again.", "url": v["url"]}
-        os.replace(part, p)
+        C.replace_file(part, p)
     except OSError as e:
         part.unlink(missing_ok=True)
         return {"ok": False, "error": f"Could not download {a['name']} ({type(e).__name__}). Try again.",
@@ -339,12 +343,16 @@ def _relaunch_cmd() -> list:
     """The command that starts this app again. It runs in the user's folder, so the folder must not go on sys.path:
     a json.py or argparse.py there would be imported in place of Python's own. -P keeps it off (Python 3.11 and
     later); on 3.10 a tiny bootstrap removes it before anything is imported."""
+    exe = sys.executable
+    if os.name == "nt" and sys.argv[1:2] == ["app"]:     # the Windows app runs windowless: back under pythonw.exe
+        w = Path(exe).with_name("pythonw.exe")
+        exe = str(w) if w.exists() else exe
     if sys.version_info >= (3, 11):
-        return [sys.executable, "-P", "-m", "meshpool_harness", *sys.argv[1:]]
+        return [exe, "-P", "-m", "meshpool_harness", *sys.argv[1:]]
     boot = ("import sys, runpy\n"
             "if sys.path and sys.path[0] in ('', '.'):\n    del sys.path[0]\n"
             "runpy.run_module('meshpool_harness', run_name='__main__', alter_sys=True)\n")
-    return [sys.executable, "-c", boot, *sys.argv[1:]]
+    return [exe, "-c", boot, *sys.argv[1:]]
 
 
 def restart(on_quit=()) -> None:

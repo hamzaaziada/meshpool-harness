@@ -113,7 +113,7 @@ def write_meta(sid: str, **kw) -> dict:
     _meta_path(sid).parent.mkdir(parents=True, exist_ok=True)
     tmp = _meta_path(sid).with_suffix(f".{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(m), encoding="utf-8")
-    os.replace(tmp, _meta_path(sid))
+    C.replace_file(tmp, _meta_path(sid))
     _METAS.pop(sid, None)
     return m
 
@@ -335,7 +335,7 @@ class Session:
             tmp = d / "transcript.json.tmp"
             tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
                            encoding="utf-8")
-            os.replace(tmp, d / "transcript.json")
+            C.replace_file(tmp, d / "transcript.json")
         except OSError:
             pass
 

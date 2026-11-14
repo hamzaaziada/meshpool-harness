@@ -122,3 +122,27 @@ def test_bounded_decompression():
     bomb = gzip.compress(b"\0" * 5_000_000)
     assert len(W._inflate(bomb, 16 + 15, 1000)) == 1000
     assert W._inflate(gzip.compress(b"hello")[:-6], 16 + 15, 1000).startswith(b"hel")   # cut off: no EOFError
+
+
+def test_fetch_check_works_behind_proxies_and_proxy_apps(monkeypatch):
+    """Company proxies resolve outside names themselves, and proxy apps answer DNS with 198.18.x fake addresses."""
+    import socket
+    import urllib.request
+    from meshpool_harness import web as W
+    monkeypatch.delenv("MH_ALLOW_PRIVATE_FETCH", raising=False)
+
+    def no_dns(*a, **k):
+        raise socket.gaierror("no DNS here")
+    monkeypatch.setattr(socket, "getaddrinfo", no_dns)
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {"https": "http://proxy.corp:8080"})
+    monkeypatch.setattr(urllib.request, "proxy_bypass", lambda host: False)
+    W.check_public("https://example.com/report")            # the proxy resolves it
+    for bad in ("https://127.0.0.1/", "https://localhost:8765/", "http://169.254.169.254/", "http://intranet/"):
+        try:
+            W.check_public(bad)
+            raise AssertionError(bad)
+        except W.WebError:
+            pass
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {})
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("198.18.0.7", 443))])
+    W.check_public("https://example.com/")                  # fake-IP DNS of a local proxy app

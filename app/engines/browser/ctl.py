@@ -58,7 +58,8 @@ def _write_state(path: Path, data: dict) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f)
-    os.replace(tmp, path)
+    from meshpool_harness.config import replace_file
+    replace_file(tmp, path)
 
 
 def _read_state(port=None) -> dict:
@@ -452,8 +453,11 @@ def main(argv=None):
             state_path().unlink()                 # a stale file from a daemon that died
         except OSError:
             pass
+        # Its own session (POSIX) or process group with no console (Windows): Ctrl+C or closing the terminal that
+        # started a task must not take the browser with it.
+        detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True})
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", outdir], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, **detach)
         for _ in range(60):
             try:
                 call("snapshot")
