@@ -3,6 +3,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Agents:** Meshpool Auto (picks per task: quality first, then cost and speed), Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or add your own.
 - **Runs on** your Meshpool API key, any OpenAI-compatible key, or your ChatGPT plan.
 - **Office files** checked before they reach you: Word, Excel with live formulas, PowerPoint, PDF.
+- **Decks** in a top strategy firm's style by default: the answer first in an executive summary, an agenda and section tracker, takeaway titles, a different exhibit on every page, Segoe UI and line icons. Add slides to your own deck in its look.
 
 | Computer | Download |
 |---|---|

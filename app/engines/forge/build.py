@@ -549,6 +549,8 @@ supports it. Choose varied archetypes that prove each title.
             return {k: x.get(k) for k in ("node", "archetype", "title", "section") if x.get(k) is not None}
         ev = set(x.get("evidence") or [])
         rel = [f for f in facts if f["id"] in ev] or facts
+        if x.get("archetype") in ("executive_summary", "closing"):
+            rel = facts                       # they sum up the whole deck: every fact, or they write gaps for known numbers
         try:
             from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
