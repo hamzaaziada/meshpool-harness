@@ -32,7 +32,12 @@ for a in arm64 x64; do
   ST="$W/stage-$a"; rm -rf "$ST"; mkdir -p "$ST"; ditto "$APP" "$ST/Meshpool.app"; ln -s /Applications "$ST/Applications"
   NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
   rm -f "$W/$NAME-udzo.dmg"
-  hdiutil create -quiet -volname Meshpool -srcfolder "$ST" -ov -format UDZO "$W/$NAME-udzo.dmg" || exit 1
+  # hdiutil sometimes fails with "Resource busy" on a loaded machine; try again before giving up
+  ok=; for try in 1 2 3 4; do
+    hdiutil create -quiet -volname Meshpool -srcfolder "$ST" -ov -format UDZO "$W/$NAME-udzo.dmg" && { ok=1; break; }
+    echo "hdiutil create failed (attempt $try), retrying"; sleep $((try * 10))
+  done
+  [ -n "$ok" ] || exit 1
   hdiutil convert -quiet "$W/$NAME-udzo.dmg" -format ULMO -o "$OUT/$NAME.dmg" && rm -f "$W/$NAME-udzo.dmg" && echo "built $NAME.dmg"
 done
 ls -la "$OUT"
