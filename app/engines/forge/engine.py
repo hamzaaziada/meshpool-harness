@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -48,6 +49,38 @@ def theme_from(task: str):
     return spec or None
 
 
+LIKE_THESE = re.compile(r"(?i)\b(?:same|this|that|their|these|the attached|our)\s+(?:style|look|format|template|"
+                        r"branding|design)\b|\b(?:like|match(?:es|ing)?|based on|copy)\s+(?:this|that|these|the "
+                        r"attached|the old|our old|the existing|our existing)\s+(?:decks?|presentations?|slides?|"
+                        r"templates?)\b|\bas (?:a )?template\b")
+
+
+def brand_from(task: str, files: list[str] | None = None) -> tuple[dict, dict | None]:
+    """render arguments for the company look: decks attached to the request as the style to follow ('same format as
+    the attached deck'), else the profile the request names or the active one (Settings > Company); colour words in
+    the request ('ocean theme', 'accent #7C3AED') override its colours. ({...}, profile or None)."""
+    asked = theme_from(task)
+    prof = None
+    try:
+        from engines.forge import brand as B
+        decks = [f for f in files or [] if str(f).lower().endswith((".pptx", ".potx"))]
+        if decks and LIKE_THESE.search(task):                    # learned for this deck only, not saved
+            import tempfile
+            prof = B.clean(B.learn(decks, folder=tempfile.mkdtemp(prefix="forge_look_")))
+        else:
+            prof = B.for_request(task)
+    except Exception as e:                                       # noqa: BLE001 - a broken profile never blocks a deck
+        print(f"company look skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        prof = None
+    if not prof:
+        return {"theme": asked}, None
+    look = B.render_kwargs(prof)
+    if asked:
+        look["theme"] = asked
+        look.pop("template", None)
+    return look, prof
+
+
 def density_from(task: str, options: dict | None = None, density: str | None = None) -> str:
     """'for presenting', 'keynote', 'visual' -> present; 'send-ahead', 'pre-read', 'detailed', 'dense' -> read;
     otherwise balanced. An explicit density (argument, options["density"], or 'density: x' in the request) wins."""
@@ -66,13 +99,28 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
     m = re.search(r"\b(\d{1,2})[- ]slide", task)
     slides = int(m.group(1)) if m else 10
     mode = density_from(task, options, density)
-    res = build(_brief(task, workdir, files), workdir, slides, client=client, task_id=task_id, theme=theme_from(task),
-                density=mode)
+    fixed, extra = [], []
+    from engines.forge.finance_pages import finance_workbook, pages_from_workbook
+    cands = list(files or []) + [str(p) for p in Path(workdir).glob("*.xls*") if not p.name.startswith("~$")]
+    wbk = finance_workbook(cands)
+    if wbk and not re.search(r"\b(no|without) (model|valuation) pages\b", task, re.I):
+        try:                                                    # banker pages computed from the model's outputs
+            fixed, extra = pages_from_workbook(wbk)
+        except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
+            print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
+    look, prof = brand_from(task, files)
+    res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
+                density=mode, fixed_pages=fixed, extra_facts=extra, **look)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
-    answer = (f"Built {Path(pptx).name}: {slides} slides in the forge design system ({mode} density), checked after "
-              "rendering. "
+    answer = (f"Built {Path(pptx).name}: {slides + len(fixed)} slides in the forge design system ({mode} density), "
+              + (f"{len(fixed)} of them computed from {Path(wbk).name} (football field, comps, DCF, statements), "
+                 if fixed else "")
+              + (f"in the {prof.get('name') or 'company'} look ("
+                 + ("its slide master, " if look.get("template") else "") + "colours, fonts"
+                 + (", logo" if (look.get("brand") or {}).get("logo") else "") + "), " if prof else "")
+              + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],

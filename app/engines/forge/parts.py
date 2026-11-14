@@ -304,7 +304,7 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
     for j, it in enumerate(items):
         r_, c_ = divmod(j, cols)
         tx, ty = x + c_ * (tw + gap), y + r_ * (th + gap)
-        tile = _shape(sl, MSO_SHAPE.RECTANGLE, tx, ty, tw, th, f"ov_Stat{i}_{j + 1}",
+        tile = _shape(sl, MSO_SHAPE.RECTANGLE, tx, ty, tw, th, f"ov_role_numeral_Stat{i}_{j + 1}",
                       fill=TC.BACKGROUND_1 if boxed else None)
         bl = [{"text": _plain(it.get("value", "")), "size": vsize, "bold": True, "heading": True, "numbers": False,
                "color": TC.ACCENT_1, "line_spacing": 1.0, "prov": it.get("prov")}]
@@ -603,7 +603,7 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
         ry = body_y + r_ * rh
         lb = [{"text": _txt(r.get("label")), "size": R.bump(12), "numbers": False, "bold": bool(r.get("highlight"))}]
         lb = _fit_trim(lb, lw - 0.1, rh - 0.04, s, f"row {r_ + 1} of part {i}", ctx, n)
-        R._write(R._box(sl, x, ry, lw - 0.1, rh, f"HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
+        R._write(R._box(sl, x, ry, lw - 0.1, rh, f"ov_HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
         for c_ in range(m):
             sc = (r.get("scores") or [])[c_] if c_ < len(r.get("scores") or []) else 0
             _ball(sl, x + lw + (c_ + 0.5) * cw, ry + rh / 2, d, _score(sc, quarters), f"Hv{i}_{r_ + 1}_{c_ + 1}")

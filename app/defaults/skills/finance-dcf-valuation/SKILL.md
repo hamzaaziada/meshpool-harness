@@ -14,6 +14,10 @@ comps and precedents and say why.
 
 ## Forecast: driver-based, not growth-rate-based
 
+Build the forecast as integrated statements (skill `finance-three-statement-model`): spread the filed history,
+forecast the income statement, balance sheet and cash flow from drivers and schedules, and read free cash flow from
+them, with base / bull / bear cases behind one switch.
+
 Build revenue from the drivers the business reports or that industry data supports (e.g. for compute
 infrastructure: active power (MW) x utilisation x revenue per MW, cross-checked against backlog conversion; for
 software: customers x ARPU; for manufacturing: units x price). For each driver give the starting value (sourced), the
@@ -42,5 +46,6 @@ comps; show both. Use the mid-year convention.
 ## Output
 
 EV, equity value (EV - net debt - minorities - preferred) and value per share; the share of EV from the terminal
-value; sensitivity tables (WACC x g; a key driver x margin). Every input lives on the Inputs tab with its source and
-rationale (skill `finance-assumption-book`).
+value; sensitivity tables (WACC x g; WACC x exit multiple; the scenario summary for drivers). Every input lives on
+the Inputs tab with its source and rationale (skill `finance-assumption-book`). When the DCF is one of several
+methods, choose and weight them with skill `finance-valuation-method-selection`.

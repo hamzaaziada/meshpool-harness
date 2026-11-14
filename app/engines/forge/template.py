@@ -5,7 +5,8 @@ Built from python-pptx's default template (so it opens everywhere), then:
 - theme fonts: serif headings (major) and sans body (minor), the pattern measured in the reference decks;
 - theme colours: our own palette (not any firm's), one emphasis colour (accent1) and muted tones;
 - title style: 24 pt, theme heading font, dk2, bottom-anchored so one- and two-line titles share a baseline.
-A client .potx/.pptx can replace it: the renderer only needs a "Title Only" and a "Title Slide" layout.
+A company master can replace it (engines/forge/brand.py): the renderer needs a title-only and a title-slide layout,
+found by name or by their placeholders.
 """
 from __future__ import annotations
 
@@ -167,7 +168,7 @@ def _build(key: str, spec_json: str) -> str:
 
 
 def layout(prs, name: str):
-    for lay in prs.slide_masters[0].slide_layouts:
-        if lay.name.lower() == name.lower():
-            return lay
-    raise KeyError(f"template has no layout named {name!r}")
+    """A layout by name; in a company master with other names, the layout that holds the same placeholders
+    (engines/forge/brand.py find_layout)."""
+    from .brand import find_layout
+    return find_layout(prs, name)

@@ -289,7 +289,7 @@ def test_wide_table_keeps_bullets_in_a_band(tmp_path, mode):
     sl = Presentation(str(out)).slides[0]
     table = next(sh for sh in sl.shapes if sh.has_table)
     assert table.width.inches > 11                                   # full width
-    band = [sh for sh in sl.shapes if sh.name.startswith("Takeaways")]
+    band = [sh for sh in sl.shapes if sh.name.startswith("ov_Panel")]     # the so-what panel under the table
     assert band and all(sh.top >= table.top + table.height for sh in band)   # under the table
     assert all((sh.top + sh.height) / 914400 <= 7.02 for sh in band)  # above the footer rule
     on, notes = _shapes_text(sl), sl.notes_slide.notes_text_frame.text if sl.has_notes_slide else ""

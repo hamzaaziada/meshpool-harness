@@ -171,7 +171,9 @@ def test_values_match_python_recompute_and_forge_rules_pass(tmp_path):
     recheck = {"checks": [{"cell": "DCF!B" + str(dcf["rows"]["per_share"]), "expected": rc["per_share"],
                            "label": "DCF value per share"}]}
     r = VX.validate(str(p), recompute=recheck)
-    bad = {k: v for k, v in r["rules"].items() if v not in ("pass",) and not (k == "X11" and v == "not_run")}
+    from engines.forge.ooxml_check import _schema_dir             # X0 cannot run without the ECMA-376 schemas
+    allowed = {"X11": "not_run"} | ({} if _schema_dir() else {"X0": "not_run"})
+    bad = {k: v for k, v in r["rules"].items() if v != "pass" and allowed.get(k) != v}
     assert not bad, (bad, [f["message"] for f in r["failures"] if f["status"] != "pass"])
     assert qa.check(str(p))["issues"] == []
 

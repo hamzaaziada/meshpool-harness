@@ -38,3 +38,9 @@
 {"r":"Add a unit test for the discount calculation and make sure it passes","files":[],"wd":"repo","gold":["code"]}
 {"r":"What does this spreadsheet tell us about regional margins?","files":["margins.xlsx"],"gold":["data"]}
 {"r":"Make a one-page dashboard in Excel showing weekly KPIs from this csv","files":["kpis.csv"],"gold":["sheets"]}
+{"r": "Research the competitive landscape for AI inference chips and write a sourced brief", "files": [], "gold": ["research"]}
+{"r": "What is the market size of cloud gaming and who are the main competitors?", "files": [], "gold": ["research"]}
+{"r": "Find out what Microsoft said about capex in its latest earnings call, with sources", "files": [], "gold": ["research"]}
+{"r": "Do a deep dive on Nvidia's data center business and build a board deck", "files": [], "gold": ["research", "slides"]}
+{"r": "Research peers and precedent transactions for a payments company and build a valuation workbook", "files": [], "gold": ["research", "sheets"]}
+{"r": "Investigate the latest developments in EU AI regulation", "files": [], "gold": ["research"]}

@@ -391,6 +391,15 @@ class Handler(BaseHTTPRequestHandler):
         raw = self._body()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
+    def _company(self, u):
+        from meshpool_harness.ui import company_api as CO
+        try:
+            return self._send(*CO.handle(self.command, u, self._body() if self.command == "POST" else b""))
+        except (ValueError, KeyError) as e:
+            return self._send(400, {"error": str(e).strip("'\"")})
+        except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
@@ -400,7 +409,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|company\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -464,6 +473,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'{disp}; filename="{p.name}"'})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
+        if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
+            return self._company(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, get_settings())
@@ -567,6 +578,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
+        if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
+            return self._company(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))

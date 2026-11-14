@@ -156,7 +156,7 @@ def test_fewer_parts_never_leave_a_region_empty(tmp_path):
          "parts": [dict(TEXT), dict(CALLOUT), {"type": "stats", "items": STATS3}]}
     render([s], str(out), fix_labels=False)
     names = [sh.name for sh in Presentation(str(out)).slides[0].shapes]
-    assert "Text1" in names and "Callout2" in names and any(n.startswith("ov_Stat3_") for n in names)
+    assert "Text1" in names and "Callout2" in names and any(n.startswith("ov_role_numeral_Stat3_") for n in names)
     assert "main_stack" in Presentation(str(out)).slides[0].notes_slide.notes_text_frame.text
 
 

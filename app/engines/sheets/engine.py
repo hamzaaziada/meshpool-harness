@@ -31,7 +31,7 @@ How you work:
 Workbook rules:
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
   Outputs -> Checks with colored tabs and a linked tab map. Put middle tabs in that order; add tabs only when needed
-  (e.g. one per scenario, or Comps/Precedents/DCF), passing middle=(...). Use B.section(ws, row, "Revenue build")
+  (e.g. Historicals/Model/DCF/Valuation inputs, or Comps/Precedents), passing middle=(...). Use B.section(ws, row, "Revenue build")
   bands to group rows.
 - Add at least one tie-out check with B.add_check(wb, "Summary ties to Calc", "=Outputs!B4-Calc!D5"); every check
   must show OK.
@@ -52,10 +52,27 @@ Valuation and deal work (investment-bank standard):
   interquartile range (25th-75th percentile) of the most relevant multiple, never the mean alone. Loss-making peers show
   "NM" and drop out of the statistics.
 - DCF: first decide whether it fits and say why in your answer (cash flows tied to observable drivers: yes; otherwise
-  rely on comps and precedents). Drive revenue from operating drivers, not a flat growth rate. Show the terminal value
+  rely on comps and precedents). A DCF is built on full statements, not a margin shortcut: spread the filed history
+  (spreading module, SEC EDGAR), build the integrated income statement, balance sheet and cash flow with
+  B.three_statement, and take unlevered free cash flow from them with B.dcf_from_statements. Show the terminal value
   share of EV and the exit-multiple cross-check.
-- When you value something, finish with a football field that brackets the answer (comps, precedents, DCF, and the
-  offer or current price as a marker).
+- Revenue and cost of revenue come from operating drivers, each sourced with a range: units x price, capacity x
+  utilisation x price per unit, customers x ARPU; COGS as units x unit cost or a sourced gross margin.
+- Balance sheet assumptions: working-capital days (DSO, DIO, DPO) anchored on history (S.history_metrics), capex and
+  PP&E roll-forward with depreciation from useful lives, debt schedule (draws, repayments, interest on the opening
+  balance so there is no circularity), equity roll-forward (net income, dividends, buybacks), minimum cash with a
+  revolver. The engine refuses an integrated model whose Checks tab lacks the balance-sheet-balances and cash-tie
+  checks (three_statement adds both), or whose balance sheet does not balance in every year.
+- Scenarios: every judgement driver gets base / bull / bear values in B.scenario_book behind one switch (scenario);
+  B.scenario_summary shows the three cases side by side. The engine refuses a DCF or integrated model without them.
+- Method choice and weighting: B.valuation_summary decides which methods fit the company (DCF only when cash flows tie
+  to drivers; trading comps; precedents; sum of the parts for distinct segments; NAV for asset-heavy companies and
+  financials; dividend discount / excess return for banks and insurers; LBO as a floor for sponsor-relevant targets)
+  and weights them on data quality, peer comparability, the DCF's terminal-value share, stage and control vs minority
+  context. Weights are editable inputs with a justification each and must sum to 100%. The engine refuses a workbook
+  with two or more methods and no weighting. Explain the weights in your answer.
+- When you value something, finish with a football field that brackets the answer (comps, precedents, DCF, the
+  weighted value, and the offer or current price as a marker); valuation_summary draws it.
 
 Helper library (import from engines.sheets.builder as B; it is importable from the working folder; if python cannot
 find it, start the script with: import sys; sys.path.insert(0, r"{ROOT}")):
@@ -90,7 +107,76 @@ Finance kit (all live formulas; raw numbers are blue inputs; results are workboo
   B.football_field(wb["Outputs"], 3, [{{"label":"Trading comps, EV/EBITDA 25th-75th","low":"=(comps_ev_ebitda_p25*
       ebitda_ltm-total_debt+cash)/diluted_shares","high":"=..."}}, ...], marker={{"label":"Offer price ($/share)",
       "value":"=offer_price"}})   # table + floating-bar chart + a low <= high check
-  Name the tabs Comps, Precedents, DCF (not "Valuation" for a tab holding typed peer data)."""
+  Name the tabs Comps, Precedents, DCF (not "Valuation" for a tab holding typed peer data).
+Research hand-off: when the folder has report.md and sources.json from a research step, take each assumption's
+Source and Evidence from the passage behind it: from engines.research.library import Corpus;
+src = Corpus(".").assumption_source("S3.p12") -> {{"source": ..., "evidence": ...}} (pass them to book.add).
+Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weighting):
+  from engines.sheets import spreading as S
+  facts = S.fetch_companyfacts(S.cik_for_ticker("ACME"))      # SEC EDGAR XBRL; User-Agent from $SEC_USER_AGENT
+  sp = S.spread(facts, years=3)    # standard IS/BS/CF, each cell with tag, accession, filing date; sp.gaps (left
+      empty, never estimated), sp.checks (balance sheet balances, cash flow ties, net income ties); report both
+  from engines.sheets import market as MK
+  MK.add_wacc_inputs(book, industry="Semiconductor")   # live, sourced: Treasury 10Y, Damodaran implied ERP (its
+      published variants as the range), industry unlevered beta corrected for cash; MK.industries() lists names
+  S.history_metrics(sp)            # growth, gross margin, SG&A %, DSO/DIO/DPO, capex %, D&A %, tax rate, payout
+  q = S.spread_quarters(facts, 8)  # fiscal quarters from 10-Q/10-K (Q4 = year less Q1-Q3; cash flow from YTD)
+  S.ltm(q, "revenue"); S.calendarize({{"2025-06-30": 100, "2026-06-30": 120}}, 2025)   # LTM; calendar-year peers
+  h = S.write_spread(wb["Historicals"], 4, sp)       # tab "Historicals" before Inputs; sourced blue inputs, names
+      h_<line>_<fy> (h_revenue_fy2025)
+  sb = B.scenario_book(wb["Inputs"], 3)    # Assumption | Selected case | Base | Bull | Bear | Source | Evidence
+  sb.section("Revenue drivers")
+  sb.add("Units sold, last actual (m)", 110, fmt="num", name="units_start", source="10-K FY25 p.32", rationale=...)
+  sb.add("Unit growth per year (%)", 0.06, 0.09, 0.02, "pct", "units_growth", source=..., rationale=...)
+      # base, bull, bear; names units_growth (selected), units_growth_base / _bull / _bear, _low / _high
+  sb.link("Cash, opening ($m)", "=h_cash_fy2025", "usd", name="cash_open", source="Historicals tab")
+  S.link_opening_balances(sb, sp)     # all opening balance sheet names below, linked to Historicals
+  m = B.three_statement(wb["Model"], 3, [2026, 2027, 2028, 2029, 2030],
+        [{{"name": "Devices", "drivers": [
+            {{"key": "units", "label": "Units sold (m)", "start": "units_start", "growth": "units_growth"}},
+            {{"key": "price", "label": "Price per unit ($)", "start": "price_start", "growth": "price_growth",
+             "fmt": "usd2"}},
+            {{"key": "ucost", "label": "Unit cost ($)", "start": "unit_cost_start", "growth": "unit_cost_growth",
+             "fmt": "usd2"}}], "revenue": "{{units}}*{{price}}", "cogs": "{{units}}*{{ucost}}"}},
+         {{"name": "Subscriptions", "drivers": [{{"key": "subs", ...}}, {{"key": "arpu", ...}}],
+          "revenue": "{{subs}}*{{arpu}}", "gross_margin": "subs_gross_margin"}}],
+        opex=[{{"key": "sga", "label": "SG&A ($m, negative)", "pct": "sga_pct"}},
+              {{"key": "rnd", "label": "R&D ($m, negative)", "pct": "rnd_pct"}}],
+        capex_growth="MAX(0,{{units}}-{{units@prev}})*capex_per_unit")
+      # growth may be a name or (start_name, end_name) for a linear fade; "step" adds; "formula" for derived drivers
+      # ("{{capacity}}*{{utilisation}}"). Column B = last actual (opening balance sheet); forecast columns after.
+      Needs names: tax_rate, dso, dio, dpo, capex_pct, useful_life_new, remaining_life_existing, term_rate,
+      revolver_rate, cash_rate, min_cash, revolver_capacity, term_draw, term_amort, payout_ratio, buyback, and the
+      opening balance sheet cash_open, ar_open, inv_open, other_ca_open, ppe_open, other_nca_open, ap_open,
+      other_cl_open, revolver_open, term_debt_open, other_ncl_open, equity_open (override with names={{...}}).
+      Adds the checks: balance sheet balances every year, closing cash equals balance sheet cash, net income ties,
+      revolver and PP&E never negative.
+  SBC: names={{"sbc": "sbc_pct"}} in three_statement adds share-based compensation as an expense in EBITDA, adds it
+      back in operating cash flow and credits equity (not added back in unlevered FCF).
+  B.diluted_shares(ws, row, basic="basic_shares", price="share_price", options=[("opt_n", "opt_strike")],
+      rsus="rsus", converts=[("conv_shares", "conv_price")])     # treasury stock method; defines diluted_shares
+  lb = B.lbo(wb["LBO"], 3, m, [{{"label": "Term Loan A", "multiple": "tla_x", "rate": "tla_rate", "amort": "tla_amort",
+      "sweep": True}}, {{"label": "Term Loan B", ...}}, {{"label": "Senior notes", "multiple": "notes_x",
+      "rate": "notes_rate"}}])   # sources & uses, sweep, IRR / MOIC, and lbo_floor_low / lbo_floor_high ($ per share
+      a sponsor could pay at lbo_irr_high / lbo_irr_low): use them as the LBO bar in valuation_summary
+      (needs lbo_entry_multiple, lbo_ltm_ebitda, lbo_fees_pct, lbo_exit_multiple, lbo_irr_low, lbo_irr_high)
+  B.alerts(wb, m, d)               # Alerts tab: growth fades, capex vs depreciation, growth and margin both rising,
+      cash shortfall, terminal value share, terminal growth vs risk-free; explain every REVIEW in your answer
+  d = B.dcf_from_statements(wb["DCF"], 3, m)   # names risk_free, beta_unlevered, equity_risk_premium, cost_of_debt,
+      debt_weight, terminal_growth, exit_multiple, mid_year, diluted_shares, wacc_step, g_step (exit_step adds a WACC x
+      exit multiple grid); EV bridge items by name: minorities, preferred, leases, pensions, investments;
+      dcf_* names as dcf_block. A deck built after the model takes its football field, comps, precedents, DCF
+      bridge and sensitivities, scenarios and statement summary straight from the workbook.
+  B.scenario_summary(wb["Outputs"], 3, dict(years=..., segments=..., opex=..., capex_growth=...))   # same args as
+      three_statement: pinned Base/Bull/Bear case tabs + table + a live-vs-pinned check
+  v = B.valuation_summary(wb["Valuation inputs"], 3,
+        [{{"key": "dcf", "low": "=MIN(dcf_per_share,dcf_per_share_exit)", "high": "=MAX(dcf_per_share,dcf_per_share_exit)"}},
+         {{"key": "trading_comps", "low": "=...", "high": "=..."}}, {{"key": "precedents", ...}}, {{"key": "lbo", ...}}],
+        {{"sector": "general", "stage": "mature", "context": "control", "drivers_traceable": True, "n_peers": 7,
+         "peer_comparability": "medium", "n_precedents": 5, "sponsor_relevant": True}},
+        marker={{"label": "Current price ($/share)", "value": "=share_price"}})
+      # keys: dcf trading_comps precedents sotp nav ddm excess_return lbo. Put it on a tab whose name contains
+      # "Inputs" (the factor scores and weights are inputs). B.select_methods(profile) shows the rules in Python."""
 
 
 def finish_check(answer, artifacts, ws):
@@ -126,6 +212,9 @@ def finish_check(answer, artifacts, ws):
             r["issues"].insert(0, {"check": "source_missing", "cell": "", "detail": (
                 f"{len(gaps)} inputs have no Source. Fill the Source column (and Evidence / rationale, Low, High) "
                 "for: " + "; ".join(gaps[:30]) + (f"; and {len(gaps) - 30} more" if len(gaps) > 30 else ""))})
+        from engines.sheets.qa import model_gaps           # integrated statements, scenarios, method weighting
+        at = 1 if gaps else 0                              # right after the source gate, ahead of cosmetic issues
+        r["issues"][at:at] = [{"check": "valuation_model", "cell": "", "detail": g} for g in model_gaps(p)]
         if r["issues"]:
             return "ENGINE CHECK: workbook QA failed:\n" + "\n".join(
                 f"- {i['check']} {i['cell']}: {i['detail']}" for i in r["issues"][:15])

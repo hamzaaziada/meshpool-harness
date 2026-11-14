@@ -12,7 +12,7 @@ from .rules import decide
 
 ROOT = Path(__file__).resolve().parents[2]
 ROUTING_LOG = ROOT / "routing.csv"
-ENGINES = ["code", "data", "sheets", "slides", "general"]
+ENGINES = ["research", "credit", "code", "data", "sheets", "slides", "general"]
 DEFAULT_MODEL = os.environ.get("MH_MODEL", "deepseek-v4.1-flash")   # any OpenAI-compatible model id
 
 
@@ -27,7 +27,8 @@ class Route:
 
 
 def _classify(request: str, files: list[str], client) -> tuple[list[str], float, str]:
-    prompt = ("Pick the engine chain for this request. Engines: code (repo/terminal work), data (analysis of data or "
+    prompt = ("Pick the engine chain for this request. Engines: research (collect and cite outside sources: web, SEC "
+              "filings; a sourced report), credit (a lender's cash flow / DSCR / credit memo on a borrower), code (repo/terminal work), data (analysis of data or "
               "text), sheets (build Excel workbooks), slides (build decks), general (anything else). Chains are "
               "ordered, e.g. [\"data\",\"slides\"]. Reply with JSON only: {\"engines\": [...], \"confidence\": 0-1}.\n"
               f"Request: {request}\nAttached files: {', '.join(Path(f).name for f in files) or 'none'}")
