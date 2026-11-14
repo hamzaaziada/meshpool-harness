@@ -172,8 +172,19 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          command -v makensis >/dev/null || choco install nsis -y --no-progress
-          MAKENSIS="$(command -v makensis || echo '/c/Program Files (x86)/NSIS/makensis.exe')"
+          # NSIS: from Chocolatey, tried a few times (its feed times out now and then), else straight from SourceForge
+          MAKENSIS="$(command -v makensis || true)"
+          [ -n "$MAKENSIS" ] || [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ] || MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
+          for try in 1 2 3; do
+            [ -n "$MAKENSIS" ] && break
+            choco install nsis -y --no-progress && [ -x "/c/Program Files (x86)/NSIS/makensis.exe" ] && MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe" && break
+            echo "Chocolatey could not install NSIS (attempt $try)"; sleep $((try * 20))
+          done
+          if [ -z "$MAKENSIS" ]; then
+            curl -fsSL --retry 4 -o nsis.zip "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.11/nsis-3.11.zip"
+            python -m zipfile -e nsis.zip nsis-dl && MAKENSIS="$PWD/nsis-dl/nsis-3.11/makensis.exe"
+          fi
+          [ -x "$MAKENSIS" ] || { echo "NSIS could not be installed"; exit 1; }
           cd dist-src/app-win
           # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
           # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
