@@ -14,6 +14,7 @@ The message box has two separate choices:
   | Pi | Quick, low-cost code fixes |
   | Hermes | Ongoing work: remembers what it learns across chats |
   | Codex | Terminal and command-line work, on GPT models |
+  | OpenCode | The open-source coding agent, with its own tools and plans |
 
 - **Model (provider):** where inference runs. Pick it in the model pill. A row of tabs comes first: **Meshpool** (or your own endpoint) and **ChatGPT**. The models for that provider are listed below the tabs. A provider that is not set up shows **Sign in** or **Add a key** instead.
 

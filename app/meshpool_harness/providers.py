@@ -25,6 +25,7 @@ SUPPORTS = {
     "pi": ["key", "chatgpt"],         # ChatGPT through the local relay (chatgpt_relay.py)
     "hermes": ["key", "chatgpt"],
     "codex": ["key", "chatgpt"],
+    "opencode": ["key", "chatgpt"],   # ChatGPT through the local relay, like Pi and Hermes
 }
 
 

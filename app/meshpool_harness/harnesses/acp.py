@@ -236,6 +236,10 @@ class ACPAgent:
         elif m.get("prepare") == "codex":
             from meshpool_harness.harnesses import prepare_codex
             prepare_codex(self.model)
+        extra = {}
+        if m.get("prepare") == "opencode":
+            from meshpool_harness.harnesses import prepare_opencode
+            extra = prepare_opencode(self.model)
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -243,6 +247,7 @@ class ACPAgent:
                            + (m.get("install") or ""))
         env = dict(os.environ)
         env.update({k: str(v) for k, v in (m.get("env") or {}).items()})
+        env.update(extra)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX"):
             if k not in (m.get("env") or {}):
                 env.pop(k, None)               # never leak Meshpool's Python into another Python app

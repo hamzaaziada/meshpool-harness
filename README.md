@@ -20,7 +20,7 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 
 ## Why Meshpool
 
-- **Every strong agent in one app.** Meshpool Code, Meshpool Work, Pi, Hermes and Codex, switchable per chat, with the same files, skills and connectors.
+- **Every strong agent in one app.** Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, switchable per chat, with the same files, skills and connectors. Add any other agent that speaks the Agent Client Protocol in Settings.
 - **Meshpool Auto picks the agent for you.** For each task it takes the best measured quality for that kind of work, then the lowest cost, then the fastest. It never trades quality for price: an agent is only a cheaper choice when it scores as well (see [ROUTING.md](docs/ROUTING.md)).
 - **Any model on one key.** One Meshpool key reaches every model on the Meshpool endpoint. Any OpenAI-compatible endpoint works too, and so does signing in with your ChatGPT plan.
 - **Office files that open clean.** Real Word, Excel (with live formulas) and PowerPoint. Every deck is checked against 20 design rules, every workbook against 13, and every file against the Office file schemas before it reaches you.
@@ -74,7 +74,7 @@ irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.
 ## What it does
 
 - **Work and Code modes.** Work is a chat with a live progress panel and the files the task made. Code adds diff, terminal, Git, pull request and CI panels.
-- **Agents:** Meshpool Auto, Meshpool Code, Meshpool Work, Pi, Hermes and Codex, on your Meshpool key, any OpenAI-compatible key, or your ChatGPT plan ([providers](docs/PROVIDERS.md)).
+- **Agents:** Meshpool Auto, Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or your own, on your Meshpool key, any OpenAI-compatible key, or your ChatGPT plan ([providers](docs/PROVIDERS.md)).
 - **Files in and out:** PDF (scans included, with offline OCR), Word, Excel, PowerPoint, Power BI, CSV and images in; Word, Excel, PowerPoint and PDF out.
 - **Web research** across many sources, with links you can check.
 - **58 connectors** (GitHub, Linear, Jira, Slack, Notion, Google Drive, HubSpot, Stripe and more) plus any remote MCP server. Sign-in goes straight from your computer to the app.

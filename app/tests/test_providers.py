@@ -122,7 +122,7 @@ def test_model_prefix_picks_the_provider(home):
     assert PV.split("meta-llama/llama-4:free") == ("key", "meta-llama/llama-4:free")   # not a provider prefix
     assert PV.join("key", "x") == "x" and PV.join("chatgpt", "gpt-x") == "chatgpt:gpt-x"
     assert PV.PREFIXED == ("chatgpt",) and set(PV.SUPPORTS) == {
-        "meshpool-code", "meshpool-work", "meshpool-auto", "pi", "hermes", "codex"}
+        "meshpool-code", "meshpool-work", "meshpool-auto", "pi", "hermes", "codex", "opencode"}
     assert all(v == ["key", "chatgpt"] for v in PV.SUPPORTS.values())
 
 

@@ -51,7 +51,15 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
 LEGACY = {"chatgpt-subscription": "codex", "claude-subscription": "meshpool-code", "claude-code": "meshpool-code",
           "gemini-cli": "meshpool-code"}
 MODES = ("code", "cowork")
-RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", *LEGACY}
+# OpenCode: the open-source coding agent, over ACP (`opencode acp`). It runs on the same providers as Meshpool's own
+# agents: its config in the Meshpool data folder points it at the key endpoint or at the local ChatGPT relay.
+OPENCODE_PKG = "opencode-ai@1.19.5"
+OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp", "models": "meshpool",
+            "command": "npx", "args": ["-y", OPENCODE_PKG, "acp"], "share_mcp": True, "install": NODE_NOTE,
+            "tagline": "The open-source coding agent, with its own tools and plans",
+            "description": ("OpenCode, the popular open-source coding agent, on your Meshpool key, another API key or "
+                            "your ChatGPT sign-in. Uses your connected apps and skills.")}
+RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", "opencode", *LEGACY}
 ID_RE = r"[A-Za-z0-9_.-]{1,60}"
 HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
@@ -122,6 +130,33 @@ def write_private(p: Path, text: str) -> None:
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
+
+
+def opencode_home() -> Path:
+    return C.home() / "opencode"
+
+
+def prepare_opencode(model: str | None = None) -> dict:
+    """Write OpenCode's config for the thread's provider and model; returns the extra environment it needs. The key
+    stays in the environment ({env:...} in the config), never in the file."""
+    from meshpool_harness import providers as PV
+    prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
+    env = {}
+    if prov == "chatgpt":
+        from meshpool_harness.core import chatgpt_relay
+        env = chatgpt_relay.env()               # the relay holds the sign-in; OpenCode only sees its address and token
+        base, key_env = env["MESHPOOL_CHATGPT_RELAY_URL"], "MESHPOOL_CHATGPT_RELAY_KEY"
+    else:
+        base, key_env, bare = PV.key_base(), "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
+    home = opencode_home()
+    home.mkdir(parents=True, exist_ok=True)
+    cfg = {"$schema": "https://opencode.ai/config.json", "autoupdate": False, "share": "disabled",
+           "provider": {"meshpool": {"npm": "@ai-sdk/openai-compatible", "name": "Meshpool",
+                                     "options": {"baseURL": base, "apiKey": "{env:" + key_env + "}"},
+                                     "models": {bare: {"name": bare}}}},
+           "model": f"meshpool/{bare}"}
+    (home / "opencode.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return env
 
 
 def prepare_hermes(model: str | None = None) -> None:
@@ -237,6 +272,7 @@ def load_all() -> list[dict]:
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
     out.append(dict(CODEX, available=_available(CODEX), builtin=True, signed_in=signed_in(CODEX["login"]),
                     **credentials(CODEX["id"])))
+    out.append(dict(OPENCODE, available=_available(OPENCODE), builtin=True, **credentials(OPENCODE["id"])))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
@@ -315,7 +351,7 @@ def _manifest_env(hid: str) -> dict:
     """The environment a built-in harness itself needs, apart from any provider's credentials."""
     if hid == "hermes":
         return dict((_bundled_hermes() or {}).get("env") or {})
-    h = next((h for h in (*BUILTIN, PI, AUTO, CODEX) if h["id"] == hid), None)
+    h = next((h for h in (*BUILTIN, PI, AUTO, CODEX, OPENCODE) if h["id"] == hid), None)
     return dict((h or {}).get("env") or {})
 
 
@@ -406,6 +442,10 @@ def _launch(hid: str, prov: str | None) -> dict:
                 "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
     if hid == "hermes":
         return {"prepare": "hermes"}
+    if hid == "opencode":
+        return {"prepare": "opencode", "env": {"OPENCODE_CONFIG": str(opencode_home() / "opencode.json"),
+                                               "MESHPOOL_API_KEY": PV.key()},
+                "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
     return {}
 
 

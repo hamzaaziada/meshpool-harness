@@ -127,3 +127,22 @@ def test_relay_status_follows_the_stream_error():
     assert _status(RuntimeError('chatgpt HTTP 500: {"code": "context_length_exceeded"}')) == 400
     assert _status(RuntimeError('chatgpt HTTP 500: {"code": "server_error"}')) == 500
     assert _status(RuntimeError("chatgpt HTTP 0: timed out")) == 502
+
+
+def test_opencode_runs_on_the_key_endpoint_with_the_key_kept_out_of_its_config(tmp_path, monkeypatch):
+    import json
+    from meshpool_harness import config as C
+    from meshpool_harness import harnesses as HR
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.setattr(C, "home", lambda: tmp_path)
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-secret")
+    monkeypatch.setenv("MESHPOOL_BASE_URL", "https://example.test/v1")
+    h = HR.get("opencode", "deepseek-v4.1-flash")
+    assert h["type"] == "acp" and h["args"][-1] == "acp" and h["prepare"] == "opencode"
+    assert h["env"]["OPENCODE_CONFIG"].endswith("opencode.json")
+    HR.prepare_opencode("deepseek-v4.1-flash")
+    text = (tmp_path / "opencode" / "opencode.json").read_text()
+    cfg = json.loads(text)
+    assert cfg["model"] == "meshpool/deepseek-v4.1-flash"
+    assert cfg["provider"]["meshpool"]["options"]["baseURL"] == "https://example.test/v1"
+    assert "sk-test-secret" not in text and "{env:MESHPOOL_API_KEY}" in text
