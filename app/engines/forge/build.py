@@ -62,6 +62,18 @@ renderer applies a strict consulting design; you only fill fields.
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
   {kind, categories, series[{name, values}], unit, decimals, highlight_categories} on the left 2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
+- benchmark: companies (or deals) compared on 1-3 metrics: {"benchmark": {"companies": [...], "panels": [{"title":
+  "EV / EBITDA (x)", "unit": "x" | "%", "values": [one per company, null = not meaningful], "median", "p25",
+  "p75"}], "highlight": [index of the subject company], "logos": optional {company: image path}}, "takeaway",
+  "bullets"}. Bars in one order across panels, a Median bar and median line: use it instead of a multiples table.
+- football_field: valuation ranges by method: "chart" {"categories": methods, "series": [{"name": "Low", "values"},
+  {"name": "High", "values"}], "unit": "$", "decimals": 2, "marker": {"label": "Current price", "value"}}.
+- Sensitivity grids and other value grids: table_focus with "table": {..., "heat_grid": {"center": base value,
+  "base": [row, col]}} shades every cell by its distance from the base case.
+Choose the exhibit by the comparison (Zelazny): ranking -> bar or benchmark; change over time -> column or line;
+parts of a whole -> stacked or waterfall; a bridge from one total to another -> waterfall; ranges -> football field;
+two-way sensitivity -> heat map; qualitative scores -> grid with a harvey part. A table only when the reader needs
+to look up exact values across many columns.
 {fill}
 Text markup: **bold phrase**; a bold phrase containing a number is shown in the emphasis colour; ^1 is a
 superscript footnote marker. Numbers in bullets are emphasised automatically. Footnotes go in "footnotes"."""
