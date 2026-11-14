@@ -1016,12 +1016,15 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         else:
             s.format.fill.solid()
             s.format.fill.fore_color.theme_color = palette[k % 4]
-            if hl and not multi:
+            if not multi:
+                vals_k = series[k]["values"]
                 for j, cat in enumerate(cats):
-                    if cat in hl:
+                    neg = j < len(vals_k) and isinstance(vals_k[j], (int, float)) and vals_k[j] < 0
+                    if cat in hl or neg:
+                        # the focus point in cyan; a fall in coral, so best and worst never share a colour
                         f = s.points[j].format
                         f.fill.solid()
-                        f.fill.fore_color.theme_color = TC.ACCENT_3
+                        f.fill.fore_color.theme_color = TC.ACCENT_2 if neg else TC.ACCENT_3
         s.data_labels.show_value = True
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False

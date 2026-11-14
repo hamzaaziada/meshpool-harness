@@ -98,6 +98,21 @@ def density_from(task: str, options: dict | None = None, density: str | None = N
 ADD_RE = re.compile(r"^\[add to deck: ([^\]]+)\]\s*", re.S)
 
 
+def _plain_office(deck: str) -> bool:
+    """True for a deck in PowerPoint's stock look: the Office theme and colours, stock fonts, no logo in the master."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(deck) as z:
+            theme = z.read("ppt/theme/theme1.xml").decode("utf-8", "replace")
+            pics = [n for n in z.namelist() if n.startswith(("ppt/slideMasters/_rels", "ppt/slideLayouts/_rels"))
+                    and b"relationships/image" in z.read(n)]
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
+    fonts = set(re.findall(r'<a:latin typeface="([^"]*)"', theme)[:2])
+    stock = {"Calibri", "Calibri Light", "Aptos", "Aptos Display", "Arial", "Times New Roman", ""}
+    return bool(re.search(r'<a:clrScheme name="Office', theme)) and fonts <= stock and not pics
+
+
 def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
                 model: str | None = None, density: str | None = None) -> dict:
     """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
@@ -109,14 +124,19 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     if model:
         os.environ.setdefault("FORGE_MODEL", model)
     n = min(max(slide_count(task) or 1, 1), 12)
-    look, _ = brand_from("same style as the attached deck", [deck])
+    # A real brand (its own colours, fonts or logo) is followed; PowerPoint's stock Office theme is not a brand, and
+    # copying it gave Calibri and stock colours: those decks get the forge design system instead.
+    look = {} if _plain_office(deck) else brand_from("same style as the attached deck", [deck])[0]
     res = build(_brief(task, workdir, files), workdir, n, client=client, task_id=task_id,
                 density=density_from(task, None, density), insert=True, **look)
     src = Path(deck)
-    out = src.with_name(f"{src.stem} (updated){src.suffix}")
+    # the job works on a copy in "Meshpool outputs/<job>/": save next to the user's own deck when it is there
+    orig = src.parent.parent.parent / src.name
+    home = orig.parent if src.parent.parent.name == "Meshpool outputs" and orig.is_file() else src.parent
+    out = home / f"{src.stem} (updated){src.suffix}"
     i = 2
     while out.exists():
-        out = src.with_name(f"{src.stem} (updated {i}){src.suffix}")
+        out = home / f"{src.stem} (updated {i}){src.suffix}"
         i += 1
     added = append(str(src), res["pptx"], str(out))
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())

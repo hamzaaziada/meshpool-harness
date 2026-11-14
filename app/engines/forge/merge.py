@@ -33,6 +33,7 @@ def append(target: str, source: str, out: str) -> int:
     """Write `out`: every slide of `target`, then every slide of `source`. Returns how many slides were added."""
     dst, src = Presentation(target), Presentation(source)
     pkg = dst.part.package
+    pin = _pinner(src)       # theme colours and fonts as the source drew them, whatever the target deck's theme
     # A deck of another shape (4:3): the new slides are scaled evenly to fit and centred, text included
     f = min(dst.slide_width / src.slide_width, dst.slide_height / src.slide_height)
     dx = (dst.slide_width - src.slide_width * f) / 2
@@ -52,7 +53,7 @@ def append(target: str, source: str, out: str) -> int:
                 _, rid = new.part.get_or_add_image_part(io.BytesIO(rel.target_part.blob))
                 ids[rel.rId] = rid
             elif rel.reltype == RT.CHART:
-                ids[rel.rId] = new.part.relate_to(_copy_chart(rel.target_part, pkg), RT.CHART)
+                ids[rel.rId] = new.part.relate_to(_copy_chart(rel.target_part, pkg, pin, f), RT.CHART)
             else:                                                # anything else: carried over as it is
                 ids[rel.rId] = new.part.relate_to(rel.target_part, rel.reltype)
         tree = new.shapes._spTree
@@ -60,9 +61,12 @@ def append(target: str, source: str, out: str) -> int:
             if el.tag.endswith("}nvGrpSpPr") or el.tag.endswith("}grpSpPr"):
                 continue
             el = copy.deepcopy(el)
+            _inherit(el, s)                                      # before it stops being a placeholder
             if abs(f - 1) > 0.002:
                 _scale(el, f, dx, dy)
             _renumber(el, len(dst.slides))
+            pin(el)
+            _unplaceholder(el)
             for node in el.iter():
                 for k, v in list(node.attrib.items()):
                     if k.startswith(_R) and v in ids:
@@ -76,6 +80,117 @@ def append(target: str, source: str, out: str) -> int:
         added += 1
     dst.save(out)
     return added
+
+
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+# what may follow a:latin inside a run's properties (the schema's order): latin is inserted before the first of these
+_AFTER_LATIN = {_A + t for t in ("ea", "cs", "sym", "hlinkClick", "hlinkMouseOver", "rtl", "extLst")}
+
+
+def _pinner(prs):
+    """A function that rewrites theme references in copied XML to the colours and fonts of `prs`'s own theme:
+    schemeClr becomes srgbClr (its tint and shade children kept), +mj-lt / +mn-lt become the font names, and text
+    with no font of its own gets the body font. Without it the slides took the target deck's theme (stock Office:
+    Calibri and purple)."""
+    from lxml import etree
+    master = prs.slide_masters[0]
+    theme = next(r.target_part for r in master.part.rels.values() if r.reltype == RT.THEME)
+    t = etree.fromstring(theme.blob)
+    colors = {}
+    for slot in t.find(f".//{_A}clrScheme"):
+        name = slot.tag.rsplit("}", 1)[-1]
+        rgb = slot.find(f"{_A}srgbClr")
+        sysc = slot.find(f"{_A}sysClr")
+        colors[name] = rgb.get("val") if rgb is not None else (sysc.get("lastClr") if sysc is not None else None)
+    cmap = master._element.find("{http://schemas.openxmlformats.org/presentationml/2006/main}clrMap")
+    alias = dict(cmap.attrib) if cmap is not None else {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2"}
+    major = t.find(f".//{_A}majorFont/{_A}latin").get("typeface")
+    minor = t.find(f".//{_A}minorFont/{_A}latin").get("typeface")
+
+    def pin(root):
+        for sc in list(root.iter(f"{_A}schemeClr")):
+            hexv = colors.get(alias.get(sc.get("val"), sc.get("val")))
+            if hexv:
+                sc.tag = f"{_A}srgbClr"
+                sc.set("val", hexv)
+        for lat in root.iter(f"{_A}latin"):
+            lat.set("typeface", {"+mj-lt": major, "+mn-lt": minor}.get(lat.get("typeface"), lat.get("typeface")))
+        for tag in ("rPr", "defRPr", "endParaRPr"):
+            for rp in root.iter(f"{_A}{tag}"):
+                if rp.find(f"{_A}latin") is None:
+                    lat = etree.Element(f"{_A}latin", typeface=minor)
+                    nxt = next((c for c in rp if c.tag in _AFTER_LATIN), None)
+                    nxt.addprevious(lat) if nxt is not None else rp.append(lat)
+    return pin
+
+
+def _inherit(el, slide):
+    """Write onto a placeholder shape what it inherits from its source layout and master (the title's bottom anchor,
+    alignment, line spacing, bold), so it looks the same once it is a plain shape in another deck."""
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    ph = next(el.iter(f"{P}ph"), None)
+    body = next(el.iter(f"{_A}bodyPr"), None)
+    if ph is None or body is None:
+        return
+    typ, idx = ph.get("type", "body"), ph.get("idx", "0")
+    title = typ in ("title", "ctrTitle")
+    sources = []                                             # nearest first: the layout's placeholder, then the master's
+    for holder in (slide.slide_layout, slide.slide_layout.slide_master):
+        for sp in holder.placeholders:
+            pf = sp._element.find(f".//{P}ph")
+            if pf is not None and (pf.get("idx", "0") == idx and not title
+                                   or title and pf.get("type") in ("title", "ctrTitle")):
+                sources.append(sp._element)
+                break
+    for src in sources:
+        sb = next(src.iter(f"{_A}bodyPr"), None)
+        for k, v in (sb.attrib.items() if sb is not None else ()):
+            if k not in body.attrib:
+                body.set(k, v)
+    master = slide.slide_layout.slide_master._element
+    style = master.find(f".//{P}{'titleStyle' if title else 'bodyStyle'}")
+    lvl = []
+    for src in sources:
+        lst = next(src.iter(f"{_A}lstStyle"), None)
+        if lst is not None and lst.find(f"{_A}lvl1pPr") is not None:
+            lvl.append(lst.find(f"{_A}lvl1pPr"))
+    if style is not None and style.find(f"{_A}lvl1pPr") is not None:
+        lvl.append(style.find(f"{_A}lvl1pPr"))
+    if not lvl:
+        return
+    for para in el.iter(f"{_A}p"):
+        ppr = para.find(f"{_A}pPr")
+        if ppr is None:
+            ppr = copy.deepcopy(lvl[0])
+            ppr.tag = f"{_A}pPr"
+            for c in list(ppr):
+                if c.tag.endswith("}defRPr"):
+                    ppr.remove(c)
+            para.insert(0, ppr)
+        for lv in lvl:
+            if "algn" in lv.attrib and "algn" not in ppr.attrib:
+                ppr.set("algn", lv.get("algn"))
+            ln = lv.find(f"{_A}lnSpc")
+            if ln is not None and ppr.find(f"{_A}lnSpc") is None:
+                ppr.insert(0, copy.deepcopy(ln))
+        d = next((lv.find(f"{_A}defRPr") for lv in lvl if lv.find(f"{_A}defRPr") is not None), None)
+        if d is not None:
+            for r in para.iter(f"{_A}rPr"):
+                for k in ("b", "i", "sz"):
+                    if k in d.attrib and k not in r.attrib:
+                        r.set(k, d.get(k))
+
+
+def _unplaceholder(el):
+    """A copied placeholder would take the target layout's formatting (a centred, middle-anchored title over the
+    rule): when it has its own position it becomes a plain shape and keeps the look it was drawn with."""
+    P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    for nv in el.iter(f"{P}nvPr"):
+        ph = nv.find(f"{P}ph")
+        sp = nv.getparent().getparent() if nv.getparent() is not None else None
+        has_xfrm = sp is not None and any(c.tag.endswith("}xfrm") for c in sp.iter())
+        if ph is not None and has_xfrm:
+            nv.remove(ph)
 
 
 def _renumber(el, n: int):
@@ -109,12 +224,26 @@ def _scale(el, f: float, dx: float, dy: float):
             node.set("h", str(int(int(node.get("h")) * f)))
         elif tag in ("rPr", "defRPr", "endParaRPr") and "sz" in node.attrib:
             node.set("sz", str(max(600, int(int(node.get("sz")) * f))))
+        elif tag == "spcPts" and "val" in node.attrib:          # line spacing and space before/after, in points
+            node.set("val", str(int(int(node.get("val")) * f)))
+        elif tag == "bodyPr":                                    # text box padding, in EMU
+            for k in ("lIns", "tIns", "rIns", "bIns"):
+                if k in node.attrib:
+                    node.set(k, str(int(int(node.get(k)) * f)))
 
 
-def _copy_chart(part, pkg):
+def _copy_chart(part, pkg, pin, f: float = 1.0):
     """A chart part and its embedded workbook, copied into pkg under fresh names (so nothing collides)."""
+    from lxml import etree
     from pptx.parts.chart import ChartPart
-    new = ChartPart.load(pkg.next_partname("/ppt/charts/chart%d.xml"), part.content_type, pkg, part.blob)
+    root = etree.fromstring(part.blob)
+    pin(root)
+    if abs(f - 1) > 0.002:                                       # the chart's own text, on a smaller slide
+        for node in root.iter():
+            if node.tag.rsplit("}", 1)[-1] in ("rPr", "defRPr", "endParaRPr") and "sz" in node.attrib:
+                node.set("sz", str(max(600, int(int(node.get("sz")) * f))))
+    blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    new = ChartPart.load(pkg.next_partname("/ppt/charts/chart%d.xml"), part.content_type, pkg, blob)
     for rel in list(part.rels.values()):
         if rel.is_external:
             rid = new.relate_to(rel.target_ref, rel.reltype, is_external=True)
