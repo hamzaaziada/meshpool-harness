@@ -782,7 +782,7 @@ class Agent:
                 raise
             except RuntimeError as e:
                 last, msg = e, str(e)
-                if type(e).__name__ == "NotSignedIn":     # ChatGPT sign-in missing or expired: retrying cannot help
+                if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":

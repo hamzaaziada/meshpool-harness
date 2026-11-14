@@ -39,12 +39,63 @@ TOKEN_URL = "https://auth.openai.com/oauth/token"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"        # the public Codex CLI OAuth client its auth.json tokens belong to
 REFRESH_SKEW_S = 120                               # refresh this long before the access token expires
 REFRESH_EVERY_S = 8 * 24 * 3600                    # Codex also refreshes a token this old, whatever its expiry
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "gpt-6-luna"                      # used only when the plan's model list cannot be read
+# The model list only shows models for clients at or above each model's minimum Codex version, and needs a version in
+# Codex's format. Meshpool sends the Codex release whose request format this wire matches (checked live with Codex
+# 0.169.0); it still names itself with originator: meshpool.
+CODEX_COMPAT_VERSION = "0.169.0"
 # Pi and Hermes reach the sign-in through the local relay (chatgpt_relay.py), so this process stays its only refresher.
 
 
 class NotSignedIn(RuntimeError):
     pass
+
+
+class UsageLimit(RuntimeError):
+    """The ChatGPT plan's usage limit is reached. Not retried: it resets in hours or days, not seconds."""
+    def __init__(self, msg: str, resets_at: float | None = None, plan: str = ""):
+        super().__init__(msg)
+        self.resets_at, self.plan = resets_at, plan
+
+
+_LIMIT: dict = {}                                  # the last usage limit seen: {"resets_at", "plan"}
+
+
+def _when(ts: float | None) -> str:
+    if not ts:
+        return "later"
+    left = ts - time.time()
+    if left <= 0:
+        return "now"
+    day = time.strftime("%d %b", time.localtime(ts)).lstrip("0")
+    if left < 3600:
+        return f"in {max(1, int(left // 60))} minutes"
+    if left < 86400:
+        return f"in {int(left // 3600)} hours"
+    return f"in {int(left // 86400)} days, on {day}"
+
+
+def limit_note() -> str:
+    """A short note for the model menu while the plan's limit is reached, else ''."""
+    ts = _LIMIT.get("resets_at")
+    if not ts or ts <= time.time():
+        return ""
+    plan = f"ChatGPT {_LIMIT['plan'].title()}" if _LIMIT.get("plan") else "your ChatGPT plan"
+    return f"Usage limit reached on {plan}. It resets {_when(ts)}."
+
+
+def _usage_limit(code: int, detail: str) -> UsageLimit | None:
+    if code != 429:
+        return None
+    try:
+        err = (json.loads(detail) or {}).get("error") or {}
+    except ValueError:
+        return None
+    if err.get("type") != "usage_limit_reached":
+        return None
+    ts = err.get("resets_at") or (time.time() + err["resets_in_seconds"] if err.get("resets_in_seconds") else None)
+    _LIMIT.update(resets_at=ts, plan=str(err.get("plan_type") or ""))
+    return UsageLimit(limit_note() + " Pick another provider in the model menu to keep working.", ts, _LIMIT["plan"])
 
 
 def base_url() -> str:
@@ -302,7 +353,7 @@ def models() -> list[str]:
         return _MODELS["rows"]
     try:
         tok, tokens = credentials()
-        req = urllib.request.Request(f"{base_url()}/models?client_version={_version()}", headers={
+        req = urllib.request.Request(f"{base_url()}/models?client_version={CODEX_COMPAT_VERSION}", headers={
             "Authorization": f"Bearer {tok}", "originator": "meshpool", "User-Agent": f"Meshpool/{_version()}",
             **account_headers(tok, tokens)})
         with urllib.request.urlopen(req, timeout=20) as r:
@@ -318,11 +369,14 @@ def models() -> list[str]:
 
 
 def default_model() -> str:
+    """The model chosen in the picker if the plan still offers it, else the first model the plan lists."""
     from meshpool_harness import config as C
     m = (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip()
-    if m.startswith("chatgpt:") and m[8:]:
-        return m[8:]                                  # the default model chosen in the picker
-    return (C.read().get("MH_CHATGPT_MODEL") or os.environ.get("MH_CHATGPT_MODEL") or DEFAULT_MODEL).strip()
+    want = m[8:] if m.startswith("chatgpt:") else (C.read().get("MH_CHATGPT_MODEL") or os.environ.get("MH_CHATGPT_MODEL") or "")
+    known = _MODELS["rows"]
+    if want and (not known or want in known):
+        return want.strip()
+    return known[0] if known else DEFAULT_MODEL
 
 
 def resolve_model(model: str | None) -> str:
@@ -351,14 +405,17 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
                 from meshpool_harness.core.wire import _first_then_idle
                 return read_stream(_first_then_idle(r, idle), on_text)
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:400]
+            detail = e.read().decode("utf-8", "replace")[:2000]
+            lim = _usage_limit(e.code, detail)
+            if lim:
+                raise lim
             if e.code == 401 and attempt == 0:
                 failed = tok                          # refresh once, unless another program already did
                 continue
             if e.code == 401:
                 raise NotSignedIn(f"ChatGPT did not accept the sign-in. Sign in again: Settings, Account, Runs on. "
                                   f"({detail})")
-            raise RuntimeError(f"chatgpt HTTP {e.code}: {detail}")
+            raise RuntimeError(f"chatgpt HTTP {e.code}: {detail[:400]}")
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as e:
             raise RuntimeError(f"chatgpt HTTP 0: timed out or connection lost: {e}")
     raise RuntimeError("chatgpt HTTP 401")

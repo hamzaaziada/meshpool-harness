@@ -191,7 +191,8 @@ def list_models(prov: str, refresh: bool = False) -> tuple[list[str], str]:
             CG._MODELS.update(t=0.0)
         ids = CG.models()
         d = CG.default_model()
-        return list(dict.fromkeys([d] + ids)), "" if ids else "Showing the default model; the plan's list did not load."
+        note = CG.limit_note() or ("" if ids else "Showing the default model; the plan's list did not load.")
+        return list(dict.fromkeys([d] + ids)), note
     if prov == "anthropic":
         d = _get(ANTHROPIC_BASE + "/models?limit=100", {"x-api-key": anthropic_key(), "anthropic-version": "2023-06-01"})
         ids = [m["id"] for m in (d or {}).get("data") or [] if m.get("id")]
