@@ -1,6 +1,7 @@
 """Forge validators: a template-built deck and a disciplined workbook pass; decks and workbooks with the known
 AI-output defects fail on the right rule."""
 import json
+import re
 import sys
 import warnings
 from pathlib import Path
@@ -532,3 +533,55 @@ def test_clarity_pass_leaves_document_headings_alone():
     assert len(seen) == 2 and rep["changed"] == 2                  # the prose line and the bullet, not the headings
     assert out.startswith("# Northwind Instruments: valuation and strategic options\n\n## Risks to the base case")
     assert out.endswith("Rewritten line with four words\n- Rewritten line with four words")
+
+
+def test_long_decks_get_an_agenda_and_section_tracker_built_from_the_storyline(tmp_path):
+    """Consulting default: a deck of 10+ slides opens with an agenda made from the storyline's sections (page numbers
+    and icons included), within the asked slide count; a section divider becomes the tracker with its section lit."""
+    from engines.forge.build import build
+    sections = ["Where we stand", "Where the market is going", "How rivals respond", "What we recommend"]
+    seen = {}
+
+    def model(messages):
+        sys_, user = messages[0]["content"], messages[1]["content"]
+        if "engagement manager" in sys_:
+            seen["story"] = sys_
+            n = int(re.search(r"Exactly (\d+) slides", sys_).group(1))
+            body = [{"node": f"{i // 2 + 1}.{i % 2 + 1}", "section": sections[(i // 2) % 4], "section_no": str(i // 2 + 1),
+                     "title": f"North revenue grew 18% in part {i + 1}", "archetype": "bar_takeaway", "evidence": []}
+                    for i in range(n - 2)]
+            body.insert(2, {"node": "2.0", "section": sections[1], "title": "Market", "archetype": "section_divider"})
+            return {"slides": [{"node": "0", "title": "Northwind growth plan", "archetype": "cover"}] + body}
+        if "ONE consulting slide" in sys_:
+            seen["slide"] = sys_
+            x = json.loads(user.split("This slide: ", 1)[1].split("\n\nFacts", 1)[0])
+            if x["archetype"] == "cover":
+                return dict(x, subtitle="Board discussion", date="November 2026")
+            return dict(x, subtitle="Revenue by region, $m, 2025", chart={"kind": "bar", "categories": ["North", "South", "East"],
+                        "series": [{"name": "Revenue", "values": [420, 310, 220]}], "unit": "$m"},
+                        takeaway={"text": "North carries the growth"}, bullets=[{"text": "North grew 18% on new stores"}],
+                        source={"text": "Company accounts"})
+        if "Fix this one consulting slide" in sys_:
+            return json.loads(user.split("Slide:\n", 1)[1].split("\n\nFacts", 1)[0])
+        return {"edits": []}
+    stub = _Stub({"main": model})
+    import engines.forge.build as B
+    old = (B.MODEL, B.STORY_MODEL)
+    B.MODEL = B.STORY_MODEL = "main"
+    try:
+        res = build("Northwind revenue was $420m in the North, $310m in the South and $220m in the East in 2025; "
+                    "North grew 18%.", str(tmp_path), 10, client=stub, task_id="t")
+    finally:
+        B.MODEL, B.STORY_MODEL = old
+    assert "Do NOT\nplan an agenda slide" in seen["story"] and "House style" in seen["slide"]
+    from pptx import Presentation as P2
+    prs = P2(res["pptx"])
+    assert len(prs.slides) == 10                                         # the agenda counts within the asked length
+    names = lambda sl: {sh.name: sh for sh in sl.shapes}                 # noqa: E731
+    ag = names(prs.slides[1])
+    assert ag["AgendaName1"].text_frame.text == "Where we stand" and ag["AgendaPage1"].text_frame.text == "p. 3"
+    assert len([k for k in ag if k.startswith("AgendaName")]) == 4
+    assert any(k.startswith("ov_Icon_") and k != "ov_Icon_circle-dot" for k in ag)
+    tracker = names(prs.slides[4])
+    assert "ov_Current2" in tracker and "ov_Current1" not in tracker      # the divider lights its own section
+    assert all("TitleRule" not in names(sl) for sl in list(prs.slides)[1:2])  # no line under a title with no subtitle

@@ -92,8 +92,59 @@ SLIDE_SHAPE = """Slide JSON: {"id","node" (from the storyline),"archetype","titl
  ["Preliminary", "Non-exhaustive"], "notes": detail that did not fit}.
 Every text element that holds numbers carries "prov": [fact ids] (bullets as {"text","prov"}; cells as
 {"lead","bullets":[{"text","prov"}],"prov"}). Use ONLY fact values; if a number is missing write [GAP: what].
-Titles: one sentence stating the takeaway, with a verb, <= 18 words. Every data slide has a source.
+Titles: one sentence stating the takeaway, with a verb, <= 15 words, no full stop. Every data slide has a source.
 ONE chart = ONE measure in ONE unit. Line charts need >= 4 periods. Sort bars largest first."""
+
+# The house style every deck gets without being asked: how a top strategy firm's slide reads.
+CONSULTING = """House style (always, whatever the brief says about look):
+- Answer first. The titles, read in order, tell the whole story; each title is the slide's takeaway in plain words,
+  not a topic label ("North drives 38% of growth", never "Regional overview").
+- One message per slide. If a title needs "and" to join two ideas, it is two slides.
+- Show, then tell: every slide has an exhibit (chart, table, numbered steps, icon rows, big numbers, 2x2). A slide
+  of bullets only is a failed slide; pick the grid archetype with parts instead.
+- Every data slide states its "so what" on the page: a takeaway line, a stat or a callout that says what the
+  evidence means for the reader's decision.
+- Emphasise one thing per exhibit (highlight_categories, the focus row) and leave the rest muted. Label values
+  directly; no legends where labels fit.
+- Short text: phrases inside exhibits, bullets of one line where possible. Sentence case everywhere, no capitals for
+  emphasis, no em dashes, no jargon, no filler ("leverage", "robust", "holistic", "synergies").
+- Steps, options, drivers and pillars get a one-word "icon" meaning so the renderer can draw a line icon.
+- Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
+
+_AGENDA_RE = re.compile(r"(?i)\bagenda\b|\btable of contents\b|\bcontents (?:slide|page)\b")
+
+
+def wants_agenda(brief: str, slides_wanted: int, insert: bool = False) -> bool:
+    """An agenda after the cover: when the brief asks for one, and by default in any deck of 10 slides or more (the
+    reader of a long deck needs the map). Never when slides are added to a deck the user already has."""
+    return not insert and (bool(_AGENDA_RE.search(brief or "")) or slides_wanted >= 10)
+
+
+def add_agenda(plan: list) -> list:
+    """The agenda slide goes right after the cover; it is built from the storyline's sections, not by a model."""
+    at = 1 if plan and plan[0].get("archetype") == "cover" else 0
+    return plan[:at] + [{"node": "0.1", "section": "", "title": "Agenda", "archetype": "agenda", "evidence": []}] + plan[at:]
+
+
+def fill_agenda(slides: list, plan: list) -> list:
+    """Each slide keeps its storyline section; the agenda and every section divider get the section list, and a
+    divider shows its own section highlighted (the section tracker)."""
+    from engines.forge.render import agenda_sections
+    for s, x in zip(slides, plan):
+        if isinstance(s, dict) and isinstance(x, dict):
+            s.setdefault("section", x.get("section") or "")
+            if x.get("section_icon"):
+                s.setdefault("section_icon", x["section_icon"])
+    secs = agenda_sections(slides)
+    for i, s in enumerate(slides):
+        if s.get("archetype") == "agenda":
+            s["sections"] = secs
+        elif s.get("archetype") == "section_divider" and len(secs) >= 2:
+            nxt = next((t.get("section") for t in slides[i + 1:] if t.get("section")), s.get("section") or "")
+            cur = next((x for x in secs if x["title"].lower() == (nxt or "").lower()), None)
+            if cur:
+                s.update(sections=secs, current=cur["no"], title=cur["title"])
+    return slides
 
 
 _OPEN_RE = re.compile(r"(?i)\b(title|cover|opening|intro(?:duction|ductory)?)\s+(slide|page)\b|\bagenda\b|"
@@ -379,7 +430,8 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     out.mkdir(parents=True, exist_ok=True)
     facts = facts_from_brief(brief) + [dict(f) for f in extra_facts or []]
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
-    narrative_n = max(3, slides_wanted - len(fixed)) if not insert else max(1, slides_wanted)
+    agenda = wants_agenda(brief, slides_wanted, insert)
+    narrative_n = max(3, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
     fixed_txt = ("\nThese data pages are already built from the model and will be inserted as a section before the "
                  "closing slide; do NOT plan slides that repeat them, build the argument around them and cite their "
                  "facts (W ids) where you use their numbers. Your slides carry no valuation tables, grids or charts of "
@@ -401,10 +453,13 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     # ---- stage 2: storyline (ghost deck)
     story = _call(client, STORY_MODEL, f"""You are an engagement manager at a top strategy firm. Plan the storyline
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
-"slides": [{{"node": "1.1", "section": str, "section_no": "1", "title": str, "archetype": str,
-"evidence": [fact ids], "needs": "what the slide must show"}}]}}.
+"slides": [{{"node": "1.1", "section": str, "section_no": "1", "section_icon": "one-word meaning", "title": str,
+"archetype": str, "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
+Section names are 2-5 plain words in sentence case ("Where the market is going"); they label the agenda. Do NOT
+plan an agenda slide: the engine adds it from your sections.
 Exactly {narrative_n} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.{fixed_txt}
 {STORY[density]}
+{CONSULTING}
 Each slide must have the evidence its point needs. Plan ONLY slides whose evidence
 is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
@@ -417,20 +472,26 @@ supports it. Choose varied archetypes that prove each title.
 
     # ---- stage 3: content, one call per slide (in parallel), each with only its own facts
     from concurrent.futures import ThreadPoolExecutor
-    plan = _enforce_bookends([x for x in story.get("slides", []) if isinstance(x, dict)], ends)
+    plan = _enforce_bookends([x for x in story.get("slides", []) if isinstance(x, dict)
+                              and x.get("archetype") != "agenda"], ends)
     if fixed and len(plan) > narrative_n:
         # The model often plans more than asked when model pages exist, and the extra slides restate (or worse,
         # re-estimate) those pages' numbers. Keep the opening slides and the closing one, at the asked length.
         plan = plan[:narrative_n - 1] + plan[-1:]
+    if agenda:
+        plan = add_agenda(plan)
     nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
 
     def one(x):
+        if x.get("archetype") in ("agenda", "section_divider"):   # built from the storyline, no model call
+            return {k: x.get(k) for k in ("node", "archetype", "title", "section") if x.get(k) is not None}
         ev = set(x.get("evidence") or [])
         rel = [f for f in facts if f["id"] in ev] or facts
         try:
             from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
 design. {HONESTY} A number that is not in the facts is written [GAP: what is missing] (it shows as N/A).
+{CONSULTING}
 {WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
@@ -448,7 +509,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         slides[at:at] = fixed
         plan[at:at] = [{"node": p.get("node"), "title": p.get("title"), "archetype": p.get("archetype")} for p in fixed]
         nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
-    is_fixed = lambda i: bool(slides[i].get("fixed"))  # noqa: E731
+    fill_agenda(slides, plan)
+    is_fixed = lambda i: bool(slides[i].get("fixed")) or slides[i].get("archetype") in ("agenda", "section_divider")  # noqa: E731
     from engines.forge import clarity                          # a second, smaller model reads every line once
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
@@ -497,6 +559,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             try:
                 return n, _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
+{CONSULTING}
 {WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
@@ -508,6 +571,9 @@ choice or the number of items; never layout. Keep node and keep the point of the
             for n, fixed in ex.map(fix_one, todo):
                 calls += 1
                 if isinstance(fixed, dict) and fixed.get("archetype") in ARCHETYPES:
+                    for k in ("section", "section_icon"):          # the agenda's page numbers follow the section
+                        if slides[n - 1].get(k):
+                            fixed.setdefault(k, slides[n - 1][k])
                     slides[n - 1] = fixed
                     repaired.add(n - 1)
         if repaired:                                            # repaired slides get the same clarity read

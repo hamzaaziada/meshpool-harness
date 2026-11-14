@@ -275,14 +275,8 @@ def system_check() -> list[dict]:
     rows.append({"name": "LibreOffice", "optional": True, "ok": bool(so), "detail": so or "not installed (optional)",
                  "fix": "Optional. With it, Meshpool also checks spreadsheet formula results and renders slides to "
                         "review them. Files are complete without it."})
-    try:
-        import cairosvg  # noqa: F401
-        cairosvg.svg2png(bytestring=b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>')
-        cs = True
-    except Exception:
-        cs = False
-    rows.append({"name": "Slide icons", "optional": True, "ok": cs, "detail": "cairo available" if cs else "cairo not available",
-                 "fix": "Optional. Decks still build; icons are left out without the Cairo library."})
+    rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
+                 "fix": "Not needed: icons ship pre-rendered with Meshpool."})
     return rows
 
 

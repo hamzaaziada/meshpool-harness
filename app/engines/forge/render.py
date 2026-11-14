@@ -288,7 +288,18 @@ ICON_ALIASES = {"money": "banknote", "revenue": "banknote", "cost": "receipt", "
                 "warning": "triangle-alert", "security": "shield-check", "search": "search",
                 "digital": "monitor-smartphone", "phone": "smartphone", "governance": "landmark",
                 "finance": "landmark", "investment": "piggy-bank", "phase": "milestone", "launch": "rocket",
-                "plan": "list-checks"}
+                "plan": "list-checks", "rival": "swords", "rivals": "swords", "competitor": "swords",
+                "competitors": "swords", "competition": "swords", "competitive": "swords", "recommend": "lightbulb",
+                "recommendation": "lightbulb", "recommendations": "lightbulb", "next": "arrow-right",
+                "opportunity": "sparkles", "opportunities": "sparkles", "summary": "file-text", "overview": "file-text",
+                "operations": "settings", "operating": "settings", "action": "list-checks", "actions": "list-checks",
+                "stand": "map-pin", "today": "map-pin", "situation": "map-pin", "current": "map-pin",
+                "future": "telescope", "outlook": "telescope", "forecast": "telescope", "roadmap": "map",
+                "implementation": "rocket", "execution": "rocket", "sales": "chart-column", "performance": "gauge",
+                "financial": "landmark", "financials": "landmark", "budget": "wallet", "win": "trophy",
+                "position": "compass", "options": "git-fork", "option": "git-fork", "case": "briefcase",
+                "approach": "route", "method": "route", "methodology": "route", "findings": "search-check",
+                "insights": "lightbulb", "context": "book-open", "background": "book-open"}
 
 
 @lru_cache(maxsize=1)
@@ -307,9 +318,14 @@ def icon_name(key: str | None) -> str:
         return k
     if k in ICON_ALIASES:
         return ICON_ALIASES[k]
-    for w in re.split(r"[-\s]+", k):
-        if w in ICON_ALIASES:
-            return ICON_ALIASES[w]
+    words = [w for w in re.split(r"[^a-z0-9]+", k) if len(w) > 2]
+    for w in words:                                           # a meaning word anywhere in a phrase ("how rivals respond")
+        for v in (w, w[:-1] if w.endswith("s") else w):
+            if v in ICON_MEANINGS and (ICONS / f"{ICON_MEANINGS[v]}.svg").exists():
+                return ICON_MEANINGS[v]
+            if v in ICON_ALIASES:
+                return ICON_ALIASES[v]
+    for w in words:
         hits = [n for n in names if n == w or n.startswith(w + "-")]
         if hits:
             return min(hits, key=len)
@@ -318,29 +334,45 @@ def icon_name(key: str | None) -> str:
 
 @lru_cache(maxsize=256)
 def _icon_png(name: str, hexcolor: str) -> str | None:
-    import cairosvg
+    """The icon as a PNG in the colour asked for. Masks pre-rendered from the Lucide SVGs ship with the app
+    (engines/slides/icons_png) and are coloured with Pillow: the Cairo library the SVGs need is not on Mac or
+    Windows, and decks there came out with no icons at all."""
     nm = icon_name(name)
+    ICON_CACHE.mkdir(exist_ok=True)
+    out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+    if out.exists():
+        return str(out)
+    mask = ICONS.with_name("icons_png") / f"{nm}.png"
+    if mask.exists():
+        from PIL import Image
+        a = Image.open(mask).convert("L")
+        im = Image.new("RGBA", a.size, "#" + hexcolor)
+        im.putalpha(a)
+        im.save(out)
+        return str(out)
     src = ICONS / f"{nm}.svg"
     if not src.exists():
         return None
-    ICON_CACHE.mkdir(exist_ok=True)
-    out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+    try:
+        import cairosvg
+    except Exception:  # noqa: BLE001
+        return None
     if not out.exists():
         svg = src.read_text().replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
         cairosvg.svg2png(bytestring=svg.encode(), write_to=str(out), output_width=192, output_height=192)
     return str(out)
 
 
-def _icon(sl, name, x, y, d, meaning=""):
-    """Thin line icon (Lucide, ISC) in a thin circle."""
+def _icon(sl, name, x, y, d, meaning="", muted=False):
+    """Thin line icon (Lucide, ISC) in a thin circle; muted draws it in the rule grey (an agenda's other sections)."""
     from .template import COLORS
     circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
     circ.name = f"ov_IconRing_{name}"
     _strip_style(circ)
     circ.fill.background()
-    circ.line.color.theme_color = TC.TEXT_1
+    circ.line.color.theme_color = TC.ACCENT_5 if muted else TC.TEXT_1
     circ.line.width = Pt(0.75)
-    png = _icon_png(name, COLORS["dk1"])
+    png = _icon_png(name, COLORS["accent5" if muted else "dk1"])
     if png:
         pad = d * 0.24
         pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
@@ -451,7 +483,8 @@ def _header(ctx, s, sl, n, title_w=None):
                [{"text": s["subtitle"], "size": ssz, "numbers": False}])
         if ssz == 14 and _need([{"text": s["subtitle"], "size": 14}], w) > 0.35:
             ctx.miss(n, "the subtitle", max(3, len(s["subtitle"].split()) // 3))
-    _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
+    if s.get("subtitle"):            # a line under the subtitle only: never an accent line under a bare title
+        _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
     x = RIGHT
     for k, tag in enumerate(reversed((s.get("tags") or [])[:2] if not sub else [])):
         tw = 0.1 + 0.083 * len(tag)
@@ -1822,7 +1855,6 @@ def a_exhibit_argument(ctx, s, sl, n):
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_title_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": _title_size(tr, rw) or 20, "bold": True, "heading": True, "numbers": False,
              "line_spacing": 1.0}])
-    _rule(sl, rx, TITLE_RULE_Y, rw, TC.TEXT_1, 0.75, "TitleRuleRight")
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
@@ -1837,6 +1869,9 @@ def a_exhibit_argument(ctx, s, sl, n):
         uh_ = max(0.26, _need(ub_, lw) + 0.02)
         _write(_box(sl, LEFT, y, lw, uh_, "role_subtitle_ExhibitUnit"), ub_)
         y += uh_ + 0.02
+    if ex.get("title") or ex.get("unit"):              # the exhibit's subtitle carries the line, not the titles
+        _rule(sl, LEFT, y, lw, TC.TEXT_1, 0.75, "SubtitleRule")
+        y += 0.06
     foot = 0.35 if s.get("footnotes") else 0
     _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
     blocks = []
@@ -2314,6 +2349,72 @@ def a_football_field(ctx, s, sl, n):
     a_chart_takeaway(ctx, dict(s, chart=dict(s["chart"], kind="range")), sl, n)
 
 
+def a_agenda(ctx, s, sl, n):
+    """Agenda, and the section tracker that opens each section: one row per section with a filled number disc, a line
+    icon, the section name, the claim it proves and its first page, hairlines between rows. With "current" set, that
+    row sits on a grey band and the other rows are greyed out, so the reader sees where the deck is (the
+    reference decks' tracker). Sections come from the storyline, not from the model, so they always match the deck."""
+    secs = [x for x in (s.get("sections") or []) if isinstance(x, dict) and x.get("title")][:7]
+    s = dict(s, title=s.get("title") or "Agenda", subtitle=None)
+    _header(ctx, s, sl, n)
+    cur = str(s.get("current") or "")
+    if not secs:
+        return
+    top, bottom = TITLE_RULE_Y + 0.25, BODY_B - 0.1
+    rh = min(1.15, (bottom - top) / len(secs))
+    big = rh >= 0.95
+    name_sz, det_sz = (22, 14) if big else (18, 12)
+    d = min(0.62, rh - 0.3)                                    # number disc
+    ix, nx = LEFT + d + 0.3, LEFT + 2 * d + 0.6                # icon, then name
+    px = RIGHT - 1.2                                           # page column
+    nw = colx24(11) - 0.1 - nx
+    dx, dw = colx24(12), px - 0.2 - colx24(12)
+    for i, sec in enumerate(secs):
+        y = top + i * rh
+        no = str(sec.get("no") or i + 1)
+        on = not cur or no == cur
+        if cur and on:
+            _fill(sl, LEFT - 0.15, y + 0.04, RIGHT - LEFT + 0.3, rh - 0.08, TC.BACKGROUND_2, f"ov_Current{i + 1}")
+        cy = y + (rh - d) / 2
+        disc = _fill(sl, LEFT, cy, d, d, TC.ACCENT_1 if on else TC.ACCENT_5, f"ov_AgendaNo{i + 1}", MSO_SHAPE.OVAL)
+        _shape_text(disc, [{"text": no.zfill(2) if no.isdigit() else no, "size": 15 if big else 13, "bold": True,
+                            "numbers": False, "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}],
+                    ctx, n, (LEFT, cy, d, d), MSO_ANCHOR.MIDDLE)
+        ic = next((icon_name(c) for c in (sec.get("icon"), sec["title"], sec.get("detail"))
+                   if c and icon_name(c) != "circle-dot"), "circle-dot")
+        _icon(sl, ic, ix, y + (rh - d * 0.85) / 2, d * 0.85, sec["title"], muted=not on)
+        col = TC.TEXT_1 if on else TC.ACCENT_6
+        _write(_box(sl, nx, y, nw, rh, f"AgendaName{i + 1}", MSO_ANCHOR.MIDDLE),
+               [{"text": re.sub(r"\*\*", "", sec["title"]), "size": name_sz, "bold": True, "numbers": False, "color": col}])
+        if sec.get("detail"):
+            _write(_box(sl, dx, y, dw, rh, f"AgendaDetail{i + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": re.sub(r"\*\*", "", sec["detail"]), "size": det_sz, "numbers": False,
+                     "color": TC.TEXT_2 if on else TC.ACCENT_5}], ctx, n)
+        if sec.get("page"):
+            _write(_box(sl, px, y, RIGHT - px, rh, f"AgendaPage{i + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": f"p. {sec['page']}", "size": det_sz, "numbers": False, "align": PP_ALIGN.RIGHT,
+                     "color": TC.TEXT_2 if on else TC.ACCENT_5}])
+        if i < len(secs) - 1 and not cur:
+            _rule(sl, LEFT, y + rh, RIGHT - LEFT, TC.ACCENT_5, 0.5, f"AgendaRule{i + 1}")
+
+
+def agenda_sections(slides: list[dict]) -> list[dict]:
+    """The deck's sections in order, from the slides' "section" / "section_no" (set from the storyline): name, the
+    claim of the section's first slide, its first page and an icon meaning. Covers, agendas and dividers are skipped."""
+    out, seen = [], {}
+    for i, s in enumerate(slides, 1):
+        name = (s.get("section") or "").strip()
+        if not name or s.get("archetype") in ("cover", "agenda", "section_divider", "end"):
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen[key] = True
+        out.append({"no": str(len(out) + 1), "title": name, "detail": re.sub(r"\*\*|\^\w+", "", s.get("title") or ""),
+                    "page": i, "icon": s.get("section_icon") or name})
+    return out
+
+
 def a_grid(ctx, s, sl, n):
     """A slide assembled from parts (chart, table, stats, text, callout, process, timeline, matrix2x2, harvey, quote)
     on a grid layout; see parts.py. Imported here, not at the top, because parts.py imports this module."""
@@ -2326,7 +2427,7 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
               "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "benchmark": a_benchmark, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
-              "grid": a_grid}
+              "grid": a_grid, "agenda": a_agenda}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
@@ -2463,6 +2564,8 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         if fn is None:
             errors.append(f"slide {n}: archetype '{arch}' is not in the library {sorted(ARCHETYPES)}")
             fn = a_chart_takeaway if s.get("chart") else a_challenge_matrix
+        if arch == "section_divider" and s.get("sections"):    # a divider in a deck with an agenda: the tracker
+            arch, fn = "agenda", a_agenda
         sl = prs.slides.add_slide(layout(prs, "Title Slide" if arch in DIVIDERS else "Title Only"))
         sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
                                            + (" computed:1" if s.get("fixed") else ""))

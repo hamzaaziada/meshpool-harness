@@ -932,6 +932,30 @@ class Agent:
         ok = [self.ws.root, self.dir.resolve(), C.runs_dir().resolve()]   # the project, this chat's tool output
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
+    # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
+    # pptxgenjs). Reading or editing cell values in an existing workbook (load_workbook) is fine.
+    _HANDMADE = re.compile(r"\bPresentation\(\s*\)|\.slides\.add_slide\(|\bWorkbook\(\s*\)|\bxlsxwriter\b|"
+                           r"pptxgenjs|PptxGenJS")
+
+    def _engine_only(self, name: str, args: dict) -> str:
+        """In Work, every slide and every workbook goes through the engines (make_deck, add_slides,
+        make_spreadsheet, office_task): they carry the house style and the checks. A command or file that builds one
+        by hand is not run; the reply says which tool to use instead. "" when the call is fine."""
+        if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit"):
+            return ""
+        text = " ".join(str(args.get(k) or "") for k in ("command", "content", "new")) + \
+            " ".join(str(c) for c in args.get("commands") or [])
+        m = self._HANDMADE.search(text)
+        if not m:
+            return ""
+        deck = any(k in m.group(0) for k in ("Presentation", "slide", "pptx", "Pptx"))
+        return ("Not run: slides are never written by hand here. Use make_deck for a new deck, or add_slides to add "
+                "slides to a deck the user has (it keeps the deck's look). Put what each slide must show, with the "
+                "numbers or the files that hold them, in the request." if deck else
+                "Not run: workbooks are never built by hand here. Use make_spreadsheet (or office_task) for a new "
+                "workbook or model; describe the sheets, inputs and outputs in the request. To read or change a few "
+                "values in an existing workbook, openpyxl.load_workbook is fine.")
+
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
@@ -1035,8 +1059,11 @@ class Agent:
         try:
             if bad:
                 raise bad
-            allowed, note = self._permit(name, args)
-            if not allowed:
+            steer = self._engine_only(name, args)
+            allowed, note = (False, "") if steer else self._permit(name, args)
+            if steer:
+                out, ok = steer, False
+            elif not allowed:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."

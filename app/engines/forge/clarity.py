@@ -71,7 +71,7 @@ def lines(slides: list[dict], only: set[int] | None = None) -> list[tuple[str, l
             continue
         found: list = []
         _walk(s, [], found)
-        if s.get("archetype") in ("cover", "section_divider", "appendix_divider", "end"):
+        if s.get("archetype") in ("cover", "section_divider", "agenda", "appendix_divider", "end"):
             found = [(p, t) for p, t in found if p != ["title"]]     # a cover title is a name, not a sentence
         for k, (p, t) in enumerate(found):
             out.append((f"s{si + 1}.{k}", [si] + p, t))

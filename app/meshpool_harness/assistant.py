@@ -18,6 +18,13 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you d
            "estimate genuinely helps, label it as an estimate and show how you got it. Never say something was done, "
            "checked or tested when it was not.")
 
+# Every agent, whichever harness runs it: slides and workbooks come from the Meshpool engines, which carry the
+# consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
+ENGINES = ("Every slide and every spreadsheet goes through the Meshpool office tools: make_deck for a deck, add_slides "
+           "to add slides to a deck the user has, make_spreadsheet (or office_task) for a workbook or model. Never "
+           "write a .pptx or .xlsx by hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs. Decks come out in a "
+           "top strategy firm's style without being asked; pass the user's facts and files in the request.")
+
 import contextlib
 import difflib
 import json
@@ -206,7 +213,7 @@ def context_block() -> str:
                     "themselves or their work, save it with memory_save. " if st["memory_on"] else "")
                  + "If the user asks for something to happen later or on a schedule, use schedule_task. "
                  "For a large job with independent parts (research many companies, review many files), use "
-                 "run_subtasks to work on the parts in parallel.")
+                 "run_subtasks to work on the parts in parallel. " + ENGINES)
     return "\n\n".join(parts)
 
 

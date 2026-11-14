@@ -124,3 +124,14 @@ def test_slides_added_to_a_users_deck_keep_its_slides_and_carry_charts(tmp_path)
     assert next(sh for sh in added.shapes if sh.name == "Firm").text_frame.text.endswith("2")   # renumbered
     assert all(sh.left + sh.width <= out.slide_width for sh in added.shapes)                      # scaled to fit 4:3
     assert check(str(tmp_path / "out.pptx"))["ok"]                                                 # opens without repair
+
+
+def test_work_never_builds_slides_or_workbooks_by_hand(tmp_path):
+    from meshpool_harness import assistant as A
+    from meshpool_harness.agent.core import Agent
+    assert "make_deck" in A.context_block() and "python-pptx" in A.ENGINES       # every harness is told
+    w = Agent(str(tmp_path), profile="work")
+    assert "add_slides" in w._engine_only("bash", {"command": "python -c 'from pptx import Presentation; p=Presentation(); p.slides.add_slide(l)'"})
+    assert "make_spreadsheet" in w._engine_only("write_file", {"path": "m.py", "content": "from openpyxl import Workbook\nwb = Workbook()"})
+    assert w._engine_only("bash", {"command": "python -c 'import openpyxl; openpyxl.load_workbook(\"a.xlsx\")'"}) == ""
+    assert Agent(str(tmp_path))._engine_only("bash", {"command": "python -c 'Presentation()'"}) == ""   # Code: free
