@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 from meshpool_harness import config as _config  # noqa: E402
 
-ENGINES = ("code", "data", "sheets", "slides", "forge", "general", "browser")
+ENGINES = ("research", "credit", "code", "data", "sheets", "slides", "forge", "general", "browser")
 
 
 def _engine(name):
@@ -61,6 +61,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
     outdir.mkdir(parents=True, exist_ok=True)
     inputs = [str(Path(f).resolve()) for f in files]
     t0, results = time.time(), []
+    researched = False
     for i, name in enumerate(r.engines):
         wd = workdir if (name == "code" and workdir) else str(outdir)
         for f in inputs:                         # engines see inputs inside their workdir
@@ -76,7 +77,9 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                      f"{prev['answer']}\nFiles: {', '.join(prev.get('artifacts', []))}")
         if len(r.engines) > 1:
             task += f"\n\nYou are step {i + 1} of {len(r.engines)} ({' -> '.join(r.engines)}); do only the {name} part."
-        kw = {"files": inputs} if name in ("data", "sheets") else {}
+        kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
+        if name == "slides" and researched:          # the deck builds on the research report (forge facts)
+            kw = {"files": inputs}
         if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
             kw["model"] = os.environ["MH_MODEL"]
         saved = dict(os.environ)
@@ -94,6 +97,11 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         results.append(res)
         if not res.get("ok"):
             break
+        if name == "research":                       # later steps read the sourced report; sources.json stays in
+            rep = Path(wd) / "report.md"             # the folder for assumption sources (R.Corpus(".").assumption_source)
+            if rep.exists() and str(rep) not in inputs:
+                inputs.append(str(rep))
+                researched = True
     spent = client.spent() if hasattr(client, "spent") else None
     return {"task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
                                          "used_model_call": r.used_model_call},

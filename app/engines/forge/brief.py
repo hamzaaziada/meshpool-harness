@@ -81,6 +81,20 @@ def _density_of(text: str) -> str | None:
                                    r"text[- ]heavy", t) else "present"
 
 
+def _company_look(request: str) -> bool:
+    """A company look (Settings > Company, engines/forge/brand.py) applies to this request: the look is answered."""
+    try:
+        from engines.forge.brand import for_request
+        return for_request(request) is not None
+    except Exception:                                   # noqa: BLE001 - no store, no look
+        return False
+
+
+def _like_these(request: str) -> bool:
+    from engines.forge.engine import LIKE_THESE
+    return bool(LIKE_THESE.search(request or ""))
+
+
 def settled(request: str, files=None, fields: dict | None = None) -> dict:
     """Which of the four deck questions the request (or a field) already answers: {key: bool}."""
     t = request or ""
@@ -90,7 +104,9 @@ def settled(request: str, files=None, fields: dict | None = None) -> dict:
     n = bool(_given(fields, "slides") or _SLIDES.search(t))
     look = bool(_given(fields, "theme") or _THEME_SAID.search(t)
                 or any(str(f).lower().endswith((".potx", ".pptx")) and "template" in str(f).lower()
-                       for f in files or []))
+                       for f in files or [])
+                or _company_look(t)
+                or (any(str(f).lower().endswith((".pptx", ".potx")) for f in files or []) and _like_these(t)))
     return {"audience": aud, "density": dens, "slides": n, "theme": look}
 
 

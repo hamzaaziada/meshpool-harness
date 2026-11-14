@@ -40,12 +40,14 @@ INSTRUCTION_FILES = ("CLAUDE.md", "AGENTS.md", "instructions.md", "INSTRUCTIONS.
 
 KNOWLEDGE_WORK = "Anthropic knowledge-work plugins (Apache-2.0)"
 FINANCE_KIT = ["finance-buy-side-deal-analysis", "finance-trading-comps", "finance-precedent-transactions",
-               "finance-dcf-valuation", "finance-assumption-book"]
+               "finance-dcf-valuation", "finance-assumption-book", "finance-three-statement-model",
+               "finance-valuation-method-selection", "finance-research-method"]
 BUILTIN = [
     {"id": "finance-kit", "name": "Finance kit", "prefix": None, "skills": FINANCE_KIT,
      "source": "Meshpool", "license": "Apache-2.0",
-     "description": "Buy-side valuation work: deal analysis, trading comps, precedent transactions, DCF and an "
-                    "assumption book where every input has a driver and a source."},
+     "description": "Buy-side valuation work: deal analysis, trading comps, precedent transactions, spreading and "
+                    "three-statement models, DCF, method selection and weighting, and an assumption book where every "
+                    "input has a driver and a source."},
     {"id": "finance", "name": "Finance (accounting)", "prefix": "finance-", "source": KNOWLEDGE_WORK,
      "license": "Apache-2.0",
      "description": "Month-end close, journal entries, reconciliations, financial statements, variance analysis, "

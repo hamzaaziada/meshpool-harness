@@ -50,7 +50,8 @@ reprice restructure rethink shut simplify standardise standardize stop streamlin
 face shape matter drive lack outweigh hinge rest lie set keep put let
 jump surge soar climb slip slide slump plunge tumble dip rebound recover edge outstrip top spike bottom flatten level
 plateau cluster cost total average comprise outnumber dominate signal suggest indicate point mean imply contract
-decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark""".split())
+decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark
+compound span bracket weigh sit straddle clear""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 
@@ -320,6 +321,21 @@ def _proportions(path: str, R: dict, failures: list):
                                       f"more than {Wd['max_row_air_in']}in past their text. A short table needs a "
                                       "different composition (beside its argument), not taller rows.", slide=n,
                                       shape=sh.name, fix_scope="renderer"))
+            if sh.name.startswith("ov_Panel") and sh.has_text_frame and sh.text_frame.text.strip():
+                tf = sh.text_frame                         # the so-what panel fills the body; its text must too
+                iw = Emu(sh.width).inches - Emu(tf.margin_left or 0).inches - Emu(tf.margin_right or 0).inches
+                ih = Emu(sh.height).inches - Emu(tf.margin_top or 0).inches - Emu(tf.margin_bottom or 0).inches
+                need = 0.0
+                for p in tf.paragraphs:
+                    if not p.text.strip():
+                        continue
+                    sz = 12.0                              # substance measured at body size: grown type is not
+                    need += wrap_lines(p.text, max(0.3, iw - 0.25), sz, f, 0.97) * sz * 1.2 / 72 + 0.06  # content
+                if ih > 1.2 and need < Wd.get("min_panel_fill", 0.2) * ih:
+                    failures.append(F("P20", "dead_space", f"Slide {n}, {sh.name}: the takeaway panel is "
+                                      f"{need / ih:.0%} text; the slide is thin. Add the evidence it is missing (a "
+                                      "breakdown, a comparison, the implication) or merge it with its neighbour.",
+                                      slide=n, shape=sh.name, measured=round(need / ih, 2)))
             if sh.has_chart:
                 ch = sh.chart
                 try:
@@ -666,8 +682,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 failures.append(F("P13", "source_position", f"Slide {n}: the source line is not at the bottom of the "
                                   "slide.", slide=n, fix_scope="renderer"))
 
-        # ---------------- P14 text agrees with chart
-        if s["charts"]:
+        # ---------------- P14 text agrees with chart (pages computed from a model are traced cell by cell instead)
+        if s["charts"] and "computed:1" not in (s.get("name") or ""):
             vals = [v for c in s["charts"] for se in c["series"] for v in se["values"]]
             derived = set(vals)
             if R["agreement"]["allow_derived"]:

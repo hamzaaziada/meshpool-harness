@@ -429,7 +429,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
                     rec["emoji"] += len(EMOJI.findall(txt))
                 srec["paras"] = paras
                 srec["text"] = "\n".join(p["text"] for p in paras)
-                mrole = re.match(r"role_(title|subtitle|numeral|body|footnote)_", sh.name or "")
+                mrole = re.match(r"(?:ov_)?role_(title|subtitle|numeral|body|footnote)_", sh.name or "")
                 if srec["role"] is None and mrole:
                     srec["role"] = mrole.group(1)
                 if srec["role"] is None and el.findall(".//a:fld[@type='slidenum']", NS):

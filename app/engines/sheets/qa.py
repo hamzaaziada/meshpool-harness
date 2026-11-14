@@ -140,3 +140,80 @@ def missing_sources(xlsx_path: str) -> list[str]:
                     out.append(f"{ws.title}!{ws.cell(row=c.row, column=sc).coordinate} ({label})")
                 done.add(c.row)
     return out
+
+
+METHOD_FAMILIES = {   # valuation method -> names or sheet titles that show the workbook used it
+    "DCF": (r"^(\w+_)?dcf_per_share$", r"^dcf"),
+    "trading comps": (r"^comps_", r"^comps|trading comp"),
+    "precedent transactions": (r"^prec_", r"^precedent"),
+    "sum of the parts": (r"^sotp_", r"^sotp|sum of the parts"),
+    "NAV": (r"^nav_", r"^nav\b|net asset"),
+    "dividend discount": (r"^ddm_", r"^ddm|dividend discount"),
+    "excess return": (r"^(er|excess_return)_", r"^excess return|residual income"),
+    "LBO": (r"^lbo_", r"^lbo"),
+}
+
+
+def _labels(ws, col: int = 1) -> list[str]:
+    return [str(c.value).strip() for c in ws.iter_cols(min_col=col, max_col=col).__next__() if c.value is not None]
+
+
+def model_gaps(xlsx_path: str) -> list[str]:
+    """Integrated-model and valuation rules the engine enforces before a finance workbook is accepted:
+    - a DCF takes its cash flows from integrated statements (a balance sheet in the workbook);
+    - integrated statements carry a balance-sheet-balances check and a cash-tie check on the Checks tab;
+    - a DCF or integrated model has base / bull / bear cases behind one switch (names scenario, *_bull, *_bear);
+    - more than one valuation method needs the weighting table: weights that sum to 100% (a check), a weighted
+      value per share, and a justification on every weighted method.
+    Returns one message per gap."""
+    wb = load_workbook(xlsx_path)
+    names = {k.lower() for k in wb.defined_names.keys()}
+    titles = [s.lower() for s in wb.sheetnames]
+    out = []
+    has_bs = any(lab.lower() == "total liabilities and equity" for ws in wb.worksheets for lab in _labels(ws))
+    used = [fam for fam, (nre, tre) in METHOD_FAMILIES.items()
+            if any(re.search(nre, n) for n in names) or any(re.search(tre, t) for t in titles)]
+    dcf = "DCF" in used
+    checks = [lab.lower() for lab in _labels(wb["Checks"])] if "Checks" in wb.sheetnames else []
+    if dcf and not has_bs:
+        out.append("DCF without integrated statements: build the income statement, balance sheet and cash flow with "
+                   "B.three_statement (drivers, working-capital days, PP&E roll-forward, debt, equity) and take free "
+                   "cash flow from them with B.dcf_from_statements")
+    if has_bs:
+        if not any("balance sheet balances" in c for c in checks):
+            out.append("No balance-sheet-balances check on the Checks tab (total assets minus total liabilities and "
+                       "equity, every year)")
+        if not any(re.search(r"cash (ties|equals|flow closing cash)|closing cash equals", c) for c in checks):
+            out.append("No cash-tie check on the Checks tab (cash flow closing cash equals balance sheet cash)")
+    if (dcf or has_bs) and not ("scenario" in names and any(n.endswith("_bull") for n in names)
+                                and any(n.endswith("_bear") for n in names)):
+        out.append("No scenarios: put the drivers in B.scenario_book (base / bull / bear with one switch named "
+                   "scenario) and show all three with B.scenario_summary")
+    if len(used) >= 2:
+        if "weighted_value_per_share" not in names:
+            out.append(f"{len(used)} valuation methods ({', '.join(used)}) but no weighting: use B.valuation_summary "
+                       "to decide which methods fit and weight them, with the weights as editable inputs")
+        else:
+            if not any("weights" in c and "100%" in c for c in checks):
+                out.append("No check that the valuation weights sum to 100%")
+            out += _weighting_gaps(wb)
+    return out
+
+
+def _weighting_gaps(wb) -> list[str]:
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                if c.value == "Weight used (%)":
+                    hdr = c.row
+                    jc = next((x.column for x in ws[hdr] if isinstance(x.value, str)
+                               and x.value.lower().startswith("source / justification")), None)
+                    out = []
+                    r = hdr + 1
+                    while ws.cell(row=r, column=1).value not in (None, "Total"):
+                        j = ws.cell(row=r, column=jc).value if jc else None
+                        if not (isinstance(j, str) and len(j.strip()) >= 20):
+                            out.append(f"Weighted method '{ws.cell(row=r, column=1).value}' has no justification")
+                        r += 1
+                    return out
+    return ["Weighted value per share found but no weighting table (Weight used (%) column)"]
