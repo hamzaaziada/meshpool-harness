@@ -28,6 +28,18 @@ Meshpool runs on your own computer. It does research, writing, analysis, spreads
 - **Your tools come with you.** 58 connectors plus any remote MCP server, about 100 skills, and the skills and MCP servers you already set up in Claude, Codex, Cursor, VS Code and others.
 - **Local by design.** Your files stay on your computer, and connector sign-ins go straight from your computer to the app, with no Meshpool server in between.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/home-dark.png">
+    <img src="docs/screenshots/home.png" alt="Meshpool: a new chat in Work mode, with starters for documents, spreadsheets, decks and research" width="900">
+  </picture>
+</p>
+
+| You stay in control | Pick the agent, or let Auto pick |
+|---|---|
+| <img src="docs/screenshots/chat.png" alt="An approval card: Meshpool asks before writing a file and shows the change"> | <img src="docs/screenshots/agents.png" alt="The agent picker: Meshpool Auto, Meshpool Code, Codex, Claude Code, Gemini CLI, Meshpool Work, each with what it does best"> |
+| Every change shows up as a diff you approve, or you let it run. Undo reverses any reply. | Each agent says what it does best. Meshpool Auto picks per task from the benchmarks. |
+
 ### Measured, not claimed
 
 Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with the same graders, at the same time. The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
