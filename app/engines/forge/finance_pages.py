@@ -233,8 +233,11 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", s
             return [(_num(ws.cell(row=r, column=c).value) if c else None) for r in rows]
         if is_prec:
             yr = dict(cols).get("Date")
-            names = [f"{ws.cell(row=r, column=dict(cols)['Target']).value} ({ws.cell(row=r, column=dict(cols)['Acquirer']).value}"
-                     + (f", {str(ws.cell(row=r, column=yr).value)[:4]})" if yr else ")") for r in rows]
+            tg = [ws.cell(row=r, column=dict(cols)['Target']).value for r in rows]
+            aq = [ws.cell(row=r, column=dict(cols)['Acquirer']).value for r in rows]
+            names = [f"{t} ({str(ws.cell(row=r, column=yr).value)[:4]})" if yr else str(t) for t, r in zip(tg, rows)]
+            # "Target (Acquirer, year)" ran to three lines in the label column; the buyers go in a footnote
+            acq_note = "Acquirers: " + "; ".join(f"{t}: {a}" for t, a in zip(tg, aq))
             spec = [("EV / EBITDA", "ev_ebitda", "x"), ("EV / Revenue", "ev_rev", "x"), ("Premium", "premium", "%")]
         else:
             names = [str(ws.cell(row=r, column=1).value) for r in rows]
@@ -253,6 +256,7 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", s
             bullets.append({"text": "NM: not meaningful (a loss); the company drops out of that median"})
         return {"archetype": "benchmark", "fixed": True, "title": title, "title_prov": prov,
                 "benchmark": {"companies": names, "panels": panels, "logos": logos or {}},
+                **({"footnotes": [acq_note]} if is_prec else {}),
                 "takeaway": {"text": "Dashed line: median; dotted lines: 25th and 75th percentiles"},
                 "bullets": bullets[:4], "source": {"text": bk.sources(ws, hr) or f"{FIRM_SRC} ({ws.title} tab)",
                                                    "prov": prov}}

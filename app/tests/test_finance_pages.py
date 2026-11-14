@@ -82,6 +82,8 @@ def test_pages_carry_the_workbook_numbers(books):
     assert ev["median"] == pytest.approx(named_val(books / "val.xlsx", "comps_ev_ebitda_median"))
     assert ev["values"][3] is None and len(ev["values"]) == len(comps["benchmark"]["companies"])   # Delta: NM
     assert any(b["text"].startswith("NM") for b in comps["bullets"])
+    prec = next(p for p in p2 if p["title"].startswith("Precedent deals"))      # short labels, buyers footnoted
+    assert prec["benchmark"]["companies"][0] == "Tgt1 (2025)" and "Tgt1: BuyCo" in prec["footnotes"][0]
     assert any(p["title"].startswith("Precedent deals paid") for p in p2)
 
 

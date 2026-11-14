@@ -2266,12 +2266,13 @@ def a_benchmark(ctx, s, sl, n):
         is_med = j == len(names)
         hl = j in set(b.get("highlight") or [])
         blk = [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False, "italic": is_med}]
-        blk, ok = _fit(blk, lw_, band, 8)       # a long name ("Meridian Gauges (Apex Capital, 2025)") wrapped onto
-        words = nm_.split()                     # three lines and ran into the rows above and below: shrink, then
-        while not ok and len(words) > 1:        # shorten with an ellipsis (the full name stays in the alt text)
+        fits = lambda: _need(blk, lw_) <= band + 0.06     # noqa: E731  _need's own 0.05 pad; two lines fit a row
+        ok = fits()                             # a long name ("Meridian Gauges (Apex Capital, 2025)") wrapped onto
+        words = nm_.split()                     # three lines and ran into the rows above and below: shorten it with an
+        while not ok and len(words) > 1:        # ellipsis at full size (P5); the full name stays in the alt text
             words = words[:-1]
             blk[0]["text"] = " ".join(words).rstrip(",(") + "…"
-            ok = _need(blk, lw_) <= band
+            ok = fits()
         box = _box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE)
         _write(box, blk, ctx, n)
         if blk[0]["text"] != nm_:
