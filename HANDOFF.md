@@ -111,6 +111,19 @@ suite covers OpenCode; the dark-mode Preview panel shows a white empty frame for
 - Another agent (on the owner's computer) added Developer ID signing, notarization, Azure signing and the one-line
   installers (`87e03ac`); merged to `main` in PR #11 so the one-liners work.
 
+## Still open after the second QA pass (14 Nov, night)
+
+Checked and working: memory and scheduled tasks in all six agents (`testkit/memory_check.py`; Codex on the real
+model), DCF / three-statement / LBO / comps workbooks (live formulas, balance and DCF verified by hand), banker decks
+through the real model, Word memos, the credit engine. Not done yet:
+- Finance: credit and research engines are not reachable from chat (`office_task` offers slides, sheets and data
+  only); method weights default to `tv_share` instead of the rule-based weights; workbooks have no print setup;
+  Word tables left-align numbers; the credit memo is titled after the file, not the borrower.
+- UI: phone usage cards are cramped four across; onboarding step 3 has several competing blue buttons; the
+  connection check's error says "meshpool HTTP 401" for any endpoint.
+- No suite covers OpenCode end to end; the mock model does not speak the Responses API, so Codex is tested on the
+  real model only.
+
 ## Branches
 
 On 14 Nov the session had the owner delete the merged `claude/*` branches; `claude/tender-pascal-pwc9bg` was deleted
