@@ -372,6 +372,18 @@ def _need(blocks, w) -> float:
     return h
 
 
+@lru_cache(maxsize=16)
+def _line_factor(path) -> float:
+    """A table row's height per point of type for this face: 1.15 measured for Arial (natural line 1.118 em), scaled
+    by the face's own ascent + descent, so a taller face such as Segoe UI gets taller rows instead of overflowing."""
+    try:
+        from PIL import ImageFont
+        a, d = ImageFont.truetype(str(path).split("|")[0], 1000).getmetrics()
+        return max(1.15, round(1.15 * (a + d) / 1000 / 1.118, 3))
+    except Exception:  # noqa: BLE001
+        return 1.15
+
+
 def _cont_title(t: str) -> str:
     head = t.split(":")[0] if ":" in t and len(t.split(":")[0]) < 60 else " ".join(t.split()[:8])
     return head.rstrip(" .…") + " (continued)"
@@ -1093,7 +1105,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     size_ = t.get("size") or T["cell"]
     from .common import font_file, wrap_lines
     f_reg, f_bold = _font("body"), _font("body", True)
-    row_min = lambda sz: sz * 1.15 / 72 + 0.045                   # LibreOffice/PowerPoint minimum, measured
+    lf = _line_factor(f_reg)                                      # 1.15 for Arial; taller faces (Segoe UI) more
+    pad_r = 0.045
+    row_min = lambda sz: sz * lf / 72 + pad_r                     # LibreOffice/PowerPoint minimum, measured
     widths = t.get("col_widths")
     colw = ([w * cw / sum(widths) for cw in widths] if widths else
             [w * 0.32] + [(w * 0.68) / max(1, len(cols) - 1)] * (len(cols) - 1))
@@ -1102,7 +1116,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
         lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
                     or [1])
-        return lines * (sz + 2) * 1.25 / 72 + 0.08
+        return lines * (sz + 2) * (lf + 0.10) / 72 + 0.08
     head_h = lambda sz: col_head_h(sz) + ((2 if any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
                                             else 1) * (sz + 2) * 1.25 / 72 + 0.08 if groups else 0)
     bold_rows = set(t.get("highlight_rows") or []) | ({len(rows) - 1} if t.get("total_row") else set())
@@ -1114,7 +1128,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             f = f_bold if i in bold_rows else f_reg
             lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
                         or [1])
-            out.append(max(base, lines * sz * 1.15 / 72 + 0.045))
+            out.append(max(base, lines * sz * lf / 72 + pad_r))
         return out
     while size_ > 10 and sum(row_heights(size_, row_min(size_))) + head_h(size_) > h:
         size_ -= 1
@@ -1199,7 +1213,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         cell.vertical_anchor = anchor
         p = cell.text_frame.paragraphs[0]
         p.alignment = align
+        p.line_spacing = Pt(_pitch(sz))      # exact, as in body text: a taller face (Segoe UI) cannot grow the rows
         _rich(p, str(text), sz, color, bold, numbers=False, italic=italic)
+        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # the end mark at 18 pt grew the rows
     if groups:
         ci = 1
         for g in groups:
