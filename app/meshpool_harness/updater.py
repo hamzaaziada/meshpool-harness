@@ -249,8 +249,8 @@ def _swap_all(pairs: list) -> None:
             shutil.rmtree(old, ignore_errors=True)
 
 
-def _requirements(k: str, src: Path, new: Path) -> tuple:
-    """(the release's package list, this copy's) for the kind of install. The command line and the Windows app are
+def _requirements(src: Path, new: Path) -> tuple:
+    """(the release's package list, this copy's record of its own). The command line and the Windows app are
     installed from packaging/requirements-cli.txt (a copy sits in the app folder); app/requirements.txt is the
     developer list. A copy without that record is treated as changed, so new packages are never skipped."""
     rel = src / "packaging" / CLI_REQ
@@ -292,7 +292,7 @@ def install() -> dict:
         if not got or _ver(got.group(1)) != _ver(v["tag"]):
             return {"ok": False, "error": "The release download has a different version than its tag. Nothing was "
                                           "changed."}
-        req_new_p, req_old_p = _requirements(k, src, new)
+        req_new_p, req_old_p = _requirements(src, new)
         req_new = req_new_p.read_text(encoding="utf-8") if req_new_p.exists() else ""
         req_old = req_old_p.read_text(encoding="utf-8") if req_old_p.exists() else None
         if req_new.strip() and (req_old is None or req_new.strip() != req_old.strip()):
@@ -337,8 +337,9 @@ def _relaunch_cmd() -> list:
     later); on 3.10 a tiny bootstrap removes it before anything is imported."""
     if sys.version_info >= (3, 11):
         return [sys.executable, "-P", "-m", "meshpool_harness", *sys.argv[1:]]
-    boot = ("import sys, runpy; sys.path[:1] = [] if sys.path and sys.path[0] in ('', '.') else sys.path[:1]; "
-            "runpy.run_module('meshpool_harness', run_name='__main__', alter_sys=True)")
+    boot = ("import sys, runpy\n"
+            "if sys.path and sys.path[0] in ('', '.'):\n    del sys.path[0]\n"
+            "runpy.run_module('meshpool_harness', run_name='__main__', alter_sys=True)\n")
     return [sys.executable, "-c", boot, *sys.argv[1:]]
 
 

@@ -343,8 +343,8 @@ def test_units_must_agree_and_quotes_may_span_sentences(tmp_path):
     assert any("193.7%" in p["detail"] for p in V.check(md, c, min_sources=2))
     fake = good_body(c) + f"\nThe filing said \"Revenue fell sharply. Demand collapsed in every region\" [{sec}.p1].\n"
     assert any(p["check"] == "R3 quote not verbatim" for p in V.check(_report(c, fake), c, min_sources=2))
-    real = good_body(c) + (f"\nThe filing said \"Operating expenses were $22.0 billion. We returned $41.1 billion to "
-                           f"shareholders\" [{sec}.p2].\n")
+    real = good_body(c) + (f"\nReuters wrote \"according to the company's annual report. Analysts said that demand "
+                           f"for the company's Blackwell systems remained strong\" [{reu}.p1].\n")
     assert not V.check(_report(c, real), c, min_sources=2)
 
 

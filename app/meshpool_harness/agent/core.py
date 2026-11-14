@@ -747,10 +747,8 @@ class Agent:
         if prov in PV.SIGNIN_ONLY:
             raise RuntimeError(f"{PV.name(prov)} models run only in {'Claude Code' if prov == 'claude' else 'Gemini CLI'}. "
                                "Choose that agent, or another model.")
-        base, key = PV.endpoint(prov)
-        base = base if prov != "key" else (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-                                           or base).rstrip("/")
-        key = key if prov != "key" else (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or key)
+        base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
+                                               # with OPENAI_BASE_URL, never with the Meshpool base)
         wire = "chatgpt" if prov == "chatgpt" else ("chat" if prov != "key" else os.environ.get("MH_WIRE", "chat"))
         if not key and wire != "chatgpt":
             raise RuntimeError(PV.setup(prov) if prov != "key" else

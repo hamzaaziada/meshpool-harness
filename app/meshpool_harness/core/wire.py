@@ -1,5 +1,5 @@
 """Stand-alone model transport: any OpenAI-compatible endpoint (chat-completions or Responses API). No eval/ needed.
-Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY), MH_WIRE=chat|responses.
+Env: MESHPOOL_BASE_URL and MESHPOOL_API_KEY (or OPENAI_BASE_URL with OPENAI_API_KEY: providers.key_base/key), MH_WIRE=chat|responses.
 A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in, an Anthropic or a Gemini key."""
 from __future__ import annotations
 
@@ -141,9 +141,8 @@ class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
 
     def __init__(self, phase: str = "run"):
-        self.base_url = (os.environ.get("MESHPOOL_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-                         or "https://llm.meshpool.ai/v1").rstrip("/")
-        self.api_key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+        from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
+        self.base_url, self.api_key = PV.key_base(), PV.key()
 
     def chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
              temperature=None, extra=None, timeout=600, retries=2, **_):
