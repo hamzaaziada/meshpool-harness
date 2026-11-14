@@ -146,7 +146,7 @@ def win_app():
     root = OUT / "app-win" / "Meshpool"
     root.mkdir(parents=True)
     shutil.copy2(WIN_LAUNCH / "Meshpool.exe", root / "Meshpool.exe")
-    shutil.copy2(PKG / "win/Meshpool.ico", root / "Meshpool.ico")
+    shutil.copy2(PKG / "icons/Meshpool.ico", root / "Meshpool.ico")
     # The terminal command in a folder of its own: only bin goes on PATH, since next to Meshpool.exe the name
     # `meshpool` would start the app (Windows tries .EXE before .CMD).
     (root / "bin").mkdir()

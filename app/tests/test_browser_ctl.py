@@ -109,7 +109,7 @@ def test_control_port_is_private(monkeypatch):
     assert ctl.main(["start", work]) == 0
     try:
         st = json.loads(ctl.state_path().read_text())
-        assert st["port"] != 8765 and len(st["token"]) >= 32 and st["outdir"] == os.path.realpath(work)
+        assert st["port"] != 8765 and len(st["token"]) >= 32
         if os.name != "nt":
             assert stat.S_IMODE(ctl.state_path().stat().st_mode) == 0o600
         url = f"http://127.0.0.1:{st['port']}"
@@ -136,5 +136,8 @@ def test_control_port_is_private(monkeypatch):
         assert "error" in ctl.call("screenshot", "../out.png")
         saved = ctl.call("screenshot", "shot.png")["saved"]
         assert saved == os.path.join(os.path.realpath(work), "shot.png") and os.path.getsize(saved) > 0
+        other = tempfile.mkdtemp()
+        assert ctl.main(["start", other]) == 0                                          # next task, same daemon
+        assert ctl.call("screenshot", "s2.png")["saved"] == os.path.join(os.path.realpath(other), "s2.png")
     finally:
         ctl.call("stop")

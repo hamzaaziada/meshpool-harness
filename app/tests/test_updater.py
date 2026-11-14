@@ -229,3 +229,17 @@ def test_failed_swap_puts_every_old_folder_back(monkeypatch, tmp_path):
 def test_restart_never_runs_code_from_the_users_folder():
     cmd = U._relaunch_cmd()
     assert "-P" in cmd or ("-c" in cmd and "del sys.path[0]" in cmd[cmd.index("-c") + 1])
+
+
+def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_path):
+    app = tmp_path / "Meshpool" / "app"
+    app.mkdir(parents=True)
+    (app.parent / "runtime").mkdir()
+    (app.parent / "meshpool.cmd").write_text("")                # the command beside Meshpool.exe, before bin/
+    monkeypatch.setattr(U, "APP", app)
+    monkeypatch.setattr(U, "check", lambda force=False: {"ok": True, "newer": True, "kind": "win-app",
+                                                         "current": "0.1.0", "latest": "0.2.0", "tag": "v0.2.0",
+                                                         "assets": [], "url": "u"})
+    seen = []
+    monkeypatch.setattr(U, "_installer", lambda v, why: seen.append(why) or {"ok": True, "action": "installer"})
+    assert U.install()["action"] == "installer" and seen

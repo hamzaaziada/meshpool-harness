@@ -40,7 +40,7 @@ TOKEN_HEADER = "X-MH-Token"
 
 
 def state_path(port: int | str | None = None) -> Path:
-    """The running daemon's port, token and screenshot folder: one file per MH_BROWSER_PORT (or one for the default
+    """The running daemon's port and token: one file per MH_BROWSER_PORT (or one for the default
     free port), in this user's private Meshpool folder."""
     from meshpool_harness.config import user_home_default
     port = port if port is not None else os.environ.get("MH_BROWSER_PORT")
@@ -71,6 +71,8 @@ def _inside(path: str, folder: str) -> bool:
         return os.path.commonpath([p, d]) == d
     except ValueError:                            # different drives on Windows
         return False
+
+
 SNAP_JS = """(mark) => {
   const sel = 'a,button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=tab],[role=menuitem],[onclick],summary';
   const out = []; let n = 0;
@@ -189,7 +191,7 @@ def _serve(outdir: str | None = None):
         browser = pw.chromium.launch(executable_path=exe, **kw)   # preinstalled Chromium when versions differ
     page = browser.new_page()
     lock = threading.Lock()
-    state = {}
+    state = {"outdir": outdir}
 
     def ref(n):
         return page.locator(f"[{MARK}='{int(n)}']").first
@@ -298,6 +300,9 @@ def _serve(outdir: str | None = None):
             ref(args[0]).select_option(label=" ".join(args[1:]), timeout=10000)
         elif cmd == "back":
             page.go_back()
+        elif cmd == "_outdir":                    # `start <dir>` on a running daemon: a new task's working folder
+            state["outdir"] = os.path.realpath(args[0])
+            return {"outdir": state["outdir"]}
         elif cmd == "_lock":                      # grader: lock _eval behind a token only the grader holds
             state["token"] = args[0]
             return {"locked": True}
@@ -306,9 +311,9 @@ def _serve(outdir: str | None = None):
                 return {"error": "not available"}
             return {"value": page.evaluate(args[0])}
         elif cmd == "screenshot":
-            out = os.path.join(outdir, args[0])           # relative paths land in the working folder
-            if not _inside(out, outdir):
-                return {"error": f"screenshots can only be saved inside {outdir}"}
+            out = os.path.join(state["outdir"], args[0])  # relative paths land in the working folder
+            if not _inside(out, state["outdir"]):
+                return {"error": f"screenshots can only be saved inside {state['outdir']}"}
             page.screenshot(path=out, full_page=True)
             return {"saved": out}
         elif cmd not in ("snapshot", "batch_done"):
@@ -388,7 +393,7 @@ def _serve(outdir: str | None = None):
 
     server.RequestHandlerClass = H
     path = state_path()
-    _write_state(path, {"port": port, "token": token, "pid": os.getpid(), "outdir": outdir})
+    _write_state(path, {"port": port, "token": token, "pid": os.getpid()})
     try:
         server.serve_forever()
     finally:
@@ -436,8 +441,9 @@ def main(argv=None):
         print(__doc__)
         return 1
     if a[0] == "start":
+        outdir = os.path.abspath(a[1] if len(a) > 1 else os.getcwd())
         try:
-            call("snapshot")
+            call("_outdir", outdir)
             print("browser already running")
             return 0
         except Exception:
@@ -446,7 +452,6 @@ def main(argv=None):
             state_path().unlink()                 # a stale file from a daemon that died
         except OSError:
             pass
-        outdir = os.path.abspath(a[1] if len(a) > 1 else os.getcwd())
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", outdir], stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL, start_new_session=True)
         for _ in range(60):

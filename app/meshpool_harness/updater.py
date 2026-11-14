@@ -270,6 +270,10 @@ def install() -> dict:
         return {"ok": False, "error": "This copy runs from a git checkout. Run git pull in it to update."}
     if k == "mac-app":
         return _installer(v, "")
+    if k == "win-app" and not (APP.parent / "bin" / "meshpool.cmd").exists():
+        # An install from before the terminal command moved to its own bin folder: a code update cannot fix the
+        # launcher or the PATH entry (with Meshpool.exe beside it, `meshpool` would open the app), the installer does.
+        return _installer(v, "This update also changes how Meshpool is installed.")
     if not os.access(APP, os.W_OK):
         return _installer(v, "This copy's folder is read-only.") if k == "win-app" else \
             {"ok": False, "error": f"Meshpool cannot write to {APP}. Run the installer again to update."}
