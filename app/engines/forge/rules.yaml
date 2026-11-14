@@ -275,3 +275,6 @@ xlsx:
   signs:                        # X14: a positive loss/cost added to an income or total is a sign error
     cost_label_regex: "(?i)\\b(net loss|loss|losses|cost|costs|expense|expenses|outflow|outflows|foregone|capex|write-?down|impairment)\\b"
     benefit_label_regex: "(?i)synerg|saving|reduction|avoided|benefit|negative|\\(-\\)"
+
+review:
+  enabled: true                 # partner review of the rendered pages (engines/forge/review.py); live builds only

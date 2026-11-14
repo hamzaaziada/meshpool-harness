@@ -678,6 +678,18 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
     return out
 
 
+def _review_on(client, rules) -> bool:
+    """The partner review runs on live builds (it needs a vision model): off with MH_REVIEW=0 or rules review.enabled
+    false, and for stub clients in tests."""
+    if os.environ.get("MH_REVIEW", "1") == "0" or not (rules.get("review") or {}).get("enabled", True):
+        return False
+    try:
+        from meshpool_harness.core.client import LiveClient
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(client, LiveClient)
+
+
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
@@ -794,14 +806,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     from engines.forge import clarity                          # a second, smaller model reads every line once
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
-    rounds = []
-    pptx = out / "deck.pptx"
-    for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
-                   brand=brand)          # the brief's slide count is a hard limit
-        prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
-                       provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+    def collect(r, res):                                   # every content check, after a render
         fails = _content_failures(res)
         calcs_ok, calcs_bad = verify_calcs(slides, facts, rules)
         for n, msgs in calcs_bad.items():
@@ -830,19 +835,28 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         for i in range(len(slides)):                         # computed pages are not rewritten by a model
             if is_fixed(i):
                 fails.pop(i + 1, None)
-        rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
-        if not fails or rnd == rules["repair"]["max_rounds"]:
-            break
-        if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
-            break                                            # two rounds without progress: stop paying for repairs
-        repaired = set()
+        return fails
 
-        def fix_one(item):                                     # one call per failing slide, all in parallel
+    rounds = []
+    pptx = out / "deck.pptx"
+
+    def draw():
+        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
+                   brand=brand)          # the brief's slide count is a hard limit
+        prov = json.loads(Path(r["provenance"]).read_text())
+        res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
+                       provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+        return r, res
+
+    def repair(fails, tag):                                    # one call per failing slide, all in parallel
+        nonlocal calls
+
+        def fix_one(item):
             n, msgs = item
             s = slides[n - 1]
             ev = set(next((x.get("evidence", []) for x in story.get("slides", []) if x.get("node") == s.get("node")), []))
             rel = [f for f in facts if f["id"] in ev] or facts
-            if any(m.startswith(("[P20]", "[fill]", "[schema]")) for m in msgs):
+            if any(m.startswith(("[P20]", "[fill]", "[schema]", "[review]")) for m in msgs):
                 rel = facts                                  # a thin slide needs the whole evidence base to fill
             try:
                 return n, _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
@@ -851,23 +865,63 @@ choice or the number of items; never layout. Keep node and keep the point of the
 {WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
-                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 6000)
+                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-{tag}", 6000)
             except Exception:
                 return n, None
-        todo = [(n, m) for n, m in sorted(fails.items()) if n - 1 < len(slides)]
+        repaired = set()
+        todo = [(n, m) for n, m in sorted(fails.items()) if n - 1 < len(slides) and not is_fixed(n - 1)]
+        if not todo:
+            return repaired
         with ThreadPoolExecutor(min(8, max(1, len(todo)))) as ex:
-            for n, fixed in ex.map(fix_one, todo):
+            for n, fixed_ in ex.map(fix_one, todo):
                 calls += 1
-                if isinstance(fixed, dict) and fixed.get("archetype") in ARCHETYPES:
+                if isinstance(fixed_, dict) and fixed_.get("archetype") in ARCHETYPES:
                     for k in ("section", "section_icon"):          # the agenda's page numbers follow the section
                         if slides[n - 1].get(k):
-                            fixed.setdefault(k, slides[n - 1][k])
-                    slides[n - 1] = fixed
+                            fixed_.setdefault(k, slides[n - 1][k])
+                    slides[n - 1] = fixed_
                     repaired.add(n - 1)
         if repaired:                                            # repaired slides get the same clarity read
             clear.append(clarity.review(slides, client, only=repaired, main_model=MODEL,
-                                        task_id=f"{task_id}-clarity-r{rnd}"))
+                                        task_id=f"{task_id}-clarity-{tag}"))
             calls += 1
+        return repaired
+
+    for rnd in range(rules["repair"]["max_rounds"] + 1):
+        r, res = draw()
+        fails = collect(r, res)
+        rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
+        if not fails or rnd == rules["repair"]["max_rounds"]:
+            break
+        if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
+            break                                            # two rounds without progress: stop paying for repairs
+        repair(fails, f"r{rnd}")
+
+    # partner review: a reviewer looks at the rendered pages the way a partner or client would; what it can fix in
+    # the words goes back to the writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
+    reviews = []
+    if _review_on(client, rules):
+        from engines.forge import review as RV
+        rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
+                            task_id=f"{task_id}-review")
+        reviews.append(rv)
+        calls += 1
+        asks = RV.as_failures(rv, scopes=("content",))
+        if asks:
+            for n, msgs in asks.items():                     # with the slide's open rule failures, fixed together
+                asks[n] = list(msgs) + [m for m in fails.get(n, []) if m not in msgs]
+            if repair(asks, "review"):
+                r, res = draw()
+                fails = collect(r, res)
+                rounds.append({"round": "review", "rules": res["rules"],
+                               "content_failures": sum(len(v) for v in fails.values())})
+                rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
+                                    task_id=f"{task_id}-review-final")
+                reviews.append(rv)
+                calls += 1
+        for n, msgs in RV.as_failures(rv, severities=("high",)).items():   # what is still high goes to the notes
+            fails.setdefault(n, []).extend(m for m in msgs if m not in fails.get(n, []))
+        (out / "review.json").write_text(json.dumps(reviews, indent=1, default=str))
     # freeze what is left into the notes: nothing passes silently
     left = fails
     if left and rules["repair"]["flag_in_file"]:
@@ -885,8 +939,12 @@ choice or the number of items; never layout. Keep node and keep the point of the
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
     (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))
+    verdict = None
+    if reviews:
+        from engines.forge import review as RV
+        verdict = RV.deck_verdict(reviews[-1])
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
-            "unresolved": {k: v for k, v in left.items()}}
+            "unresolved": {k: v for k, v in left.items()}, "review": verdict}
 
 
 if __name__ == "__main__":

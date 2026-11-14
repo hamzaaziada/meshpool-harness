@@ -216,5 +216,11 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
               + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
+    rv = res.get("review") or {}
+    if rv.get("score") is not None:                            # the partner review's verdict, said plainly
+        answer += (f" Partner review: {rv['score']}/10, "
+                   + ("ready to send." if rv.get("verdict") == "ship" else
+                      f"slides {', '.join(map(str, rv.get('fix') or []))} still need work"
+                      + (f" (most common: {rv['top'][0]['example']})" if rv.get("top") else "") + "."))
     return {"ok": Path(pptx).exists(), "answer": answer, "artifacts": [pptx], "evidence": [],
             "turns": res.get("calls"), "reason": None}
