@@ -106,3 +106,15 @@ def test_benchmark_without_median_aligns_bars_with_labels(tmp_path):
     assert len(list(ch.plots[0].categories)) == 4          # three companies + the Median label row
     bad = dict(s, benchmark={"companies": ["A", "B", "C"], "panels": [{"title": "EV/EBITDA", "values": [10, 12]}]})
     assert any("one value per company" in e for e in R.schema_errors(bad))
+
+
+def test_gap_marker_in_bold_leaves_no_empty_markup():
+    """A model wrote 'implies roughly **[GAP: implied upside %]** upside'; the gap was removed but '****' reached the
+    slide. The gap goes into the notes and nothing of it is shown."""
+    from engines.forge.render import normalize
+    s = normalize({"archetype": "grid", "bullets": [
+        "Closing the gap implies roughly **[GAP: implied upside %]** upside to the price.",
+        "Margin is **28.9%**, net debt [GAP: net debt]."]})
+    assert [b["text"] for b in s["bullets"]] == ["Closing the gap implies roughly upside to the price.",
+                                                 "Margin is **28.9%**, net debt."]
+    assert "implied upside %" in s["notes"] and "net debt" in s["notes"]

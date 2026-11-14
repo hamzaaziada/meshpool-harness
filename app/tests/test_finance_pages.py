@@ -36,6 +36,9 @@ def test_fmt_value_and_range_checks():
     assert chart_problems(ok) == []
     bad = dict(ok, series=[{"name": "Low", "values": [5, 2]}, {"name": "High", "values": [3, 4]}])
     assert "low above high for A" in chart_problems(bad)[0]
+    from engines.forge.finance_pages import _a                 # "The DCF puts the shares at $109 at an 8.8% WACC"
+    assert [_a(w) for w in ("8.8%", "9.5%", "11.0%", "18.2%", "80.1%", "10.5%", "110%")] == \
+        ["an", "a", "an", "an", "an", "a", "a"]
 
 
 @lo

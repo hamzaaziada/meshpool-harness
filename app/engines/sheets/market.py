@@ -103,6 +103,20 @@ def damodaran_beta(industry: str, text: str | None = None) -> dict:
                       "pages.stern.nyu.edu/~adamodar"}
 
 
+class _ScenarioRows:
+    """A scenario book (B.scenario_book) taking assumption-book rows: market inputs are the same in every case, and
+    their range goes into the rationale (the integrated model keeps its WACC inputs on the scenario book)."""
+
+    def __init__(self, book):
+        self.book = book
+
+    def add(self, label, value, fmt=None, name=None, source="", rationale="", low=None, high=None):
+        pct = fmt == "pct"
+        rng = (f" Range {low:.2%} to {high:.2%}." if pct else f" Range {low:.2f} to {high:.2f}.") \
+            if low is not None and high is not None else ""
+        return self.book.add(label, value, fmt=fmt, name=name, source=source, rationale=rationale + rng)
+
+
 def add_wacc_inputs(book, industry: str | None = None, rf: dict | None = None, erp: dict | None = None,
                     beta: dict | None = None) -> dict:
     """Write risk_free, equity_risk_premium and (with an industry) beta_unlevered into an assumption book, each
@@ -110,6 +124,9 @@ def add_wacc_inputs(book, industry: str | None = None, rf: dict | None = None, e
     cash-corrected unlevered beta +/- 0.15. Returns what was written."""
     rf = rf or treasury_yield()
     erp = erp or damodaran_erp()
+    from engines.sheets.builder import ScenarioBook
+    if isinstance(book, ScenarioBook):
+        book = _ScenarioRows(book)
     book.add("Risk-free rate: US Treasury 10-year (%)", round(rf["value"], 4), "pct", name="risk_free",
              source=rf["source"], rationale="Duration-matched government yield for US-dollar cash flows",
              low=round(rf["value"] - 0.005, 4), high=round(rf["value"] + 0.005, 4))

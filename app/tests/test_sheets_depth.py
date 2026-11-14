@@ -221,6 +221,20 @@ def test_market_inputs_are_sourced_and_ranged(tmp_path):
                                             ws.cell(row=r, column=6).value) for r in range(4, 7)}
     assert vals["Equity risk premium (%)"] == pytest.approx((0.0441, 0.0339, 0.0581))
     assert vals["Risk-free rate: US Treasury 10-year (%)"] == pytest.approx((0.0515, 0.0465, 0.0565))
+    # the integrated model keeps every input on a scenario book: the market inputs go there too (this crashed with
+    # "ScenarioBook.add() got an unexpected keyword argument 'low'"), the same in every case, the range in the text
+    wb = B.banker_workbook("x", "y", middle=("Inputs", "DCF"))
+    sb = B.scenario_book(wb["Inputs"], 3)
+    MK.add_wacc_inputs(sb, "Aerospace", rf=rf, erp=erp, beta=b)
+    p = tmp_path / "s.xlsx"
+    wb.save(p)
+    assert qa.missing_sources(str(p)) == []
+    ws = wb["Inputs"]
+    rows = {ws.cell(row=r, column=1).value: [ws.cell(row=r, column=c).value for c in range(2, 8)] for r in range(5, 8)}
+    erp_row = rows["Equity risk premium (%)"]
+    assert erp_row[0] == "=CHOOSE(scenario,C6,D6,E6)" and erp_row[1:4] == [0.0441] * 3
+    assert "Range 3.39% to 5.81%" in erp_row[5] and "Damodaran" in erp_row[4]
+    assert "Range 0.72 to 1.02" in rows["Unlevered beta, industry, corrected for cash (x)"][5]
 
 
 MA = {"acq_price": 50.0, "acq_shares": 200.0, "acq_net_income": 500.0, "tgt_price": 30.0, "tgt_shares": 50.0,

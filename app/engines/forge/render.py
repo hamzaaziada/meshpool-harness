@@ -1326,7 +1326,8 @@ def normalize(s: dict) -> dict:
     def scrub(v):                                          # prose: a gap is removed and noted, never shown
         if isinstance(v, str) and "[GAP" in v:
             gaps.extend(m.group(1).strip() for m in gap_re.finditer(v))
-            return re.sub(r"\s+([,.;:])", r"\1", gap_re.sub("", v)).strip()
+            v = re.sub(r"\*\*\s*\*\*", "", gap_re.sub("", v))      # "**[GAP: x]**" left an empty "****" on the slide
+            return re.sub(r"\s+([,.;:])", r"\1", re.sub(r"  +", " ", v)).strip()
         if isinstance(v, list):
             return [scrub(x) for x in v]
         if isinstance(v, dict):
@@ -2264,9 +2265,17 @@ def a_benchmark(ctx, s, sl, n):
             lx, lw_ = lx + pic.width / 914400 + 0.06, lw_ - pic.width / 914400 - 0.06
         is_med = j == len(names)
         hl = j in set(b.get("highlight") or [])
-        _write(_box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE),
-               [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False,
-                 "italic": is_med}], ctx, n)
+        blk = [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False, "italic": is_med}]
+        blk, ok = _fit(blk, lw_, band, 8)       # a long name ("Meridian Gauges (Apex Capital, 2025)") wrapped onto
+        words = nm_.split()                     # three lines and ran into the rows above and below: shrink, then
+        while not ok and len(words) > 1:        # shorten with an ellipsis (the full name stays in the alt text)
+            words = words[:-1]
+            blk[0]["text"] = " ".join(words).rstrip(",(") + "…"
+            ok = _need(blk, lw_) <= band
+        box = _box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE)
+        _write(box, blk, ctx, n)
+        if blk[0]["text"] != nm_:
+            _alt(box, nm_)
     for i, pn in enumerate(panels):
         x = LEFT + BENCH_LABEL_W + i * (pw + gap)
         _write(_box(sl, x, BODY_Y, pw, head_h - 0.06, f"ov_BenchHead{i + 1}", MSO_ANCHOR.BOTTOM),

@@ -408,7 +408,8 @@ def dcf_block(ws, row, years, drivers, revenue=None, margin="ebitda_margin", nam
 
     years: ["2027E", ...] (ints become "2027E"). drivers: revenue drivers, one row each:
       {"key": "mw", "label": "Active capacity (MW)", "start": "mw_start", "growth": "mw_growth", "fmt": "num"}
-      ("step": name for additive change; no growth/step = flat), or {"key", "label", "formula": "={a}*{b}"} with
+      ("start" is the FIRST FORECAST year's value, not the last actual as in three_statement: growth applies from
+      the second forecast year; "step": name for additive change; no growth/step = flat), or {"key", "label", "formula": "={a}*{b}"} with
       {key} = same year and {key@prev} = prior year.
     revenue: expression over driver keys, e.g. "{mw}*{util}*{price_per_mw}" (default: product of all drivers).
     margin: EBITDA margin input name, or (start_name, end_name) for a linear ramp to steady state.

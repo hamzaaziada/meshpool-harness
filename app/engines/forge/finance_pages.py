@@ -91,6 +91,11 @@ def _pct(v):
     return fmt_value(_num(v) * 100, "%") if _num(v) is not None else "NM"
 
 
+def _a(word: str) -> str:
+    """'a' or 'an' before a number as it is read aloud: an 8.8% WACC, an 11.0% WACC, a 9.5% WACC."""
+    return "an" if re.match(r"(8|11|18)(?!\d)|8\d", word) else "a"
+
+
 def _usd(v, d=0):
     v = _num(v)
     return "NM" if v is None else (f"({abs(v):,.{d}f})" if v < 0 else f"{v:,.{d}f}")
@@ -289,13 +294,14 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
               if k.startswith(("Less: minorit", "Less: preferred", "Less: lease", "Less: unfunded", "Plus: equity inv"))]
     cats = [c_ for k, c_ in steps if lab.get(k) is not None] + ["Equity value"]
     vals = [lab[k] for k, _ in steps if lab.get(k) is not None] + [lab.get("Equity value ($m)")]
+    wacc = f"{_a(_pct(g['wacc']))} {_pct(g['wacc'])} WACC"
     prov = [bk.fact(f"DCF value per share {fmt_value(ps, '$')} (Gordon growth) and "
-                    f"{fmt_value(_num(g['per_share_exit']), '$')} (exit multiple) at a {_pct(g['wacc'])} WACC; "
+                    f"{fmt_value(_num(g['per_share_exit']), '$')} (exit multiple) at {wacc}; "
                     f"terminal value {_pct(g['tv_share'])} of EV", f"{prefix}per_share, {prefix}per_share_exit")]
     if None in vals:
         return None
     return {"archetype": "waterfall_bridge", "fixed": True,
-            "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at a {_pct(g['wacc'])} WACC",
+            "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at {wacc}",
             "title_prov": prov,
             "chart": {"kind": "waterfall", "categories": cats, "unit": "", "decimals": 0,
                       "series": [{"name": "$m", "values": vals}]},

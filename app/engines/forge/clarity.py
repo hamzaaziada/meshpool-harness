@@ -156,8 +156,9 @@ def review(slides: list[dict], client, only: set[int] | None = None, main_model:
 
 
 def review_markdown(md: str, client, main_model: str | None = None, task_id: str = "clarity-doc") -> tuple[str, dict]:
-    """The same read for a Markdown document (memos, reports): prose lines, bullets and headings; tables, code and
-    links are left alone. Returns (new markdown, report)."""
+    """The same read for a Markdown document (memos, reports): prose lines and bullets; headings, tables, code and
+    links are left alone (a heading is a label: the slide rubric turned "Northwind: valuation and options" into
+    "Northwind considers valuation and options."). Returns (new markdown, report)."""
     out = md.split("\n")
     slots, in_code = [], False
     for k, line in enumerate(out):
@@ -165,9 +166,9 @@ def review_markdown(md: str, client, main_model: str | None = None, task_id: str
         if st.startswith("```"):
             in_code = not in_code
             continue
-        if in_code or not st or st.startswith(("|", "<", "![", "---")) or re.match(r"^\[[^\]]+\]\(", st):
+        if in_code or not st or st.startswith(("|", "<", "![", "---", "#")) or re.match(r"^\[[^\]]+\]\(", st):
             continue
-        m = re.match(r"^(\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)?)(.*)$", line)
+        m = re.match(r"^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)(.*)$", line)
         if m and len(m.group(2).split()) >= 4:
             slots.append((k, m.group(1), m.group(2)))
     doc = [{"text": t} for _, _, t in slots]

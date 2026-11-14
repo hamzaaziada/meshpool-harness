@@ -79,7 +79,8 @@ def parse_request(text: str) -> dict:
     tk = re.search(r"\b(?:ticker|nyse|nasdaq)[:\s]+([A-Z]{1,5})\b", text) or re.search(r"\(([A-Z]{1,5})\)", text)
     if tk:
         out["ticker"] = tk.group(1)
-    p = re.search(r"\bto (fund|finance|acquire|buy|build|refinance|expand)\b([^.,;(]{0,60})", t)
+    p = re.search(r"\bto (fund|finance|acquire|buy|build|refinance|expand)\b([^.,;(\n]{0,60})", t)   # one line:
+    # the CLI appends "\n\nInput files ..." to the request, which ended up in the memo's purpose
     if p:
         out["purpose"] = (p.group(1) + p.group(2)).strip()
     return out

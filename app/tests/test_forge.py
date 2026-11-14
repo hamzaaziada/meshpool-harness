@@ -514,3 +514,21 @@ def test_clarity_pass_guards_facts_and_falls_back():
     md, _ = clarity.review_markdown("# Memo\n\n| a | b |\n|---|---|\n\nThe plan leverages synergies to unlock value.",
                                     _Stub({"gpt-6-luna": lambda m: {"edits": [{"id": "s1.0", "text": "The plan cuts costs."}]}}))
     assert "The plan cuts costs." in md and "| a | b |" in md
+
+
+def test_clarity_pass_leaves_document_headings_alone():
+    """A memo heading is a label: the slide rubric ('a title stays one sentence with a verb') once turned
+    '# Northwind Instruments: valuation and strategic options' into 'Northwind Instruments considers ...'."""
+    from engines.forge import clarity
+    seen = []
+
+    def rewrite_all(messages):
+        ids = [ln.split(":")[0] for ln in messages[1]["content"].split("\n") if ln.startswith("s")]
+        seen.extend(ids)
+        return {"edits": [{"id": i, "text": "Rewritten line with four words"} for i in ids]}
+    md = ("# Northwind Instruments: valuation and strategic options\n\n## Risks to the base case forecast\n\n"
+          "The plan leverages synergies to unlock value.\n- The buyback is paused for the review.")
+    out, rep = clarity.review_markdown(md, _Stub({"gpt-6-luna": rewrite_all}))
+    assert len(seen) == 2 and rep["changed"] == 2                  # the prose line and the bullet, not the headings
+    assert out.startswith("# Northwind Instruments: valuation and strategic options\n\n## Risks to the base case")
+    assert out.endswith("Rewritten line with four words\n- Rewritten line with four words")

@@ -97,6 +97,7 @@ Finance kit (all live formulas; raw numbers are blue inputs; results are workboo
         [{{"key":"mw","label":"Active capacity (MW)","start":"mw_start","growth":"mw_growth"}},
          {{"key":"rev_mw","label":"Revenue per MW ($m)","start":"rev_per_mw","growth":"price_growth","fmt":"usd2"}}],
         revenue="{{mw}}*{{rev_mw}}", margin=("margin_start","margin_end"), names={{}})
+      # here "start" is the first FORECAST year's value (three_statement's "start" is the last actual)
       Needs these named inputs (rename via names={{role: your_name}}): risk_free, beta_unlevered,
       equity_risk_premium, cost_of_debt, tax_rate, debt_weight, terminal_growth, exit_multiple, da_pct, capex_pct,
       nwc_pct, revenue_base (last actual revenue), mid_year (1 = mid-year discounting), total_debt, cash,
