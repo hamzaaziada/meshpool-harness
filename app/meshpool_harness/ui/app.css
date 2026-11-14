@@ -385,6 +385,10 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .cidot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);flex:none;display:inline-block}
 .chip.ci.passing .cidot,.cidot.ok{background:var(--add)} .chip.ci.failing .cidot,.cidot.bad{background:var(--del)}
 .chip.ci.running .cidot,.cidot.run{background:var(--warn);animation:pulse 1.2s ease-in-out infinite}
+.chg summary{cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}.chg summary::-webkit-details-marker{display:none}
+.chg ul{max-height:240px;overflow:auto}.chg li .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.goalh{color:var(--ink-2)}.goalh b{font-weight:600;color:var(--ink)}.goalh .linkbtn{font-size:inherit}
+.plus{color:var(--add)}.minus{color:var(--del)}
 .prcard{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;margin:8px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .prcard a{color:var(--ink);text-decoration:none} .prcard a:hover{text-decoration:underline} .prcard small{flex-basis:100%;color:var(--ink-3)}
 .cil{margin-top:12px;font-size:var(--fs-s)} .cil ul{list-style:none;margin:8px 0 0;padding:0;border:1px solid var(--line);border-radius:var(--r-m)}

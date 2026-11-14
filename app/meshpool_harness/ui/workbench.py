@@ -580,6 +580,42 @@ def _gh_api(path: str, token: str, method: str = "GET", body: dict | None = None
         raise ValueError(f"Could not reach GitHub: {e}")
 
 
+def branch_changes(root: str, base: str = "") -> dict:
+    """What this branch adds and removes compared with the branch it merges into (the pull request's base, else the
+    remote's default branch): each file added, changed, renamed or deleted, with its lines added and removed. Plain
+    git on this computer, so it needs no GitHub sign-in and shows before a pull request exists."""
+    r = check_root(root)
+    cands = [f"origin/{base}", base] if base else []
+    head = _git(r, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD", check=False).strip()
+    cands += [head, "origin/main", "origin/master", "main", "master"]
+    ref = next((c for c in cands if c and _git(r, "rev-parse", "-q", "--verify", c + "^{commit}", check=False).strip()), "")
+    if not ref:
+        return {"base": base, "files": [], "added": 0, "removed": 0, "note": "No base branch to compare with."}
+    mb = _git(r, "merge-base", ref, "HEAD", check=False).strip()
+    if not mb:
+        return {"base": ref, "files": [], "added": 0, "removed": 0, "note": f"This branch shares no history with {ref}."}
+    kinds = {"A": "added", "D": "deleted", "M": "changed", "R": "renamed", "C": "copied", "T": "changed"}
+    status = {}
+    for line in _git(r, "diff", "--name-status", "-M", mb, "HEAD").splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            status[parts[-1]] = (kinds.get(parts[0][:1], "changed"), parts[1] if len(parts) == 3 else "")
+    files, plus, minus = [], 0, 0
+    for line in _git(r, "diff", "--numstat", "-M", mb, "HEAD").splitlines():
+        a_, d_, path = (line.split("\t", 2) + ["", "", ""])[:3]
+        if " => " in path:                                 # a rename: "dir/{old => new}.py" or "old => new"
+            m = re.match(r"(.*)\{(.*) => (.*)\}(.*)", path)
+            path = (m.group(1) + m.group(3) + m.group(4)).replace("//", "/") if m else path.split(" => ")[-1]
+        binary = a_ == "-"
+        add, rem = (0, 0) if binary else (int(a_ or 0), int(d_ or 0))
+        plus, minus = plus + add, minus + rem
+        kind, old = status.get(path, ("changed", ""))
+        files.append({"path": path, "status": kind, "added": add, "removed": rem, "binary": binary,
+                      **({"from": old} if old else {})})
+    files.sort(key=lambda f: (-(f["added"] + f["removed"]), f["path"]))
+    return {"base": ref, "files": files[:300], "count": len(files), "added": plus, "removed": minus}
+
+
 def git_ci(root: str) -> dict:
     """The current branch's pull request, its CI checks and workflow runs, and recent deployments."""
     from meshpool_harness import mcp_apps as CN
@@ -643,6 +679,10 @@ def git_ci(root: str) -> dict:
                                        "url": url, "created": d.get("created_at"), "sha": (d.get("sha") or "")[:7]})
     except ValueError:
         pass
+    try:
+        out["changes"] = branch_changes(root, (out["pr"] or {}).get("base", ""))
+    except (ValueError, OSError, subprocess.SubprocessError) as e:
+        out["changes"] = {"files": [], "added": 0, "removed": 0, "note": str(e)}
     fails = [c for c in out["checks"] if c["conclusion"] in ("failure", "timed_out", "cancelled", "action_required")]
     running = [c for c in out["checks"] if c["status"] != "completed"]
     out["summary"] = "failing" if fails else "running" if running else "passing" if out["checks"] else "none"
