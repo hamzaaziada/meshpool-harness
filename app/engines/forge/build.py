@@ -366,7 +366,8 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
 
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
-          extra_facts: list | None = None, template: str | None = None, brand: dict | None = None) -> dict:
+          extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
+          insert: bool = False) -> dict:
     """density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
@@ -378,18 +379,22 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     out.mkdir(parents=True, exist_ok=True)
     facts = facts_from_brief(brief) + [dict(f) for f in extra_facts or []]
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
-    narrative_n = max(3, slides_wanted - len(fixed))
+    narrative_n = max(3, slides_wanted - len(fixed)) if not insert else max(1, slides_wanted)
     fixed_txt = ("\nThese data pages are already built from the model and will be inserted as a section before the "
                  "closing slide; do NOT plan slides that repeat them, build the argument around them and cite their "
                  "facts (W ids) where you use their numbers. Your slides carry no valuation tables, grids or charts of "
                  "their own (the pages below have them, computed from the model); never estimate or interpolate a "
                  "number the model does not state:\n" + "\n".join(f"- {p['title']}" for p in fixed)
                  if fixed else "")
-    ends = bookends(brief)
+    ends = bookends(brief) if not insert else {"opening": False, "closing": False}
     opening = ('slide 1 MUST be the cover (node "0", archetype cover; the brief asks for an opening slide); '
                if ends["opening"] else 'slide 1 is the cover (node "0"); ')
     closing = ("the LAST slide MUST be archetype closing with the next steps (the brief asks for a closing slide)."
                if ends["closing"] else "end with what to do next.")
+    if insert:     # slides added to a deck the user already has: its own cover, agenda and close stay as they are
+        opening = ("these slides go into an existing deck after its own slides: NO cover, NO agenda, NO divider and "
+                   "NO closing slide, only content slides (charts, tables, comparisons) that make the brief's points; ")
+        closing = ""
     fact_txt = "\n".join(f"{f['id']}: {f['text']}" for f in facts)
     calls = 0
 

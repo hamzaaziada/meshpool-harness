@@ -90,6 +90,14 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
     return _engine("slides", BR.complete(request, files, fields), files)
 
 
+def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
+    """New slides for a deck the user already has, built by the slides engine in that deck's look and added after
+    its slides, in a copy saved next to it ("<name> (updated).pptx"). The original deck is never changed."""
+    n = max(1, min(int(slides or 1), 12))
+    return _engine("slides", f"[add to deck: {deck}] {request} ({n} slide{'s' if n != 1 else ''})",
+                   [deck] + [f for f in files or [] if f != deck])
+
+
 def make_spreadsheet(request: str, files: list | None = None):
     return _engine("sheets", request, files)
 
@@ -367,6 +375,14 @@ def find_icon(query: str, set: str | None = None, limit: int = 8):
 S = {"type": "string"}
 FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
 TOOLS = {
+    "add_slides": (add_slides, "Add slides to a PowerPoint deck the user already has (the deck in `deck`). The "
+                   "slides engine builds them in that deck's own look (fonts, colours, master) to the same standard "
+                   "as make_deck, and appends them in a copy saved next to it as '<name> (updated).pptx'; the "
+                   "original is never changed. Use this for any new or changed slide in an existing deck: never "
+                   "write slides with python-pptx code. Describe what the slides must show in `request` (with the "
+                   "numbers, or the files that hold them in `files`). Takes 2 to 5 minutes.",
+                   {"deck": S, "request": S, "slides": {"type": "integer", "description": "How many slides to add (1-12)"},
+                    "files": FILES}, ["deck", "request"]),
     "make_deck": (make_deck, "Build a finished PowerPoint deck (.pptx) with Meshpool's slides engine, which plans "
                   "the storyline, lays out charts and checks the result. Describe the content in `request` and give "
                   "the brief as fields (audience, purpose, density, slides, theme, opening, closing, sources). If "

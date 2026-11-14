@@ -92,3 +92,35 @@ def test_a_broken_edit_shows_the_exact_place(tmp_path):
         ws.edit("b.py", "3]", "3")
     assert "line 1, column 5" in str(e.value) and "^" in str(e.value) and (tmp_path / "b.py").read_text().endswith("3]\n")
     assert "column 7" in ws.write_file("c.json", '{"a": 1,\n "b": }\n')
+
+
+def test_slides_added_to_a_users_deck_keep_its_slides_and_carry_charts(tmp_path):
+    from pptx import Presentation
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches
+    from engines.forge.merge import append
+    from engines.forge.ooxml_check import check
+    mine = Presentation()                                         # the user's 4:3 deck
+    s = mine.slides.add_slide(mine.slide_layouts[0])
+    s.shapes.title.text = "Q4 review"
+    mine.save(tmp_path / "mine.pptx")
+    new = Presentation()
+    new.slide_width, new.slide_height = Inches(13.333), Inches(7.5)
+    s = new.slides.add_slide(new.slide_layouts[6])
+    cd = CategoryChartData()
+    cd.categories = ["North", "South"]
+    cd.add_series("Growth", (0.15, 0.06))
+    s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(8), Inches(5), cd)
+    tb = s.shapes.add_textbox(Inches(10), Inches(7), Inches(3), Inches(0.3))
+    tb.name = "Firm"
+    tb.text_frame.text = "Meshpool      7"
+    new.save(tmp_path / "new.pptx")
+    assert append(str(tmp_path / "mine.pptx"), str(tmp_path / "new.pptx"), str(tmp_path / "out.pptx")) == 1
+    out = Presentation(tmp_path / "out.pptx")
+    assert len(out.slides) == 2 and out.slides[0].shapes.title.text == "Q4 review"
+    added = out.slides[1]
+    assert any(sh.has_chart for sh in added.shapes)
+    assert next(sh for sh in added.shapes if sh.name == "Firm").text_frame.text.endswith("2")   # renumbered
+    assert all(sh.left + sh.width <= out.slide_width for sh in added.shapes)                      # scaled to fit 4:3
+    assert check(str(tmp_path / "out.pptx"))["ok"]                                                 # opens without repair

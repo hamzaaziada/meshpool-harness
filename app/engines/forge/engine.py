@@ -95,8 +95,47 @@ def density_from(task: str, options: dict | None = None, density: str | None = N
     return detect(task, density or (options or {}).get("density"))
 
 
+ADD_RE = re.compile(r"^\[add to deck: ([^\]]+)\]\s*", re.S)
+
+
+def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
+                model: str | None = None, density: str | None = None) -> dict:
+    """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
+    when it is 16:9, else its colours and fonts), then they are appended to a copy of the deck. The original is never
+    changed; the copy is saved next to it as "<name> (updated).pptx"."""
+    from engines.forge.brief import slide_count
+    from engines.forge.build import build
+    from engines.forge.merge import append
+    if model:
+        os.environ.setdefault("FORGE_MODEL", model)
+    n = min(max(slide_count(task) or 1, 1), 12)
+    look, _ = brand_from("same style as the attached deck", [deck])
+    res = build(_brief(task, workdir, files), workdir, n, client=client, task_id=task_id,
+                density=density_from(task, None, density), insert=True, **look)
+    src = Path(deck)
+    out = src.with_name(f"{src.stem} (updated){src.suffix}")
+    i = 2
+    while out.exists():
+        out = src.with_name(f"{src.stem} (updated {i}){src.suffix}")
+        i += 1
+    added = append(str(src), res["pptx"], str(out))
+    left = sum(len(v) for v in (res.get("unresolved") or {}).values())
+    return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
+            "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name} and saved it as {out.name} "
+                       f"(the original is unchanged). They follow the deck's look and were checked after rendering"
+                       + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
+    m = ADD_RE.match(task or "")
+    if m:                                                       # add_slides: into the user's own deck
+        name = m.group(1).strip()
+        deck = next((f for f in files or [] if Path(f).name == Path(name).name), None) or str(Path(workdir) / name)
+        if not Path(deck).is_file():
+            return {"ok": False, "answer": f"The deck {name} was not found.", "artifacts": [], "reason": "error"}
+        return add_to_deck(task[m.end():], deck, workdir=workdir, task_id=task_id, client=client,
+                           files=[f for f in files or [] if f != deck] + [deck], model=model, density=density)
     from engines.forge.build import build
     from engines.forge.brief import complete, slide_count
     attached = _inputs(workdir, files)                          # the CLI passes no files: the work folder's inputs
