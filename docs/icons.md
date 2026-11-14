@@ -68,7 +68,9 @@ The forge renderer draws Lucide icons as PNG by default. Give a deck one set wit
 "icon set: material-rounded"; `make_deck` has an `icon_set` field). Each row meaning (*money*, *risk*,
 *congestion*) is then found in that set: the set's own icon of that name, else a search for the meaning together
 with the Lucide icon it maps to and its tags. The icon is embedded as SVG (PowerPoint's `asvg:svgBlip` extension on
-the picture) with a PNG fallback, so it stays crisp in PowerPoint 2016 and later and the PNG shows elsewhere. The
+the picture) with a PNG fallback, so it stays crisp in PowerPoint 2016 and later and in LibreOffice, and the PNG
+shows in older readers. The fallback PNG is drawn with Pillow (`engines/icons/raster.py`), so it needs no Cairo
+library (missing on most Mac and Windows installs); Lucide's own PNGs keep the renderer's mask/Cairo path. The
 deck rules allow every library set (`allowed_sets` in `engines/forge/rules.yaml`).
 
 ## Agents: `find_icon`

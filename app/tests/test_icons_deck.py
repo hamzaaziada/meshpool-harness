@@ -47,7 +47,8 @@ def test_deck_with_icon_set_embeds_svg_and_passes_p0(tmp_path, icon_set):
     if HAS_XSD:
         assert r["schema_validation"] == "run"
     v = VP.validate(str(out), render=False)
-    assert v["rules"]["P0"] == "pass" and v["rules"]["P17"] == "pass" and v["rules"]["P9"] == "pass", \
+    assert v["rules"]["P0"] in (("pass",) if HAS_XSD else ("pass", "not_run")), v["failures"]
+    assert v["rules"]["P17"] == "pass" and v["rules"]["P9"] == "pass", \
         [f for f in v["failures"] if f["rule"] in ("P0", "P9", "P17")]
 
 
@@ -91,3 +92,46 @@ def test_meanings_resolve_in_every_set():
     assert icon_ref("congestion", "carbon")[1] == "traffic-cone"
     assert icon_ref("risk", "material")[1] == "warning"
     assert icon_ref("money", None) == ("lucide", "circle-dollar-sign")
+
+
+def test_png_fallback_needs_no_cairo(tmp_path, monkeypatch):
+    """The PNG beside the SVG is drawn with Pillow (Cairo is missing on most Mac and Windows installs)."""
+    import io
+    from PIL import Image
+    from engines.forge import render as R
+    from engines.icons.raster import png_bytes
+    from engines import icons as IC
+    monkeypatch.setitem(sys.modules, "cairosvg", None)                        # import cairosvg now fails
+    monkeypatch.setattr(R, "ICON_CACHE", tmp_path)
+    R._set_png.cache_clear()
+    out = tmp_path / "d.pptx"
+    R.render(_slides(), str(out), fix_labels=False, icon_set="material")
+    xml, media, _ = _icons(out)
+    assert xml.count("asvg:svgBlip") == len(re.findall(r'descr="icon:', xml)) > 0
+    assert any(m.endswith(".png") for m in media)
+    for name, s in (("bank", "phosphor"), ("warning", "material"), ("money", "carbon"), ("users", "heroicons")):
+        im = Image.open(io.BytesIO(png_bytes(IC.svg(name, s), "FF0000", 96)))
+        a = im.getchannel("A")
+        ink = sum(1 for v in a.getdata() if v > 128) / (96 * 96)
+        assert 0.03 < ink < 0.7, (s, name, ink)                              # drawn, not empty, not a solid square
+        assert im.getpixel(next((x, y) for y in range(96) for x in range(96) if a.getpixel((x, y)) > 200))[:3] \
+            == (255, 0, 0)
+
+
+def test_raster_matches_cairo_closely():
+    pytest.importorskip("cairosvg")
+    import io
+    import cairosvg
+    from PIL import Image, ImageChops
+    from engines.icons.raster import png_bytes
+    from engines import icons as IC
+    for name, s in (("bank", "phosphor"), ("dna", "phosphor"), ("warning", "material"), ("bank--vault", "carbon"),
+                    ("globe-alt", "heroicons-solid"), ("users", "lucide"), ("hdd", "bootstrap-fill")):
+        svg = IC.svg(name, s)
+        try:
+            ref = cairosvg.svg2png(bytestring=svg.encode(), output_width=96, output_height=96)
+        except OSError:                                                        # Cairo library missing
+            pytest.skip("Cairo not available")
+        a = Image.open(io.BytesIO(ref)).convert("RGBA").getchannel("A")
+        b = Image.open(io.BytesIO(png_bytes(svg, "000000", 96))).getchannel("A")
+        assert sum(ImageChops.difference(a, b).getdata()) / sum(a.getdata()) < 0.15, (s, name)

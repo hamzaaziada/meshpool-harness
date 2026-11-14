@@ -307,9 +307,14 @@ def icon_name(key: str | None) -> str:
         return k
     if k in ICON_ALIASES:
         return ICON_ALIASES[k]
-    for w in re.split(r"[-\s]+", k):
-        if w in ICON_ALIASES:
-            return ICON_ALIASES[w]
+    words = [w for w in re.split(r"[^a-z0-9]+", k) if len(w) > 2]
+    for w in words:                                           # a meaning word anywhere in a phrase ("how rivals respond")
+        for v in (w, w[:-1] if w.endswith("s") else w):
+            if v in ICON_MEANINGS and (ICONS / f"{ICON_MEANINGS[v]}.svg").exists():
+                return ICON_MEANINGS[v]
+            if v in ICON_ALIASES:
+                return ICON_ALIASES[v]
+    for w in words:
         hits = [n for n in names if n == w or n.startswith(w + "-")]
         if hits:
             return min(hits, key=len)
@@ -317,27 +322,33 @@ def icon_name(key: str | None) -> str:
 
 
 @lru_cache(maxsize=256)
-def _icon_png(name: str, hexcolor: str, icon_set: str | None = None) -> str | None:
-    """The icon rasterised in `hexcolor` (192 px). icon_set None or "lucide": the Lucide icon for a meaning."""
-    import cairosvg
-    if icon_set in (None, "lucide"):
-        nm = icon_name(name)
-        src = ICONS / f"{nm}.svg"
-        if not src.exists():
-            return None
-        ICON_CACHE.mkdir(exist_ok=True)
-        out = ICON_CACHE / f"{nm}-{hexcolor}.png"
-        if not out.exists():
-            svg = src.read_text().replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
-            cairosvg.svg2png(bytestring=svg.encode(), write_to=str(out), output_width=192, output_height=192)
-        return str(out)
-    svg = _icon_svg(name, hexcolor, icon_set)
-    if not svg:
-        return None
+def _icon_png(name: str, hexcolor: str) -> str | None:
+    """The icon as a PNG in the colour asked for. Masks pre-rendered from the Lucide SVGs ship with the app
+    (engines/slides/icons_png) and are coloured with Pillow: the Cairo library the SVGs need is not on Mac or
+    Windows, and decks there came out with no icons at all."""
+    nm = icon_name(name)
     ICON_CACHE.mkdir(exist_ok=True)
-    out = ICON_CACHE / f"{icon_set}-{name}-{hexcolor}.png"
+    out = ICON_CACHE / f"{nm}-{hexcolor}.png"
+    if out.exists():
+        return str(out)
+    mask = ICONS.with_name("icons_png") / f"{nm}.png"
+    if mask.exists():
+        from PIL import Image
+        a = Image.open(mask).convert("L")
+        im = Image.new("RGBA", a.size, "#" + hexcolor)
+        im.putalpha(a)
+        im.save(out)
+        return str(out)
+    src = ICONS / f"{nm}.svg"
+    if not src.exists():
+        return None
+    try:
+        import cairosvg
+    except Exception:  # noqa: BLE001
+        return None
     if not out.exists():
-        cairosvg.svg2png(bytestring=svg, write_to=str(out), output_width=192, output_height=192)
+        svg = src.read_text().replace("currentColor", f"#{hexcolor}").replace('stroke-width="2"', 'stroke-width="1.25"')
+        cairosvg.svg2png(bytestring=svg.encode(), write_to=str(out), output_width=192, output_height=192)
     return str(out)
 
 
@@ -388,6 +399,23 @@ def icon_ref(key: str | None, icon_set: str | None = None) -> tuple[str, str]:
 
 
 @lru_cache(maxsize=256)
+def _set_png(name: str, hexcolor: str, icon_set: str) -> str | None:
+    """PNG fallback for an icon of another set, drawn with Pillow (engines/icons/raster.py: no Cairo, so it works on
+    Mac and Windows too)."""
+    from engines.icons.raster import png_bytes
+    svg = _icon_svg(name, hexcolor, icon_set)
+    if not svg:
+        return None
+    ICON_CACHE.mkdir(exist_ok=True)
+    out = ICON_CACHE / f"{icon_set}-{name}-{hexcolor}.png"
+    if not out.exists():
+        tmp = out.with_suffix(".tmp.png")
+        tmp.write_bytes(png_bytes(svg.decode("utf-8"), hexcolor, 192))
+        tmp.replace(out)
+    return str(out)
+
+
+@lru_cache(maxsize=256)
 def _icon_svg(name: str, hexcolor: str, icon_set: str) -> bytes | None:
     """The icon's SVG in `hexcolor` (PowerPoint does not resolve currentColor), 2px strokes thinned to 1.25px like
     the Lucide PNGs."""
@@ -424,19 +452,20 @@ def _embed_svg(pic, blob: bytes) -> None:
     el.set(qn("r:embed"), rid)
 
 
-def _icon(sl, name, x, y, d, meaning=""):
-    """Thin line icon in a thin circle: Lucide (ISC) as PNG by default; with the deck's icon_set, that set's icon
-    as SVG with a PNG fallback."""
+def _icon(sl, name, x, y, d, meaning="", muted=False):
+    """Thin line icon (Lucide, ISC) in a thin circle; muted draws it in the rule grey (an agenda's other sections).
+    With the deck's icon_set, that set's icon as SVG (asvg:svgBlip) with a PNG fallback."""
     from .template import COLORS
     circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
     circ.name = f"ov_IconRing_{name}"
     _strip_style(circ)
     circ.fill.background()
-    circ.line.color.theme_color = TC.TEXT_1
+    circ.line.color.theme_color = TC.ACCENT_5 if muted else TC.TEXT_1
     circ.line.width = Pt(0.75)
     iset = ICON_SET.get("name")
+    color = COLORS["accent5" if muted else "dk1"]
     if iset is None:
-        png = _icon_png(name, COLORS["dk1"])
+        png = _icon_png(name, color)
         if png:
             pad = d * 0.24
             pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
@@ -444,14 +473,14 @@ def _icon(sl, name, x, y, d, meaning=""):
             _alt(pic, f"icon:lucide:{name}:{meaning or name}")
         return
     iset, nm = icon_ref(name, iset)
-    png = _icon_png(nm, COLORS["dk1"], iset) if nm else None
+    svg = _icon_svg(nm, color, iset) if nm else None
+    png = (_icon_png(nm, color) if iset == "lucide" else None) or (_set_png(nm, color, iset) if svg else None)
     if not png:
         return
     pad = d * 0.24
     pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
     pic.name = f"ov_Icon_{name}"
     _alt(pic, f"icon:{iset}:{nm}:{meaning or name}")
-    svg = _icon_svg(nm, COLORS["dk1"], iset)
     if svg:
         _embed_svg(pic, svg)
 
