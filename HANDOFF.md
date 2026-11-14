@@ -57,14 +57,14 @@ Branch **`claude/release-build`** (based on `main` at `e5920d1`) holds the relea
 - A commit message containing `[skip ci]` pushes without starting a build. Use that for doc-only commits so two
   builds don't publish at once.
 
-Build history and fixes so far:
+Build history (the release is live: https://github.com/hamzaaziada/meshpool-harness/releases/tag/v0.0.1):
 
 | Run | Failure | Fix |
 |---|---|---|
 | 1 | Windows: Hermes patch didn't apply (CRLF); Mac: retired `macos-14` runner | `core.autocrlf=false`, `--ignore-whitespace`, `macos-latest` |
 | 2 | Both: "Building wheels for hermes-agent is not supported" | install Hermes's dependencies only (`hermes_requirements.py`) |
 | 3 | Mac Intel: `cryptography==50.0.0` has no Intel Mac build, source build fails (OpenSSL) | Intel runtime uses `cryptography==48.0.1` (`sed` in workflow) |
-| 4 | running at handoff time (commit `315c52c`) | — |
+| 4 | **succeeded**: v0.0.1 published with all four files (14:49 UTC, 14 Nov) | — |
 
 After run 4, `eb8b5c0` added `hdiutil` retries in `packaging/mac/repack.sh` (pushed with `[skip ci]`; it goes into the
 next build).
