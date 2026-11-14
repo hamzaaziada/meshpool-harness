@@ -689,7 +689,7 @@ class Agent:
                 raise
             except RuntimeError as e:
                 msg = str(e)
-                if type(e).__name__ == "NotSignedIn":     # ChatGPT sign-in missing or expired: retrying cannot help
+                if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
                     raise
                 if "HTTP 401" in msg or "HTTP 403" in msg:
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])

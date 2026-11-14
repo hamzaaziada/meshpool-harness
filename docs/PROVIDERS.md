@@ -47,7 +47,9 @@ A `chatgpt:` model sends Meshpool Code, Meshpool Work and the engines to `app/me
   - The access token is refreshed shortly before it expires, and once after a 401, at `https://auth.openai.com/oauth/token`.
   - Refresh tokens are single-use and shared with the Codex CLI. So the refresh runs under a file lock, re-reads `auth.json` first, and keeps a token another program has already refreshed.
   - The new tokens are written back to `auth.json`, so Codex keeps working.
-- **Models:** the list comes from the plan's Codex model list.
+- **Models:** the list comes from the plan's Codex model list, `GET /models?client_version=0.169.0`. The endpoint needs a version in Codex's format, and it only lists models for clients at or above each model's minimum Codex version. With Meshpool's own version, 0.1.0, it returns no models. So Meshpool sends the Codex release whose request format it matches, and still names itself as Meshpool. The default model is the one chosen in the picker if the plan still offers it, otherwise the first model the plan lists.
+- **Usage limit:** when the plan's limit is used up, ChatGPT answers 429 `usage_limit_reached` with the reset time. Meshpool shows "Usage limit reached on ChatGPT Go. It resets in 11 days, on 25 Nov. Pick another provider in the model menu" in the chat and under the ChatGPT tab. It does not retry, because a plan limit resets in hours or days, not seconds. The relay answers Pi and Hermes with 429 `insufficient_quota`, which OpenAI-style clients don't retry.
+- **Checked live (14 Nov 2026, ChatGPT Go plan, limit used up):** the model list loaded (gpt-6-luna, gpt-5.6-terra, gpt-5.6-luna), and the usage-limit message appeared in Meshpool Code within a second. A forced token refresh wrote the new tokens back to `auth.json`, and the Codex CLI still reported "Logged in using ChatGPT". A full reply, a tool call and Pi through the relay could not be checked live because the plan had no usage left. They are covered by the mock tests and the real-Pi run.
 
 ### The local relay for Pi and Hermes
 
