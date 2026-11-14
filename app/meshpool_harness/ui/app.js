@@ -1856,20 +1856,24 @@ async function contextPanel(box) {
   box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
     <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Nothing leaves this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Your ChatGPT or Claude chats.</b> Ask for your data export, then drop the .zip here as it arrives (do not unzip it).
-        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link within minutes to a day.</small>
+      <li><b>Your ChatGPT or Claude chats</b>
+        <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
+        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link, usually within minutes.</small>
         <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
         <small class="muted">Every conversation comes over with its original date. Claude projects become skills, and lasting facts about you become memory.</small></li>
-      ${srcs.length ? `<li><b>Sessions on this computer.</b> ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)}: ${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}
-        <small class="muted">Each session opens in its project folder, so you can carry on with any agent.</small></li>` : ""}
-      <li><b>Or ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
-        <div><button class="btn" id="ctxCopy">Copy the prompt</button></div>
-        <textarea id="ctxText" rows="4" placeholder="Paste the answer here"></textarea>
-        <div><button class="btn" id="ctxGo">Import the answer</button></div></li>
-      <li><b>Have a custom GPT or a Claude project you rely on?</b> Paste its instructions to make it a skill.
-        <input id="ctxName" placeholder="Name, e.g. board-memo-writer">
-        <textarea id="ctxIns" rows="3" placeholder="Paste the instructions"></textarea>
-        <div><button class="btn" id="ctxSkill">Save as a skill</button></div></li>
+      ${srcs.length ? `<li><b>Sessions on this computer</b>
+        <p>Each session opens in its project folder, so you can carry on with any agent.</p>
+        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
+      <li><b>What your assistant knows about you</b>
+        <p>Copy the prompt into ChatGPT, Claude or Gemini, then paste its whole answer here. It becomes your instructions and memory.</p>
+        <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
+        <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
+      <li><b>A custom GPT or Claude project you rely on</b>
+        <p>Paste its instructions to keep them as a skill every agent can use.</p>
+        <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
+        <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></li>
     </ol><div class="res" id="ctxRes"></div>`;
   const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
   const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
