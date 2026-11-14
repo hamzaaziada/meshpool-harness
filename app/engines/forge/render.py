@@ -348,8 +348,8 @@ def _icon(sl, name, x, y, d, meaning=""):
         _alt(pic, f"icon:lucide:{name}:{meaning or name}")
 
 
-FACE = {"head": "Georgia", "body": "Arial"}
-METRIC = (("Georgia", "Gelasio"), ("Arial", "Liberation Sans"), ("Calibri", "Carlito"), ("Cambria", "Caladea"),
+FACE = {"head": "Segoe UI", "body": "Segoe UI"}
+METRIC = (("Segoe UI", "Selawik"), ("Segoe UI Semibold", "Selawik"), ("Georgia", "Gelasio"), ("Arial", "Liberation Sans"), ("Calibri", "Carlito"), ("Cambria", "Caladea"),
           ("Times New Roman", "Liberation Serif"), ("Helvetica", "Liberation Sans"))
 
 

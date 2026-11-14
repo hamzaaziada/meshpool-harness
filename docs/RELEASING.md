@@ -44,3 +44,15 @@
    - publishes the release once every file is on GitHub.
 
    Keep the asset names exactly as they are. The download links in the README point to `releases/latest/download/<name>`, so they always serve the newest release.
+
+## Signing and notarization
+
+Builds are signed only when these repository secrets exist (Settings → Secrets and variables → Actions); without
+them the apps are ad hoc signed and users confirm the first launch.
+
+- Mac (Apple Developer Program): `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`, `MAC_SIGN_IDENTITY`, `APPLE_ID`,
+  `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID`. The apps are signed with the hardened runtime and the dmgs notarized and
+  stapled (`packaging/mac/sign.sh`).
+- Windows (Azure Artifact Signing): `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`,
+  `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`. The launcher, uninstaller and installer are
+  signed and checked.
