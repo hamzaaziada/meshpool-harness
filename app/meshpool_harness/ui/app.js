@@ -821,7 +821,7 @@ function modelPop(anchor) {
       const can = !h.providers || h.providers.includes(g.id);
       const note = can ? "" : `Runs in ${harness(agentFor(g.id) || "").name || "another agent"}`;
       html += `<div class="grp">${esc(g.name)}</div>`;
-      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${["chatgpt", "claude", "google"].includes(g.id) ? "Sign in" : "Add a key"}<span class="od">${esc(g.only ? `Runs in ${harness(g.only).name}. ` : "")}${esc(g.setup)}</span></span></button>`; continue; }
+      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${{chatgpt: "Sign in with ChatGPT", claude: "Sign in with Claude", google: "Sign in with Google"}[g.id] || "Add a key"}<span class="od">${esc(g.only ? `Runs in ${harness(g.only).name}. ` : "")}${esc(["chatgpt", "claude", "google"].includes(g.id) ? "Opens the official sign-in. If you already use " + {chatgpt: "Codex", claude: "Claude Code", google: "Gemini CLI"}[g.id] + " on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
       const rows = g.models.filter(hit);
       if (g.error && !q) html += `<div class="pe">${esc(g.error)}</div>`;
       html += rows.map(m => row(m, note || (g.only ? `Runs in ${harness(g.only).name}, which picks the model` : ""))).join("");
