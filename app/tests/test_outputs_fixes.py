@@ -80,3 +80,15 @@ def test_every_agent_is_told_not_to_make_things_up(tmp_path):
     assert "I don't know" in A.HONESTY and "N/A" in A.HONESTY
     assert A.HONESTY in A.context_block()                                   # first message of every chat, any agent
     assert Agent(str(tmp_path)).system_prompt().endswith(A.HONESTY)
+
+
+def test_a_broken_edit_shows_the_exact_place(tmp_path):
+    from meshpool_harness.core.tools import ToolError, Workspace
+    ws = Workspace(str(tmp_path), str(tmp_path / "out"))
+    assert "'(' was never closed" in ws.write_file("a.py", "def f(x:\n    return x\n")
+    ws.write_file("b.py", "x = [1, 2,\n     3]\n")
+    ws.read_file("b.py")
+    with pytest.raises(ToolError) as e:
+        ws.edit("b.py", "3]", "3")
+    assert "line 1, column 5" in str(e.value) and "^" in str(e.value) and (tmp_path / "b.py").read_text().endswith("3]\n")
+    assert "column 7" in ws.write_file("c.json", '{"a": 1,\n "b": }\n')
