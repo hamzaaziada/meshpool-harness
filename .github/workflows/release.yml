@@ -50,11 +50,12 @@ jobs:
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
           rt-mac/python/bin/python3 ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
           rt-mac/python/bin/python3 -m pip install -q -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
-          rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64
+          rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64 11.0
           # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
           sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
-          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
-          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64
+          # The Intel app opens on macOS 10.15 (Apple silicon: 11). Anything pip has to compile targets 10.15 too.
+          MACOSX_DEPLOYMENT_TARGET=10.15 arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64 10.15
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           for a in arm64 x64; do
             mkdir -p node-mac-$a
@@ -76,13 +77,22 @@ jobs:
         run: |
           set -euo pipefail
           for a in arm64 x64; do
-            arch=$a; [ $a = x64 ] && arch=x86_64
+            # The oldest macOS each app opens on: no Apple silicon Mac runs older than 11; the Intel app opens on 10.15
+            # (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist)
+            arch=arm64; min=11.0; exempt=()
+            if [ $a = x64 ]; then
+              arch=x86_64; min=10.15
+              # Node 22 needs macOS 11, and so does Playwright's driver (it runs on that Node). On 10.15 the app turns
+              # off what needs them (Pi, Codex, OpenCode, browser use) with a message; every other file must run on 10.15.
+              exempt=(--exempt 'Contents/Resources/node/*=11.0' --exempt 'Contents/Resources/python/lib/python3.*/site-packages/playwright/driver/*=11.0')
+            fi
             # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
-            clang -O2 -arch $arch -mmacosx-version-min=11.0 -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+            clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
             # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
             D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
             if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
-            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app 11.0
+            grep -q "LSMinimumSystemVersion</key><string>$min</string>" dist-src/app-mac-$a/Meshpool.app/Contents/Info.plist || { echo "Info.plist does not say macOS $min"; exit 1; }
+            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app $min --arch $arch ${exempt[@]+"${exempt[@]}"}
           done
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out

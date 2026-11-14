@@ -263,6 +263,8 @@ class Session:
                 raise ValueError(f"{self.harness['name']} cannot run yet. {self.harness.get('setup') or ''}".strip())
             self.kind = kind if kind in HR.MODES else self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
+                if self.harness.get("unsupported"):        # e.g. a Node agent on macOS 10.15
+                    raise ValueError(self.harness["unsupported"])
                 if not self.harness.get("available"):
                     raise ValueError(f"{self.harness['name']} is not installed on this computer. "
                                      + (self.harness.get("install") or ""))

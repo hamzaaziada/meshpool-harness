@@ -248,6 +248,9 @@ class PiAgent:
     def _start(self):
         if self._p and self._p.poll() is None:
             return
+        from meshpool_harness.harnesses import unsupported
+        if unsupported("pi"):                   # Node needs macOS 11: say so rather than fail to load
+            raise PiError(unsupported("pi"))
         node, cli = node_exe(), pi_cli()
         if not (node and cli):
             raise PiError("Pi is not included in this copy of Meshpool. Reinstall Meshpool to get it back.")

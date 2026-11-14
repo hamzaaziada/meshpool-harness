@@ -269,18 +269,36 @@ def _available(d: dict) -> bool:
     return bool(shutil.which(cmd) or (cmd and Path(cmd).exists()))
 
 
+def unsupported(hid: str) -> str:
+    """Why a built-in agent cannot run on this computer at all, or "". The Node agents (Pi, Codex, OpenCode) need
+    macOS 11 or later: the Intel Mac app opens on 10.15, but its Node does not (macos.py)."""
+    from meshpool_harness import macos
+    if hid in macos.NODE_AGENTS and macos.too_old():
+        name = next((h["name"] for h in (PI, CODEX, OPENCODE) if h["id"] == hid), hid)
+        return macos.note(name)
+    return ""
+
+
+def _node_agent(h: dict, available: bool, **extra) -> dict:
+    """A Node agent's row: unavailable, with the reason as its install note, where this macOS cannot run it."""
+    why = unsupported(h["id"])
+    row = dict(h, available=available and not why, builtin=True, **extra, **credentials(h["id"]))
+    if why:
+        row.update(unsupported=why, install=why)
+    return row
+
+
 def load_all() -> list[dict]:
     from meshpool_harness.harnesses import pi_rpc
     out = [dict(BUILTIN[0], available=True, builtin=True, **credentials("meshpool-code"))]
-    if pi_rpc.available():
-        out.append(dict(PI, available=True, builtin=True, **credentials("pi")))
+    if unsupported("pi") or pi_rpc.available():
+        out.append(_node_agent(PI, True))
     bh = _bundled_hermes()
     if bh:
         out.append(dict(bh, available=True, builtin=True, **credentials("hermes")))
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
-    out.append(dict(CODEX, available=_available(CODEX), builtin=True, signed_in=signed_in(CODEX["login"]),
-                    **credentials(CODEX["id"])))
-    out.append(dict(OPENCODE, available=_available(OPENCODE), builtin=True, **credentials(OPENCODE["id"])))
+    out.append(_node_agent(CODEX, _available(CODEX), signed_in=signed_in(CODEX["login"])))
+    out.append(_node_agent(OPENCODE, _available(OPENCODE)))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
@@ -327,6 +345,8 @@ def npx() -> str:
 def login(which: str) -> dict:
     """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself."""
     import subprocess
+    if which == "codex" and unsupported("codex"):      # the sign-in runs on Node, which needs macOS 11
+        raise ValueError(unsupported("codex"))
     if which == "codex":
         cmd = [npx(), "-y", "@openai/codex@latest", "login"]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,

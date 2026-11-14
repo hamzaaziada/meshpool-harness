@@ -269,8 +269,13 @@ def system_check() -> list[dict]:
         pw = True
     except ImportError:
         pw = False
-    rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
-                 "fix": "Run: meshpool install-browser"})
+    from meshpool_harness import macos
+    if macos.too_old():                     # the Intel app opens on 10.15; Chromium needs macOS 11
+        rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 11 or later",
+                     "fix": macos.note("Browser use", "Web search and page reading work without it.")})
+    else:
+        rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
+                     "fix": "Run: meshpool install-browser"})
     so = find_soffice()
     rows.append({"name": "LibreOffice", "optional": True, "ok": bool(so), "detail": so or "not installed (optional)",
                  "fix": "Optional. With it, Meshpool also checks spreadsheet formula results and renders slides to "

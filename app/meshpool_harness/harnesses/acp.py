@@ -230,6 +230,9 @@ class ACPAgent:
         if self._p and self._p.poll() is None:
             return False
         m = self.manifest
+        from meshpool_harness.harnesses import unsupported
+        if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode on macOS 10.15: Node needs 11
+            raise ACPError(unsupported(m["id"]))
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
             prepare_hermes(self.model)
