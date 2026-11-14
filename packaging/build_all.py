@@ -115,7 +115,8 @@ def app_code(dst: Path):
     shutil.copy2(PKG / "requirements-cli.txt", dst / "requirements-cli.txt")
     shutil.copytree(VENDOR, dst / "vendor" / "hermes", ignore=IGN)
     shutil.copy2(PKG / "hermes-NOTICE-MESHPOOL.txt", dst / "vendor" / "hermes" / "NOTICE-MESHPOOL.txt")
-    shutil.copytree(DEPS / "ocr-models", dst / "vendor" / "ocr")          # PP-OCRv5 recognition models
+    if (DEPS / "ocr-models").is_dir():                   # extra-script OCR models (optional; Latin/CJK built in)
+        shutil.copytree(DEPS / "ocr-models", dst / "vendor" / "ocr")
 
 
 def docs(dst: Path):
@@ -167,8 +168,11 @@ if __name__ == "__main__":
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir()
+    only = next((x.split("=", 1)[1] for x in sys.argv[1:] if x.startswith("--only=")), "mac-arm64,mac-x64,win")
     for a in ("mac-arm64", "mac-x64"):
-        mac_app(a)
-    win_app()
+        if a in only.split(","):
+            mac_app(a)
+    if "win" in only.split(","):
+        win_app()
     for p in sorted(OUT.iterdir()):
         print(p.name)
