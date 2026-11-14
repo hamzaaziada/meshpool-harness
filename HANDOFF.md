@@ -2,7 +2,7 @@
 
 For the next agent taking over. The owner launches tomorrow. Priority order: (1) a working public release,
 (2) a UX/UI crawl with every real bug fixed and the release rebuilt, (3) merge the release tooling into `main`.
-Delete this file from the branch before it is merged into `main`.
+Kept on `main` so any agent picking up the work starts here.
 
 ## What the owner asked for, and what was agreed
 
