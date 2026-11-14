@@ -6,6 +6,7 @@ set -u
 Q="$1"; PY="$2"; R="$(cd "$(dirname "$0")/.." && pwd)"; OUT="$Q/run-$(date +%H%M%S)"; mkdir -p "$OUT"
 pkill -f "mock_llm.py 8911"; pkill -f "meshpool_harness ui --port 879"; sleep 2
 (cd "$R" && nohup python3 testkit/mock_llm.py 8911 "$OUT/mock.jsonl" > "$OUT/mock.log" 2>&1 &)
+pkill -f "mock_mcp_http.py 8977"; (cd "$R" && nohup python3 testkit/mock_mcp_http.py 8977 > "$OUT/mock_mcp.log" 2>&1 &)
 start() {  # port home extra-env...
   local port="$1" home="$2"; shift 2
   rm -rf "$home"; mkdir -p "$home"

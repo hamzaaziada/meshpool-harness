@@ -39,6 +39,9 @@ def test_fmt_value_and_range_checks():
         {"name": "Low", "values": [1, 2]}, {"name": "High", "values": [3, 4]}])))
     bad = dict(ok, series=[{"name": "Low", "values": [5, 2, 2]}, {"name": "High", "values": [3, 4, 5]}])
     assert "low above high for A" in chart_problems(bad)[0]
+    from engines.forge.finance_pages import _a                 # "The DCF puts the shares at $109 at an 8.8% WACC"
+    assert [_a(w) for w in ("8.8%", "9.5%", "11.0%", "18.2%", "80.1%", "10.5%", "110%")] == \
+        ["an", "a", "an", "an", "an", "a", "a"]
 
 
 @lo
@@ -82,6 +85,8 @@ def test_pages_carry_the_workbook_numbers(books):
     assert ev["median"] == pytest.approx(named_val(books / "val.xlsx", "comps_ev_ebitda_median"))
     assert ev["values"][3] is None and len(ev["values"]) == len(comps["benchmark"]["companies"])   # Delta: NM
     assert any(b["text"].startswith("NM") for b in comps["bullets"])
+    prec = next(p for p in p2 if p["title"].startswith("Precedent deals"))      # short labels, buyers footnoted
+    assert prec["benchmark"]["companies"][0] == "Tgt1 (2025)" and "Tgt1: BuyCo" in prec["footnotes"][0]
     assert any(p["title"].startswith("Precedent deals paid") for p in p2)
 
 
@@ -169,7 +174,8 @@ def test_forge_engine_finds_the_model_workbook(books, monkeypatch, tmp_path):
     shutil.copy(books / "model.xlsx", tmp_path / "model.xlsx")
     out = FE.solve("Build an 8-slide board deck on the valuation", workdir=str(tmp_path), task_id="t",
                    client=object())
-    assert got["fixed_pages"] and got["slides_wanted"] == 8 + len(got["fixed_pages"])
+    # the computed pages count inside the 8 slides asked for; the model still writes at least 3
+    assert got["fixed_pages"] and got["slides_wanted"] == 8 and len(got["fixed_pages"]) <= 5
     assert "computed from model.xlsx" in out["answer"]
 
 

@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -193,6 +195,9 @@ class Workspace:
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
+        if write and ".git" in q.relative_to(self.root).parts:
+            # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
+            raise ToolError("agents cannot change files inside .git; use git commands instead")
         return q
 
     @staticmethod
@@ -307,16 +312,50 @@ class Workspace:
 
     @staticmethod
     def _syntax_error(path: Path, text: str) -> str | None:
-        """SWE-agent-style lint on edit: a Python edit that breaks parsing is rejected before it lands."""
-        if path.suffix != ".py":
-            return None
-        try:
-            compile(text, str(path), "exec", dont_inherit=True)
-            return None
-        except SyntaxError as e:
-            return f"line {e.lineno}: {e.msg}"
-        except (ValueError, TypeError):
-            return None
+        """Lint on edit: the exact place a Python, JSON or JavaScript file stops parsing, shown the way the compiler
+        shows it (line, column, the line itself and a caret), so the agent fixes it in the same step instead of
+        finding out when the code runs. None when the file parses or the language is not checked."""
+        def where(line: int, col: int, msg: str) -> str:
+            lines = text.splitlines()
+            src = lines[line - 1] if 0 < line <= len(lines) else ""
+            caret = " " * max(0, min(col, len(src) + 1) - 1) + "^"
+            return f"line {line}, column {col}: {msg}\n    {src}\n    {caret}"
+        suf = path.suffix.lower()
+        if suf in (".py", ".pyw"):
+            try:
+                compile(text, str(path), "exec", dont_inherit=True)
+                return None
+            except SyntaxError as e:     # Python's own message: "'(' was never closed", "invalid syntax. Perhaps you forgot a comma?"
+                return where(e.lineno or 0, e.offset or 1, e.msg)
+            except (ValueError, TypeError):
+                return None
+        if suf == ".json":
+            try:
+                json.loads(text) if text.strip() else None
+                return None
+            except json.JSONDecodeError as e:
+                return where(e.lineno, e.colno, e.msg)
+        if suf in (".js", ".mjs", ".cjs"):
+            node = shutil.which("node")
+            if not node:
+                return None
+            try:
+                with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8") as f:
+                    f.write(text)
+                r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                return None
+            finally:
+                try:
+                    os.unlink(f.name)
+                except (OSError, NameError):
+                    pass
+            if r.returncode == 0:
+                return None
+            m = re.search(r":(\d+)\n", r.stderr)
+            msg = next((x for x in r.stderr.splitlines() if "Error" in x), "syntax error").strip()
+            return where(int(m.group(1)), 1, msg) if m else msg
+        return None
 
     def edit(self, path, old, new):
         if self.container and not self.mounted:
@@ -352,8 +391,8 @@ class Workspace:
         new_text = text.replace(old, new, 1)
         bad = self._syntax_error(p, new_text) if not self._syntax_error(p, text) else None
         if bad:
-            raise ToolError(f"edit rejected: it would make {path} invalid Python ({bad}). The file is unchanged. "
-                            f"Fix indentation/brackets in `new` and retry.")
+            raise ToolError(f"edit rejected: it would make {path} stop parsing. The file is unchanged. Fix `new` "
+                            f"at the marked place and retry.\n{bad}")
         p.write_text(new_text)
         self.seen[key] = self._hash(new_text)
         self.edits += 1
@@ -382,7 +421,9 @@ class Workspace:
         self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
-        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})"
+        bad = self._syntax_error(p, p.read_text(encoding="utf-8", errors="replace")) if p.is_file() else None
+        return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
+            f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
 

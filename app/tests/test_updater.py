@@ -90,11 +90,34 @@ def _installed(tmp_path, ver="0.1.0"):
     return app
 
 
-def _update_to(monkeypatch, app, tgz, ver, k="cli"):
+def _update_to(monkeypatch, app, tgz, ver, k="cli", sha=None, assets=True):
+    """A release that publishes the code archive and lists it in SHA256SUMS.txt (as the release workflow does)."""
     monkeypatch.setattr(U, "APP", app)
+    monkeypatch.setattr(U, "SRC", "")
+    rel = [{"name": U.SRC_ASSET, "url": "src"}, {"name": U.SUMS, "url": "s"}] if assets else []
     monkeypatch.setattr(U, "check", lambda force=False: {"ok": True, "newer": True, "kind": k, "current": "0.1.0",
-                                                         "latest": ver, "tag": f"v{ver}", "assets": [], "url": "u"})
+                                                         "latest": ver, "tag": f"v{ver}", "assets": rel, "url": "u"})
+    monkeypatch.setattr(U, "_sums", lambda v: {U.SRC_ASSET: sha or U._sha256(tgz)} if assets else None)
     monkeypatch.setattr(U, "_download", lambda url, dst: __import__("shutil").copy(tgz, dst) and dst)
+
+
+def test_code_update_that_does_not_match_its_checksum_changes_nothing(monkeypatch, tmp_path):
+    app = _installed(tmp_path)
+    tgz = _release(tmp_path, "0.2.0", {"app/engines/new.py": "tampered"})
+    _update_to(monkeypatch, app, tgz, "0.2.0", sha="0" * 64)
+    r = U.install()
+    assert not r["ok"] and "checksum" in r["error"]
+    assert '"0.1.0"' in (app / "meshpool_harness" / "__init__.py").read_text()
+    assert not (app / "engines" / "new.py").exists()
+
+
+def test_code_update_without_a_checked_archive_is_refused(monkeypatch, tmp_path):
+    app = _installed(tmp_path)
+    tgz = _release(tmp_path, "0.2.0", {"app/engines/new.py": "new"})
+    _update_to(monkeypatch, app, tgz, "0.2.0", assets=False)
+    r = U.install()
+    assert not r["ok"] and "cannot be checked" in r["error"]
+    assert not (app / "engines" / "new.py").exists()
 
 
 def test_cli_install_with_its_own_python_is_not_the_desktop_app(monkeypatch, tmp_path):

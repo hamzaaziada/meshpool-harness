@@ -83,8 +83,10 @@ def import_skill(path: str) -> str:
     dst = SK.folder() / SK.slug(meta.get("name") or src.name)
     if dst.exists():
         shutil.rmtree(dst)
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".DS_Store"),
-                    symlinks=False)
+    def skip(d, names):                      # links are left out: one pointing at ~/.ssh copied a private key in
+        return {n for n in names if n in (".git", "node_modules", "__pycache__", ".DS_Store")
+                or os.path.islink(os.path.join(d, n))}
+    shutil.copytree(src, dst, ignore=skip)
     return dst.name
 
 
@@ -298,12 +300,20 @@ def import_instructions_as_skill(name: str, text: str, description: str = "") ->
     return r.get("id") or r.get("name") or str(r) if isinstance(r, dict) else str(r)
 
 
+_MARK = "<!-- imported into Meshpool -->"
+
+
 def _write_skill(name: str, desc: str, body: str) -> str:
-    """Write (or, on a second import, rewrite) a skill; returns its id."""
+    """Write a skill, or rewrite one an earlier import made; returns its id. A skill the import did not make (a
+    built-in like project-plan, or the user's own) is never replaced: the import takes the next free name."""
     from meshpool_harness import skills as SK
-    sid = SK.slug(name or "imported")
-    desc = re.sub(r"\s+", " ", desc or "").strip()[:300] or sid
-    SK.create(sid, desc, body, overwrite=True)
+    base = SK.slug(name or "imported")
+    desc = re.sub(r"\s+", " ", desc or "").strip()[:300] or base
+    sid, n = base, 2
+    while (SK.folder() / sid / "SKILL.md").is_file() and \
+            _MARK not in (SK.folder() / sid / "SKILL.md").read_text(encoding="utf-8", errors="replace"):
+        sid, n = f"{base}-{n}", n + 1
+    SK.create(sid, desc, body.rstrip() + "\n\n" + _MARK + "\n", overwrite=True)
     return sid
 
 
@@ -371,6 +381,8 @@ def import_export(path: str, client=None) -> dict:
             from meshpool_harness import skills as SK
             for d in docs[:30]:
                 fn = re.sub(r"[^\w .-]", "_", d.get("filename") or "doc.txt")[:80]
+                if fn.upper() == "SKILL.MD" or fn.startswith("."):
+                    fn = "knowledge-" + fn.lstrip(".")              # never the skill's own instructions
                 (SK.folder() / slug / fn).write_text(d.get("content") or "", encoding="utf-8")
             done["skills"].append(slug)
     convs = _read_json(z, "conversations.json") or []

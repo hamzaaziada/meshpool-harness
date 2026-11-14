@@ -54,7 +54,7 @@ ROLES = [("dk1", "Text", "Body text and titles"),
          ("accent5", "Rules", "Hairlines and gridlines"),
          ("accent6", "Muted text", "Labels, notes and secondary text"),
          ("lt2", "Panel", "Light panel and half-page backgrounds")]
-SAFE_FONTS = {"arial", "georgia", "calibri", "cambria", "helvetica", "times new roman", "verdana", "tahoma",
+SAFE_FONTS = {"segoe ui", "arial", "georgia", "calibri", "cambria", "helvetica", "times new roman", "verdana", "tahoma",
               "segoe ui", "garamond", "century gothic", "franklin gothic book", "gill sans mt", "aptos",
               "aptos display", "trebuchet ms", "palatino linotype", "book antiqua", "corbel", "candara", "constantia"}
 MASTER_VERSION = 3                               # bump when master_template() changes what it writes

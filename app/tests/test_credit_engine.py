@@ -113,6 +113,8 @@ def test_pipeline_with_a_small_model(fin, tmp_path):
     assert parse_request("Underwrite a $12.5m 7-year term loan at 6.75% to fund a new plant for Acme (ACME)") == {
         "amount": 12.5, "rate": 0.0675, "amort_years": 7.0, "ticker": "ACME", "purpose": "fund a new plant for acme"}
     assert parse_request("loan of $750k")["amount"] == 0.75
+    assert parse_request("Credit memo for a $500m 5-year loan at 7% to refinance and fund capex\n\nInput files (in the "
+                         "working directory): fin.csv")["purpose"] == "refinance and fund capex"   # stops at the line
     csv = tmp_path / "acme.csv"
     csv.write_text(CSV)
     commentary = {"business": "Acme makes industrial parts. EBITDA was 23.0 in FY2025 and margins are 99%.",

@@ -5,6 +5,7 @@ links to other sheets in green; Inputs / Calc / Outputs sheets; named ranges for
 """
 from __future__ import annotations
 
+from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -24,8 +25,27 @@ FMT = {"usd": '$#,##0;($#,##0);"-"', "usd2": '$#,##0.00;($#,##0.00)', "pct": '0.
        "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)'}
 
 
+class _Book(Workbook):
+    """A workbook that sets each sheet up for printing when saved: landscape, one page wide, as many pages long as
+    it needs. Without it a model printed as 74 pages with sheets split across them."""
+
+    def save(self, filename):
+        for ws in self.worksheets:
+            ps = ws.page_setup
+            ps.orientation = ps.orientation or "landscape"
+            if not ws.sheet_properties.pageSetUpPr or not ws.sheet_properties.pageSetUpPr.fitToPage:
+                ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+                ps.fitToWidth, ps.fitToHeight = 1, 0
+            ws.print_options.horizontalCentered = True
+            if ws.freeze_panes and not ws.print_title_rows:          # header rows repeat on every page
+                row = int(_re.sub(r"\D", "", ws.freeze_panes) or 1) - 1
+                if row >= 1:
+                    ws.print_title_rows = f"1:{row}"
+        return super().save(filename)
+
+
 def new_workbook(sheets=("Inputs", "Calc", "Outputs")) -> Workbook:
-    wb = Workbook()
+    wb = _Book()
     wb.active.title = sheets[0]
     for s in sheets[1:]:
         wb.create_sheet(s)
@@ -184,7 +204,8 @@ def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
     formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
     ch["E3"] = "All checks"
     ch["E3"].font = Font(name=FONT, bold=True)
-    formula(ch, "F3", f'=IF(COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
+    # ISERROR too: COUNTIF does not count error values, so a #DIV/0! check read "All checks OK"
+    formula(ch, "F3", f'=IF(SUMPRODUCT(--ISERROR(C4:C{r}))+COUNTIF(C4:C{r},"ERROR")=0,"OK","ERROR")')
     if "MasterCheck" not in wb.defined_names:
         define_name(wb, "MasterCheck", "'Checks'!$F$3")
     return f"Checks!C{r}"
@@ -306,17 +327,17 @@ STAT_ROWS = [("mean", "Mean", "AVERAGE({rng})"), ("median", "Median", "MEDIAN({r
 COMPS_INPUTS = [("price", "Share price ($)", "usd2"), ("shares", "Diluted shares (m)", "num"),
                 ("debt", "Total debt ($m)", "usd"), ("cash", "Cash ($m)", "usd"),
                 ("revenue", "Revenue LTM ($m)", "usd"), ("ebitda", "EBITDA LTM ($m)", "usd")]
-COMPS_CALCS = [("equity", "Equity value ($m)", "{price}*{shares}", "usd"),
-               ("ev", "Enterprise value ($m)", "{equity}+{debt}-{cash}", "usd"),
-               ("ev_rev", "EV / Revenue LTM (x)", 'IF({revenue}<=0,"NM",{ev}/{revenue})', "x"),
-               ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF({ebitda}<=0,"NM",{ev}/{ebitda})', "x"),
+COMPS_CALCS = [("equity", "Equity value ($m)", 'IF(OR({price}<=0,{shares}<=0),"NM",{price}*{shares})', "usd"),
+               ("ev", "Enterprise value ($m)", 'IF(ISNUMBER({equity}),{equity}+{debt}-{cash},"NM")', "usd"),
+               ("ev_rev", "EV / Revenue LTM (x)", 'IF(OR(NOT(ISNUMBER({ev})),{revenue}<=0),"NM",IF({ev}<=0,"NM",{ev}/{revenue}))', "x"),
+               ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF(OR(NOT(ISNUMBER({ev})),{ebitda}<=0),"NM",IF({ev}<=0,"NM",{ev}/{ebitda}))', "x"),
                ("margin", "EBITDA margin (%)", 'IF({revenue}<=0,"NM",{ebitda}/{revenue})', "pct")]
 PRECEDENT_TEXT = [("date", "Announced"), ("acquirer", "Acquirer"), ("name", "Target"), ("consideration", "Consideration")]
 PRECEDENT_INPUTS = [("ev", "Enterprise value ($m)", "usd"), ("revenue", "Target revenue LTM ($m)", "usd"),
                     ("ebitda", "Target EBITDA LTM ($m)", "usd"), ("offer", "Offer price ($/share)", "usd2"),
                     ("unaffected", "Unaffected price ($/share)", "usd2")]
-PRECEDENT_CALCS = [("ev_rev", "EV / Revenue LTM (x)", 'IF({revenue}<=0,"NM",{ev}/{revenue})', "x"),
-                   ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF({ebitda}<=0,"NM",{ev}/{ebitda})', "x"),
+PRECEDENT_CALCS = [("ev_rev", "EV / Revenue LTM (x)", 'IF(OR({revenue}<=0,{ev}<=0),"NM",{ev}/{revenue})', "x"),
+                   ("ev_ebitda", "EV / EBITDA LTM (x)", 'IF(OR({ebitda}<=0,{ev}<=0),"NM",{ev}/{ebitda})', "x"),
                    ("premium", "Premium to unaffected (%)", 'IF({unaffected}<=0,"NM",{offer}/{unaffected}-1)', "pct")]
 
 
@@ -408,7 +429,8 @@ def dcf_block(ws, row, years, drivers, revenue=None, margin="ebitda_margin", nam
 
     years: ["2027E", ...] (ints become "2027E"). drivers: revenue drivers, one row each:
       {"key": "mw", "label": "Active capacity (MW)", "start": "mw_start", "growth": "mw_growth", "fmt": "num"}
-      ("step": name for additive change; no growth/step = flat), or {"key", "label", "formula": "={a}*{b}"} with
+      ("start" is the FIRST FORECAST year's value, not the last actual as in three_statement: growth applies from
+      the second forecast year; "step": name for additive change; no growth/step = flat), or {"key", "label", "formula": "={a}*{b}"} with
       {key} = same year and {key@prev} = prior year.
     revenue: expression over driver keys, e.g. "{mw}*{util}*{price_per_mw}" (default: product of all drivers).
     margin: EBITDA margin input name, or (start_name, end_name) for a linear ramp to steady state.

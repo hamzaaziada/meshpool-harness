@@ -10,6 +10,21 @@ Files in the Meshpool data folder:
 """
 from __future__ import annotations
 
+# Every agent gets this, whatever it runs on: the built-in agents in their instructions, Pi, Hermes, Codex and
+# OpenCode in the first message of each chat, and the deck and workbook writers in their prompts.
+HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you do not know, or the files and sources "
+           "do not say, write \"I don't know\" (in a table, model or slide: N/A) and say what would answer it. Do not "
+           "guess or interpolate numbers, dates, names, quotes, sources or results and present them as fact; if an "
+           "estimate genuinely helps, label it as an estimate and show how you got it. Never say something was done, "
+           "checked or tested when it was not.")
+
+# Every agent, whichever harness runs it: slides and workbooks come from the Meshpool engines, which carry the
+# consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
+ENGINES = ("Every slide and every spreadsheet goes through the Meshpool office tools: make_deck for a deck, add_slides "
+           "to add slides to a deck the user has, make_spreadsheet (or office_task) for a workbook or model. Never "
+           "write a .pptx or .xlsx by hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs. Decks come out in a "
+           "top strategy firm's style without being asked; pass the user's facts and files in the request.")
+
 import contextlib
 import difflib
 import json
@@ -184,7 +199,7 @@ def context_block() -> str:
     st = settings()
     now = datetime.now().astimezone()
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})."]
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY]
     ins = instructions() if st["instructions_on"] else ""
     mem = memory() if st["memory_on"] else ""
     if ins:
@@ -198,7 +213,7 @@ def context_block() -> str:
                     "themselves or their work, save it with memory_save. " if st["memory_on"] else "")
                  + "If the user asks for something to happen later or on a schedule, use schedule_task. "
                  "For a large job with independent parts (research many companies, review many files), use "
-                 "run_subtasks to work on the parts in parallel.")
+                 "run_subtasks to work on the parts in parallel. " + ENGINES)
     return "\n\n".join(parts)
 
 

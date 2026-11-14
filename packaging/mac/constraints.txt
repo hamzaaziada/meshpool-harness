@@ -1,3 +1,8 @@
-# Mac builds: the app runs on macOS 11 and later. Every pypdfium2 5.x library needs macOS 12 (whatever its wheel
-# tag says); 4.30.1 is the newest that runs on 11. packaging/mac/check_minos.py checks the real files.
+# Mac builds: Apple silicon runs on macOS 11 and later, Intel on 10.15 and later. packaging/mac/check_minos.py checks
+# the real files (each architecture's slice), whatever the wheel tags say.
+# Every pypdfium2 5.x library needs macOS 12 (whatever its wheel tag says); 4.30.1 is the newest that runs on 11, and
+# its Intel library needs 10.13.
 pypdfium2==4.30.1
+# httptools (uvicorn[standard], for Hermes) 0.9.0 ships Intel builds for macOS 11 only; 0.8.0's universal2 build has
+# an Intel slice for 10.13.
+httptools<0.9; platform_machine == "x86_64"

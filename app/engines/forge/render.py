@@ -288,7 +288,18 @@ ICON_ALIASES = {"money": "banknote", "revenue": "banknote", "cost": "receipt", "
                 "warning": "triangle-alert", "security": "shield-check", "search": "search",
                 "digital": "monitor-smartphone", "phone": "smartphone", "governance": "landmark",
                 "finance": "landmark", "investment": "piggy-bank", "phase": "milestone", "launch": "rocket",
-                "plan": "list-checks"}
+                "plan": "list-checks", "rival": "swords", "rivals": "swords", "competitor": "swords",
+                "competitors": "swords", "competition": "swords", "competitive": "swords", "recommend": "lightbulb",
+                "recommendation": "lightbulb", "recommendations": "lightbulb", "next": "arrow-right",
+                "opportunity": "sparkles", "opportunities": "sparkles", "summary": "file-text", "overview": "file-text",
+                "operations": "settings", "operating": "settings", "action": "list-checks", "actions": "list-checks",
+                "stand": "map-pin", "today": "map-pin", "situation": "map-pin", "current": "map-pin",
+                "future": "telescope", "outlook": "telescope", "forecast": "telescope", "roadmap": "map",
+                "implementation": "rocket", "execution": "rocket", "sales": "chart-column", "performance": "gauge",
+                "financial": "landmark", "financials": "landmark", "budget": "wallet", "win": "trophy",
+                "position": "compass", "options": "git-fork", "option": "git-fork", "case": "briefcase",
+                "approach": "route", "method": "route", "methodology": "route", "findings": "search-check",
+                "insights": "lightbulb", "context": "book-open", "background": "book-open"}
 
 
 @lru_cache(maxsize=1)
@@ -485,8 +496,8 @@ def _icon(sl, name, x, y, d, meaning="", muted=False):
         _embed_svg(pic, svg)
 
 
-FACE = {"head": "Georgia", "body": "Arial"}
-METRIC = (("Georgia", "Gelasio"), ("Arial", "Liberation Sans"), ("Calibri", "Carlito"), ("Cambria", "Caladea"),
+FACE = {"head": "Segoe UI", "body": "Segoe UI"}
+METRIC = (("Segoe UI", "Selawik"), ("Segoe UI Semibold", "Selawik"), ("Georgia", "Gelasio"), ("Arial", "Liberation Sans"), ("Calibri", "Carlito"), ("Cambria", "Caladea"),
           ("Times New Roman", "Liberation Serif"), ("Helvetica", "Liberation Sans"))
 
 
@@ -507,6 +518,18 @@ def _need(blocks, w) -> float:
         lines = wrap_lines(plain, w - ind, size, bold if b.get("bold") else reg, 0.98)
         h += lines * _pitch(size, b.get("line_spacing", LEADING)) / 72 + (b.get("space_before") or 0) / 72
     return h
+
+
+@lru_cache(maxsize=16)
+def _line_factor(path) -> float:
+    """A table row's height per point of type for this face: 1.15 measured for Arial (natural line 1.118 em), scaled
+    by the face's own ascent + descent, so a taller face such as Segoe UI gets taller rows instead of overflowing."""
+    try:
+        from PIL import ImageFont
+        a, d = ImageFont.truetype(str(path).split("|")[0], 1000).getmetrics()
+        return max(1.15, round(1.15 * (a + d) / 1000 / 1.118, 3))
+    except Exception:  # noqa: BLE001
+        return 1.15
 
 
 def _cont_title(t: str) -> str:
@@ -542,6 +565,7 @@ class Ctx:
     def __init__(self, prov):
         self.prov = prov
         self.overflow = []
+        self.last_side = -9          # last slide whose chart had its text in a side panel (composition variety)
 
     def miss(self, n, where, words):
         self.overflow.append(f"slide {n}: {where} does not fit at the minimum size; cut about {words} words")
@@ -576,7 +600,8 @@ def _header(ctx, s, sl, n, title_w=None):
                [{"text": s["subtitle"], "size": ssz, "numbers": False}])
         if ssz == 14 and _need([{"text": s["subtitle"], "size": 14}], w) > 0.35:
             ctx.miss(n, "the subtitle", max(3, len(s["subtitle"].split()) // 3))
-    _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
+    if s.get("subtitle"):            # a line under the subtitle only: never an accent line under a bare title
+        _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
     x = RIGHT
     for k, tag in enumerate(reversed((s.get("tags") or [])[:2] if not sub else [])):
         tw = 0.1 + 0.083 * len(tag)
@@ -1220,12 +1245,15 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         else:
             s.format.fill.solid()
             s.format.fill.fore_color.theme_color = palette[k % 4]
-            if hl and not multi:
+            if not multi:
+                vals_k = series[k]["values"]
                 for j, cat in enumerate(cats):
-                    if cat in hl:
+                    neg = j < len(vals_k) and isinstance(vals_k[j], (int, float)) and vals_k[j] < 0
+                    if cat in hl or neg:
+                        # the focus point in cyan; a fall in coral, so best and worst never share a colour
                         f = s.points[j].format
                         f.fill.solid()
-                        f.fill.fore_color.theme_color = TC.ACCENT_3
+                        f.fill.fore_color.theme_color = TC.ACCENT_2 if neg else TC.ACCENT_3
         s.data_labels.show_value = True
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False
@@ -1294,7 +1322,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     size_ = t.get("size") or T["cell"]
     from .common import font_file, wrap_lines
     f_reg, f_bold = _font("body"), _font("body", True)
-    row_min = lambda sz: sz * 1.15 / 72 + 0.045                   # LibreOffice/PowerPoint minimum, measured
+    lf = _line_factor(f_reg)                                      # 1.15 for Arial; taller faces (Segoe UI) more
+    pad_r = 0.045
+    row_min = lambda sz: sz * lf / 72 + pad_r                     # LibreOffice/PowerPoint minimum, measured
     widths = t.get("col_widths")
     colw = ([w * cw / sum(widths) for cw in widths] if widths else
             [w * 0.32] + [(w * 0.68) / max(1, len(cols) - 1)] * (len(cols) - 1))
@@ -1303,7 +1333,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
         lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
                     or [1])
-        return lines * (sz + 2) * 1.25 / 72 + 0.08
+        return lines * (sz + 2) * (lf + 0.10) / 72 + 0.08
     head_h = lambda sz: col_head_h(sz) + ((2 if any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
                                             else 1) * (sz + 2) * 1.25 / 72 + 0.08 if groups else 0)
     bold_rows = set(t.get("highlight_rows") or []) | ({len(rows) - 1} if t.get("total_row") else set())
@@ -1315,7 +1345,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             f = f_bold if i in bold_rows else f_reg
             lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
                         or [1])
-            out.append(max(base, lines * sz * 1.15 / 72 + 0.045))
+            out.append(max(base, lines * sz * lf / 72 + pad_r))
         return out
     while size_ > 10 and sum(row_heights(size_, row_min(size_))) + head_h(size_) > h:
         size_ -= 1
@@ -1400,7 +1430,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         cell.vertical_anchor = anchor
         p = cell.text_frame.paragraphs[0]
         p.alignment = align
+        p.line_spacing = Pt(_pitch(sz))      # exact, as in body text: a taller face (Segoe UI) cannot grow the rows
         _rich(p, str(text), sz, color, bold, numbers=False, italic=italic)
+        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # the end mark at 18 pt grew the rows
     if groups:
         ci = 1
         for g in groups:
@@ -1522,7 +1554,18 @@ def drop_gap_sentences(text: str, gaps: list | None = None) -> str:
         return text
     if gaps is not None:
         gaps.extend(m.group(1).strip() for m in _GAP_RE.finditer(text))
-    keep = [x for x in _SENT.split(text) if "[GAP" not in x]
+    keep = []
+    for sent in _SENT.split(text):
+        if "[GAP" not in sent:
+            keep.append(sent)
+            continue
+        parts = re.split(r"(?<=[,;])\s+", sent)                  # "Margin is 28.9%, net debt [GAP]." keeps
+        good = [x for x in parts if "[GAP" not in x]              # "Margin is 28.9%." when what is left is a
+        if good and parts[0] in good:                             # leading clause that stands on its own
+            head = tidy_prose(" ".join(good)).rstrip(",;")
+            from engines.forge.density import _is_clause
+            if _is_clause(head):
+                keep.append(head if head.endswith((".", "!", "?")) else head + ".")
     return tidy_prose(" ".join(keep))
 
 
@@ -1551,8 +1594,8 @@ def normalize(s: dict) -> dict:
         t["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
         gap = re.compile(r"\[GAP[^\]]*\]")
         if any(gap.search(c) for r in t["rows"] for c in r):           # visible, footnoted gaps, not raw markers
-            t["rows"] = [[gap.sub("n/a", c) for c in r] for r in t["rows"]]
-            s["footnotes"] = list(s.get("footnotes") or []) + ["n/a: not available in the source data"]
+            t["rows"] = [[gap.sub("N/A", c) for c in r] for r in t["rows"]]
+            s["footnotes"] = list(s.get("footnotes") or []) + ["N/A: not available in the source data"]
             s["notes"] = (s.get("notes", "") + "\n[QA] table contains values not available in the sources").strip()
         s["table"] = t
     for key in ("bullets",):
@@ -1584,7 +1627,7 @@ def normalize(s: dict) -> dict:
             return {k: (x if k in ("table", "chart", "prov", "notes") else scrub(x)) for k, x in v.items()}
         return v
     for k in list(s):
-        if k not in ("table", "chart", "prov", "notes", "source", "footnotes"):
+        if k not in ("table", "chart", "prov", "notes", "footnotes"):   # sources too: a footer showed it
             s[k] = scrub(s[k])
     if isinstance(s.get("footnotes"), list):               # footnotes keep their numbering: the gap is named
         s["footnotes"] = [tidy_prose(gap_re.sub(" not available in the sources", f)) if isinstance(f, str) else f
@@ -1603,7 +1646,7 @@ def normalize(s: dict) -> dict:
 REQUIRED = {"closing": ["steps"], "next_steps": ["steps"], "challenge_matrix": ["columns", "rows"], "exhibit_argument": ["chart", "blocks"],
             "table_focus": ["table"], "bar_takeaway": ["chart"], "column_trend": ["chart"], "line_trend": ["chart"],
             "waterfall_bridge": ["chart"], "stacked_composition": ["chart"], "football_field": ["chart"],
-            "benchmark": ["benchmark"],
+            "benchmark": ["benchmark"], "executive_summary": ["points"],
             "grid": ["parts"]}
 
 
@@ -2119,7 +2162,6 @@ def a_exhibit_argument(ctx, s, sl, n):
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_title_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": _title_size(tr, rw) or 20, "bold": True, "heading": True, "numbers": False,
              "line_spacing": 1.0}])
-    _rule(sl, rx, TITLE_RULE_Y, rw, TC.TEXT_1, 0.75, "TitleRuleRight")
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
@@ -2134,6 +2176,9 @@ def a_exhibit_argument(ctx, s, sl, n):
         uh_ = max(0.26, _need(ub_, lw) + 0.02)
         _write(_box(sl, LEFT, y, lw, uh_, "role_subtitle_ExhibitUnit"), ub_)
         y += uh_ + 0.02
+    if ex.get("title") or ex.get("unit"):              # the exhibit's subtitle carries the line, not the titles
+        _rule(sl, LEFT, y, lw, TC.TEXT_1, 0.75, "SubtitleRule")
+        y += 0.06
     foot = 0.35 if s.get("footnotes") else 0
     _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
     blocks = []
@@ -2428,7 +2473,15 @@ def a_chart_takeaway(ctx, s, sl, n):
     body_h = BODY_B - BODY_Y
     bx, bw = span(8, 11)
     long_series = len((s["chart"] or {}).get("categories") or []) >= 8
-    if not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl):
+    # Composition variety: a chart slide straight after another side-panel chart slide takes the full width with its
+    # so-what in a band underneath (when the text fits a band), so a run of chart pages never reads as one template.
+    lx_, lw_ = span(0, 3)
+    cw_ = (RIGHT - colx(4) - GUT * (1 if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
+    halves = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
+    band_fits = bool(lead) and max([_need(lead, lw_)] + [_need(c, cw_) for c in halves]) + 0.04 <= 0.4 * body_h
+    vary = (s.get("layout") == "band" or ctx.last_side == n - 1) and band_fits and s.get("layout") != "side"
+    if not vary and (not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl)):
+        ctx.last_side = n
         # The split follows the text: a narrower column for less text (the chart gains the width), then a step up
         # the type scale; the renderer never adds gaps to fake fullness.
         import copy
@@ -2455,14 +2508,77 @@ def a_chart_takeaway(ctx, s, sl, n):
             b["size"] = T["head"] if b.get("bold") and not b.get("bullet") else T["body"]
         _panel(ctx, s, sl, n, bx, BODY_Y, bw, body_h, [], blocks_)
         return
-    lx, lw = span(0, 3)                                     # band: lead on the left, bullets in one or two columns
+    # band under a full-width chart: the takeaway on the left, the bullets beside it in one or two columns
+    lx, lw = LEFT + PANEL_PAD, span(0, 3)[1] - PANEL_PAD
     cols = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
-    cw = (RIGHT - colx(4) - GUT * (len(cols) - 1)) / len(cols)
-    band = max([_need(lead, lw)] + [_need(c, cw) for c in cols]) + 0.04
-    band = min(band, 0.45 * body_h)
-    cy = BODY_B - band - 0.1
-    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.12)
-    _panel(ctx, s, sl, n, LEFT, cy, RIGHT - LEFT, BODY_B - cy, lead, bl)
+    cx0 = colx(4)
+    cw = (RIGHT - PANEL_PAD - cx0 - GUT * (len(cols) - 1)) / len(cols)
+    lead = [dict(b, size=T["head"] + 1) for b in lead]
+    for b in bl:
+        b["size"] = T["body"] + 1
+    need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    if need > 0.4 * body_h:
+        for b in bl:
+            b["size"] = T["body"]
+        need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    band = min(need + 0.3, 0.45 * body_h)
+    cy = BODY_B - band
+    _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.15)
+    box = _fill(sl, LEFT, cy, RIGHT - LEFT, band, TC.BACKGROUND_2, "ov_Panel")
+    _shape_text(box, lead, ctx, n, (lx, cy + 0.12, lw, band - 0.24), MSO_ANCHOR.MIDDLE)
+    for i, c in enumerate(cols):
+        if c:
+            _write(_box(sl, cx0 + i * (cw + GUT), cy + 0.12, cw, band - 0.24, f"ov_PanelCol{i + 1}",
+                        MSO_ANCHOR.MIDDLE), c, ctx, n)
+
+
+def a_executive_summary(ctx, s, sl, n):
+    """Executive summary: the answer first. Numbered rows, each a bold claim on the left (the section's message) and
+    its evidence on the right, hairlines between rows; an optional dark band at the foot with what to decide."""
+    _header(ctx, s, sl, n)
+    pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
+    ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
+    top, bottom = BODY_Y + 0.1, BODY_B
+    if ask:
+        ab = [{"text": ask, "size": T["head"] + 2, "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
+        ah = min(1.1, _need(ab, RIGHT - LEFT - 0.6) + 0.3)
+        band = _fill(sl, LEFT, bottom - ah, RIGHT - LEFT, ah, TC.TEXT_2, "ov_Decision")
+        _shape_text(band, ab, ctx, n, (LEFT + 0.3, bottom - ah + 0.05, RIGHT - LEFT - 0.6, ah - 0.1), MSO_ANCHOR.MIDDLE)
+        bottom -= ah + 0.2
+    if not pts:
+        return
+    lx, lw = span24(1, 9)
+    dx, dw = span24(10, 23)
+    size = T["body"] + 2
+
+    def rows(z):
+        out = []
+        for p in pts:
+            a = [{"text": p.get("lead", ""), "size": z + 3, "bold": True, "numbers": False}]
+            d = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": z, "bullet": True, "space_before": 3,
+                  "prov": (b.get("prov") if isinstance(b, dict) else None) or p.get("prov")}
+                 for b in (p.get("bullets") or [])[:3]]
+            out.append((a, d, max(_need(a, lw), _need(d, dw) if d else 0) + 0.2))
+        return out
+    laid = rows(size)
+    while sum(h for *_, h in laid) > bottom - top and size > 11:
+        size -= 1
+        laid = rows(size)
+    if sum(h for *_, h in laid) > bottom - top:
+        ctx.miss(n, "the executive summary", int((sum(h for *_, h in laid) - (bottom - top)) * 30))
+    gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / len(laid))
+    y = top
+    for i, (a, d, h) in enumerate(laid):
+        rh = h + gap
+        _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
+               [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
+                 "color": TC.ACCENT_1}])
+        _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
+        if d:
+            _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
+        y += rh
+        if i < len(laid) - 1:
+            _rule(sl, LEFT, y, RIGHT - LEFT, TC.ACCENT_5, 0.5, f"SummaryRule{i + 1}")
 
 
 def a_waterfall_bridge(ctx, s, sl, n):
@@ -2606,9 +2722,18 @@ def a_benchmark(ctx, s, sl, n):
             lx, lw_ = lx + pic.width / 914400 + 0.06, lw_ - pic.width / 914400 - 0.06
         is_med = j == len(names)
         hl = j in set(b.get("highlight") or [])
-        _write(_box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE),
-               [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False,
-                 "italic": is_med}], ctx, n)
+        blk = [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False, "italic": is_med}]
+        fits = lambda: _need(blk, lw_) <= band + 0.06     # noqa: E731  _need's own 0.05 pad; two lines fit a row
+        ok = fits()                             # a long name ("Meridian Gauges (Apex Capital, 2025)") wrapped onto
+        words = nm_.split()                     # three lines and ran into the rows above and below: shorten it with an
+        while not ok and len(words) > 1:        # ellipsis at full size (P5); the full name stays in the alt text
+            words = words[:-1]
+            blk[0]["text"] = " ".join(words).rstrip(",(") + "…"
+            ok = fits()
+        box = _box(sl, lx, cy - band / 2, lw_, band, f"ov_BenchName{j + 1}", MSO_ANCHOR.MIDDLE)
+        _write(box, blk, ctx, n)
+        if blk[0]["text"] != nm_:
+            _alt(box, nm_)
     for i, pn in enumerate(panels):
         x = LEFT + BENCH_LABEL_W + i * (pw + gap)
         _write(_box(sl, x, BODY_Y, pw, head_h - 0.06, f"ov_BenchHead{i + 1}", MSO_ANCHOR.BOTTOM),
@@ -2641,6 +2766,72 @@ def a_football_field(ctx, s, sl, n):
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
 
+def a_agenda(ctx, s, sl, n):
+    """Agenda, and the section tracker that opens each section: one row per section with a filled number disc, a line
+    icon, the section name, the claim it proves and its first page, hairlines between rows. With "current" set, that
+    row sits on a grey band and the other rows are greyed out, so the reader sees where the deck is (the
+    reference decks' tracker). Sections come from the storyline, not from the model, so they always match the deck."""
+    secs = [x for x in (s.get("sections") or []) if isinstance(x, dict) and x.get("title")][:7]
+    s = dict(s, title=s.get("title") or "Agenda", subtitle=None)
+    _header(ctx, s, sl, n)
+    cur = str(s.get("current") or "")
+    if not secs:
+        return
+    top, bottom = TITLE_RULE_Y + 0.25, BODY_B - 0.1
+    rh = min(1.15, (bottom - top) / len(secs))
+    big = rh >= 0.95
+    name_sz, det_sz = (22, 14) if big else (18, 12)
+    d = min(0.62, rh - 0.3)                                    # number disc
+    ix, nx = LEFT + d + 0.3, LEFT + 2 * d + 0.6                # icon, then name
+    px = RIGHT - 1.2                                           # page column
+    nw = colx24(11) - 0.1 - nx
+    dx, dw = colx24(12), px - 0.2 - colx24(12)
+    for i, sec in enumerate(secs):
+        y = top + i * rh
+        no = str(sec.get("no") or i + 1)
+        on = not cur or no == cur
+        if cur and on:
+            _fill(sl, LEFT - 0.15, y + 0.04, RIGHT - LEFT + 0.3, rh - 0.08, TC.BACKGROUND_2, f"ov_Current{i + 1}")
+        cy = y + (rh - d) / 2
+        disc = _fill(sl, LEFT, cy, d, d, TC.ACCENT_1 if on else TC.ACCENT_5, f"ov_AgendaNo{i + 1}", MSO_SHAPE.OVAL)
+        _shape_text(disc, [{"text": no.zfill(2) if no.isdigit() else no, "size": 15 if big else 13, "bold": True,
+                            "numbers": False, "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}],
+                    ctx, n, (LEFT, cy, d, d), MSO_ANCHOR.MIDDLE)
+        ic = next((icon_name(c) for c in (sec.get("icon"), sec["title"], sec.get("detail"))
+                   if c and icon_name(c) != "circle-dot"), "circle-dot")
+        _icon(sl, ic, ix, y + (rh - d * 0.85) / 2, d * 0.85, sec["title"], muted=not on)
+        col = TC.TEXT_1 if on else TC.ACCENT_6
+        _write(_box(sl, nx, y, nw, rh, f"AgendaName{i + 1}", MSO_ANCHOR.MIDDLE),
+               [{"text": re.sub(r"\*\*", "", sec["title"]), "size": name_sz, "bold": True, "numbers": False, "color": col}])
+        if sec.get("detail"):
+            _write(_box(sl, dx, y, dw, rh, f"AgendaDetail{i + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": re.sub(r"\*\*", "", sec["detail"]), "size": det_sz, "numbers": False,
+                     "color": TC.TEXT_2 if on else TC.ACCENT_5}], ctx, n)
+        if sec.get("page"):
+            _write(_box(sl, px, y, RIGHT - px, rh, f"AgendaPage{i + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": f"p. {sec['page']}", "size": det_sz, "numbers": False, "align": PP_ALIGN.RIGHT,
+                     "color": TC.TEXT_2 if on else TC.ACCENT_5}])
+        if i < len(secs) - 1 and not cur:
+            _rule(sl, LEFT, y + rh, RIGHT - LEFT, TC.ACCENT_5, 0.5, f"AgendaRule{i + 1}")
+
+
+def agenda_sections(slides: list[dict]) -> list[dict]:
+    """The deck's sections in order, from the slides' "section" / "section_no" (set from the storyline): name, the
+    claim of the section's first slide, its first page and an icon meaning. Covers, agendas and dividers are skipped."""
+    out, seen = [], {}
+    for i, s in enumerate(slides, 1):
+        name = (s.get("section") or "").strip()
+        if not name or s.get("archetype") in ("cover", "agenda", "section_divider", "end", "executive_summary"):
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen[key] = True
+        out.append({"no": str(len(out) + 1), "title": name, "detail": re.sub(r"\*\*|\^\w+", "", s.get("title") or ""),
+                    "page": i, "icon": s.get("section_icon") or name})
+    return out
+
+
 def a_grid(ctx, s, sl, n):
     """A slide assembled from parts (chart, table, stats, text, callout, process, timeline, matrix2x2, harvey, quote)
     on a grid layout; see parts.py. Imported here, not at the top, because parts.py imports this module."""
@@ -2653,7 +2844,8 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
               "table_highlight": a_table_focus, "bar_takeaway": a_chart_takeaway, "column_trend": a_chart_takeaway,
               "line_trend": a_chart_takeaway, "stacked_composition": a_chart_takeaway,
               "waterfall_bridge": a_waterfall_bridge, "football_field": a_football_field, "benchmark": a_benchmark, "closing": a_closing, "next_steps": a_closing, "end": a_cover,
-              "grid": a_grid}
+              "grid": a_grid, "agenda": a_agenda,
+              "executive_summary": a_executive_summary}
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
@@ -2800,6 +2992,8 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         if fn is None:
             errors.append(f"slide {n}: archetype '{arch}' is not in the library {sorted(ARCHETYPES)}")
             fn = a_chart_takeaway if s.get("chart") else a_challenge_matrix
+        if arch == "section_divider" and s.get("sections"):    # a divider in a deck with an agenda: the tracker
+            arch, fn = "agenda", a_agenda
         sl = prs.slides.add_slide(layout(prs, "Title Slide" if arch in DIVIDERS else "Title Only"))
         sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
                                            + (" computed:1" if s.get("fixed") else ""))

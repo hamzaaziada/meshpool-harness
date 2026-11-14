@@ -21,9 +21,9 @@ A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 NS = {"a": A, "p": P}
 
-FONTS = {"major": "Georgia", "minor": "Arial"}
+FONTS = {"major": "Segoe UI", "minor": "Segoe UI"}     # clean and modern; titles are set bold
 # Font pairs we can measure exactly (metric-compatible files are installed for each) and every Office install has.
-FONT_PAIRS = {"serif": {"major": "Georgia", "minor": "Arial"}, "sans": {"major": "Arial", "minor": "Arial"},
+FONT_PAIRS = {"segoe": {"major": "Segoe UI", "minor": "Segoe UI"}, "serif": {"major": "Georgia", "minor": "Arial"}, "sans": {"major": "Arial", "minor": "Arial"},
               "calibri": {"major": "Calibri", "minor": "Calibri"}, "cambria": {"major": "Cambria", "minor": "Calibri"}}
 # roles: dk1 text and title, dk2 navy (callouts, darkest heat), lt2 grey half-panel, accent1 emphasis blue (numbers),
 # accent2 coral (the one highlighted row), accent3 cyan (the focus item in a chart), accent4 mid blue (heat),
@@ -52,7 +52,7 @@ SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4",
 
 def theme_spec(theme=None) -> dict:
     """{"colors": {...}, "fonts": {"major","minor"}} from a palette name, a dict (palette/fonts names, or slot -> hex
-    overrides such as {"palette": "ocean", "accent1": "#7C3AED", "fonts": "sans"}), or None (navy, serif)."""
+    overrides such as {"palette": "ocean", "accent1": "#7C3AED", "fonts": "sans"}), or None (navy, Segoe UI)."""
     import re as _re
     t = theme if isinstance(theme, dict) else {"palette": theme} if isinstance(theme, str) else {}
     pal = t.get("palette") if t.get("palette") in PALETTES else "navy"
@@ -62,8 +62,8 @@ def theme_spec(theme=None) -> dict:
         if _re.fullmatch(r"[0-9A-Fa-f]{6}", v):
             colors[k] = v.upper()
     fonts = t.get("fonts")
-    fonts = FONT_PAIRS.get(fonts, fonts) if isinstance(fonts, str) else (fonts or FONT_PAIRS["serif"])
-    fonts = {"major": fonts.get("major", "Georgia"), "minor": fonts.get("minor", "Arial")}
+    fonts = FONT_PAIRS.get(fonts, fonts) if isinstance(fonts, str) else (fonts or FONT_PAIRS["segoe"])
+    fonts = {"major": fonts.get("major", FONTS["major"]), "minor": fonts.get("minor", FONTS["minor"])}
     return {"palette": pal, "colors": colors, "fonts": fonts}
 
 

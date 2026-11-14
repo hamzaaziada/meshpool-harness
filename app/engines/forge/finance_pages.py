@@ -91,6 +91,11 @@ def _pct(v):
     return fmt_value(_num(v) * 100, "%") if _num(v) is not None else "NM"
 
 
+def _a(word: str) -> str:
+    """'a' or 'an' before a number as it is read aloud: an 8.8% WACC, an 11.0% WACC, a 9.5% WACC."""
+    return "an" if re.match(r"(8|11|18)(?!\d)|8\d", word) else "a"
+
+
 def _usd(v, d=0):
     v = _num(v)
     return "NM" if v is None else (f"({abs(v):,.{d}f})" if v < 0 else f"{v:,.{d}f}")
@@ -228,8 +233,11 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", s
             return [(_num(ws.cell(row=r, column=c).value) if c else None) for r in rows]
         if is_prec:
             yr = dict(cols).get("Date")
-            names = [f"{ws.cell(row=r, column=dict(cols)['Target']).value} ({ws.cell(row=r, column=dict(cols)['Acquirer']).value}"
-                     + (f", {str(ws.cell(row=r, column=yr).value)[:4]})" if yr else ")") for r in rows]
+            tg = [ws.cell(row=r, column=dict(cols)['Target']).value for r in rows]
+            aq = [ws.cell(row=r, column=dict(cols)['Acquirer']).value for r in rows]
+            names = [f"{t} ({str(ws.cell(row=r, column=yr).value)[:4]})" if yr else str(t) for t, r in zip(tg, rows)]
+            # "Target (Acquirer, year)" ran to three lines in the label column; the buyers go in a footnote
+            acq_note = "Acquirers: " + "; ".join(f"{t}: {a}" for t, a in zip(tg, aq))
             spec = [("EV / EBITDA", "ev_ebitda", "x"), ("EV / Revenue", "ev_rev", "x"), ("Premium", "premium", "%")]
         else:
             names = [str(ws.cell(row=r, column=1).value) for r in rows]
@@ -248,6 +256,7 @@ def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", s
             bullets.append({"text": "NM: not meaningful (a loss); the company drops out of that median"})
         return {"archetype": "benchmark", "fixed": True, "title": title, "title_prov": prov,
                 "benchmark": {"companies": names, "panels": panels, "logos": logos or {}},
+                **({"footnotes": [acq_note]} if is_prec else {}),
                 "takeaway": {"text": "Dashed line: median; dotted lines: 25th and 75th percentiles"},
                 "bullets": bullets[:4], "source": {"text": bk.sources(ws, hr) or f"{FIRM_SRC} ({ws.title} tab)",
                                                    "prov": prov}}
@@ -289,13 +298,14 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
               if k.startswith(("Less: minorit", "Less: preferred", "Less: lease", "Less: unfunded", "Plus: equity inv"))]
     cats = [c_ for k, c_ in steps if lab.get(k) is not None] + ["Equity value"]
     vals = [lab[k] for k, _ in steps if lab.get(k) is not None] + [lab.get("Equity value ($m)")]
+    wacc = f"{_a(_pct(g['wacc']))} {_pct(g['wacc'])} WACC"
     prov = [bk.fact(f"DCF value per share {fmt_value(ps, '$')} (Gordon growth) and "
-                    f"{fmt_value(_num(g['per_share_exit']), '$')} (exit multiple) at a {_pct(g['wacc'])} WACC; "
+                    f"{fmt_value(_num(g['per_share_exit']), '$')} (exit multiple) at {wacc}; "
                     f"terminal value {_pct(g['tv_share'])} of EV", f"{prefix}per_share, {prefix}per_share_exit")]
     if None in vals:
         return None
     return {"archetype": "waterfall_bridge", "fixed": True,
-            "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at a {_pct(g['wacc'])} WACC",
+            "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at {wacc}",
             "title_prov": prov,
             "chart": {"kind": "waterfall", "categories": cats, "unit": "", "decimals": 0,
                       "series": [{"name": "$m", "values": vals}]},
@@ -587,13 +597,16 @@ def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     and the facts behind them. Pages whose inputs are not in the workbook are skipped."""
     bk = Book(path)
     pages = []
-    for fn in (financial_summary, football_field, weighting_table, dcf_outputs, dcf_sensitivity, scenario_chart,
-               comps, lambda b: comps(b, "prec_", "Precedent transactions"), lbo_page, merger_page):
+    # rank: which pages stay when the deck is too short for all of them (1 = keep first)
+    for rank, fn in ((4, financial_summary), (1, football_field), (7, weighting_table), (2, dcf_outputs),
+                     (5, dcf_sensitivity), (8, scenario_chart), (3, comps),
+                     (6, lambda b: comps(b, "prec_", "Precedent transactions")), (9, lbo_page), (10, merger_page)):
         try:
             p = fn(bk)
         except Exception:                                      # noqa: BLE001 - one unreadable table skips its page
             p = None
         if p:
+            p["rank"] = rank
             p.setdefault("node", f"W{len(pages) + 1}")
             p.setdefault("section", "Valuation")
             pages.append(p)
