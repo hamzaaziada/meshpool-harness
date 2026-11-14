@@ -64,6 +64,17 @@ def get_settings() -> dict:
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
+def _key_follows_host(vals: dict, typed_key: str = ""):
+    """A saved key belongs to its endpoint: moving to another host needs that host's key, or the saved one is sent
+    to the new host."""
+    from meshpool_harness import providers as PV
+    new = vals.get("MESHPOOL_BASE_URL")
+    if new and PV.host(new) and PV.host(new) != PV.host(PV.key_base()) and PV.key() \
+            and not (vals.get("MESHPOOL_API_KEY") or typed_key):
+        raise ValueError(f"Enter the API key for {PV.host(new)} too: your saved key is for {PV.host(PV.key_base())} "
+                         "and is not sent anywhere else.")
+
+
 def save_settings(body: dict) -> dict:
     allowed = {f[0] for f in C.FIELDS}
     vals = {}
@@ -73,9 +84,11 @@ def save_settings(body: dict) -> dict:
         v = re.sub(r"[\r\n]", "", str(v)).strip()
         if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
             v = re.sub(r"^(?:bearer\s+)", "", v.strip("'\" "), flags=re.I)
+            v = re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", v)   # a pasted zero-width space broke every call
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
+    _key_follows_host(vals)
     if vals.get("GITHUB_TOKEN"):
         try:
             from meshpool_harness.ui import agent_api as _A
@@ -127,24 +140,24 @@ def assistant_action(b: dict) -> dict:
 
 
 def test_connection(values: dict | None = None) -> dict:
-    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
+    """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
+    straight to the check: saved settings win over the environment, so setting them there would test the saved
+    endpoint and send the typed key to it."""
     C.load_into_env(override=True)
+    from meshpool_harness import providers as PV
     from meshpool_harness.cli import ping
-    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL")}
+    v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
+    if v.get("MESHPOOL_API_KEY"):
+        v["MESHPOOL_API_KEY"] = re.sub(r"^(?:bearer\s+)", "", re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "",
+                                                                     v["MESHPOOL_API_KEY"]), flags=re.I)
     try:
-        for k, v in (values or {}).items():
-            if k in keep and str(v).strip():
-                os.environ[k] = str(v).strip()
-        if not os.environ.get("MESHPOOL_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
-            return {"ok": False, "detail": "No API key saved yet."}
-        return ping()
-    finally:
-        if values:
-            for k, v in keep.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+        _key_follows_host(v)
+    except ValueError as e:
+        return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
+    key = v.get("MESHPOOL_API_KEY") or PV.key()
+    if not key:
+        return {"ok": False, "detail": "No API key saved yet."}
+    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -157,6 +170,13 @@ def save_upload(name: str, data: bytes) -> dict:
 
 
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
+
+def _disposition(kind: str, name: str) -> str:
+    """Headers must be Latin-1: "图表 – chart.png" dropped the connection. ASCII fallback plus the UTF-8 name (RFC 6266)."""
+    from urllib.parse import quote
+    plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", name)
+    return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
@@ -253,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             if not (ctype.startswith("image/") or ctype == "application/pdf"):
                 return self._send(415, {"error": "only images and PDFs are served"})
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'inline; filename="{p.name}"',
+            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition("inline", p.name),
                                                           "X-Content-Type-Options": "nosniff",
                                                           "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
         if u.path.startswith("/files/"):
@@ -269,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": f'{disp}; filename="{p.name}"'})
+            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -336,6 +356,9 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import mcp_apps as CN
                 C.load_into_env(override=True)
                 return self._send(200, {"connectors": CN.listing()})
+            if u.path == "/api/git/changes":                    # local git only: shows before GitHub answers
+                q = parse_qs(u.query)
+                return self._send(200, W.branch_changes(q.get("root", [""])[0], q.get("base", [""])[0]))
             if u.path == "/api/git/ci":
                 return self._send(200, W.git_ci(parse_qs(u.query).get("root", [""])[0]))
             if u.path == "/api/usage":
@@ -411,6 +434,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_action(self._json()))
+            if u.path == "/api/suggest":
+                from meshpool_harness import suggest as SG
+                b = self._json()
+                return self._send(200, {"suggestions": SG.suggest(b.get("text", ""), b.get("harness", ""),
+                                                                  b.get("kind", "cowork"), bool(b.get("new", True)))})
             if u.path == "/api/route-harness":
                 from meshpool_harness import harness_router as HRT
                 b = self._json()
@@ -578,6 +606,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PL.api_action(self._json()))
             if u.path == "/api/file":
                 b = self._json()
+                A.mark_shared(b.get("root", ""))            # a turn running there can no longer be undone safely
                 return self._send(200, W.write_file(b.get("root", ""), b.get("path", ""), b.get("text", "")))
             if u.path == "/api/git":
                 b = self._json()

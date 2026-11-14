@@ -237,7 +237,8 @@ for n in ("meshpool-web", "meshpool-assistant", "meshpool-tools", "browser"):
     check(f"MCP server starts: {n}", st.get(n) == "connected", st)
 cn = call("/api/connectors").get("connectors", [])
 check("connector catalog", len(cn) >= 20, len(cn))
-r = call("/api/connectors", {"action": "custom", "name": "Test token server", "url": "https://example.com/mcp", "token": "abc123"})
+# testkit/mock_mcp_http.py on 8977 (run_all.sh starts it) accepts only the token abc123
+r = call("/api/connectors", {"action": "custom", "name": "Test token server", "url": "http://127.0.0.1:8977/mcp", "token": "abc123"})
 cid = r.get("id")
 check("custom connector with token", cid and any(x["id"] == cid and x["connected"] for x in r.get("connectors", [])), r)
 if cid:

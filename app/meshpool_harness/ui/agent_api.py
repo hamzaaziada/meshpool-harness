@@ -181,6 +181,21 @@ def nice_title(text: str) -> str:
     return t[0].upper() + t[1:]
 
 
+# Chats running a turn, by folder. Undo compares the folder before and after a turn, so it cannot tell this chat's
+# changes from another chat's (or an edit the user saved) made at the same time; such a turn is marked shared and
+# Undo refuses it rather than delete someone else's work.
+_ACTIVE: dict[str, set] = {}
+_ACTIVE_LOCK = threading.Lock()
+
+
+def mark_shared(root: str):
+    """Someone else (the user's editor) changed files under `root`: every turn running there is shared."""
+    r = str(Path(root).resolve()) if root else ""
+    with _ACTIVE_LOCK:
+        for o in _ACTIVE.get(r, ()):
+            o._turn_shared = True
+
+
 class Session:
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
@@ -198,6 +213,8 @@ class Session:
         self.mcp = None
         self.agent = None
         self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
+        if mode not in MODES and resume_id:
+            mode = read_meta(resume_id).get("mode")      # a chat keeps its own mode across restarts
         self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
@@ -246,6 +263,8 @@ class Session:
                 raise ValueError(f"{self.harness['name']} cannot run yet. {self.harness.get('setup') or ''}".strip())
             self.kind = kind if kind in HR.MODES else self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
+                if self.harness.get("unsupported"):        # e.g. a Node agent on macOS 10.15
+                    raise ValueError(self.harness["unsupported"])
                 if not self.harness.get("available"):
                     raise ValueError(f"{self.harness['name']} is not installed on this computer. "
                                      + (self.harness.get("install") or ""))
@@ -271,7 +290,7 @@ class Session:
                                        "send it again to continue."})
                     self._persist(running=False)
         else:
-            write_meta(self.id, kind=self.kind)          # the mode (Cowork or Code) the thread was started in
+            write_meta(self.id, kind=self.kind, mode=self.mode)   # Cowork or Code, and its permission mode
         if model:
             self.set_model(model)
         if resume_id:
@@ -487,11 +506,20 @@ class Session:
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         self.state = "working"
+        self._stop_req = False
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
 
         self.t_turn = time.time()
         ev0 = len(self.events)
+        root = str(Path(self.workdir).resolve()) if self.workdir else ""
+        with _ACTIVE_LOCK:
+            others = _ACTIVE.setdefault(root, set()) - {self}
+            self._turn_shared = bool(others)
+            for o in others:
+                o._turn_shared = True
+            _ACTIVE[root].add(self)
+        self._turn_n = None
 
         def go():
             idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
@@ -499,6 +527,7 @@ class Session:
                 if self.cp:
                     try:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
+                        self._turn_n = (t or {}).get("n")
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
@@ -532,11 +561,21 @@ class Session:
                         body += "\n\n\u200b" + AS.context_block()
                     except Exception:  # noqa: BLE001
                         pass
+                if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
+                    self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
+                    self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
+                                                              "above; send it again to run it."})
+                    return
                 if images:
                     self.agent.send(body, images=images)
                 else:
                     self.agent.send(body)
             finally:
+                with _ACTIVE_LOCK:
+                    _ACTIVE.get(root, set()).discard(self)
+                if self._turn_shared and self._turn_n is not None:
+                    write_meta(self.id, shared_turns=sorted(set(read_meta(self.id).get("shared_turns") or [])
+                                                            | {self._turn_n}))
                 if self.cp:
                     try:
                         self.cp.end_turn()
@@ -558,7 +597,7 @@ class Session:
                         nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
                     elif self.queue:
                         self.queue = []
-                if not nxt and self.goal and not getattr(self.agent, "_stop", False):
+                if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
                     nxt = self._goal_next(ev0)
                 if nxt:
                     self.emit({"type": "queued", "text": "", "n": 0})
@@ -594,8 +633,12 @@ class Session:
 
     def set_goal(self, text: str):
         """/goal: keep working until this is done. An empty text clears it."""
+        had = self.goal
+        self._goal_t = time.time()
         self.goal, self._goal_idle = (text or "").strip()[:2000], 0
         write_meta(self.id, goal=self.goal)
+        if not self.goal and not had:
+            return                                   # nothing was set: no "Goal cleared." line
         self.emit({"type": "status", "text": f"Goal set: {self.goal}. The agent keeps going until it is done; press "
                                              "Stop or clear the goal to end it." if self.goal else "Goal cleared."})
 
@@ -604,6 +647,8 @@ class Session:
         with self.lock:
             evs = self.events[ev0:]
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
+        if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
+            return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
         verdict = found[-1].upper() if found else ""
         acted = any(e.get("type") == "tool_end" for e in evs)
@@ -630,6 +675,8 @@ class Session:
         self.plan = bool(on)
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
+        if hasattr(self.agent, "apply_mode"):
+            self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
     def revert(self, turn: int) -> dict:
@@ -637,6 +684,11 @@ class Session:
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
+        shared = [n for n in read_meta(self.id).get("shared_turns") or [] if n >= int(turn)]
+        if shared:
+            raise ValueError("Another chat, or an edit you saved, changed files in this folder while this chat was "
+                             "working, so Undo cannot tell the changes apart and would remove theirs. Undo by hand "
+                             "or with Git (the Git panel shows what changed).")
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
         if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
@@ -671,6 +723,7 @@ class Session:
         return r
 
     def stop(self):
+        self._stop_req = True                        # checked before the agent starts: its own flag resets then
         if self.state in ("working", "waiting"):
             self._was_stopped = True             # a request really was cut short
         with self.lock:
@@ -685,6 +738,7 @@ class Session:
 
     def set_mode(self, mode: str):
         self.agent.mode = self.mode = mode if mode in MODES else "ask"
+        write_meta(self.id, mode=self.mode)          # restored on resume: a Supervised chat stays Supervised
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()

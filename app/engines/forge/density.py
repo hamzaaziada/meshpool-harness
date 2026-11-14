@@ -269,7 +269,7 @@ def condense(s: dict, mode: str) -> dict:
     presenter' heading. 'read' (and covers, dividers) come back unchanged."""
     lim = LIMITS.get(mode)
     a = s.get("archetype")
-    if not lim or a in ("cover", "section_divider", "appendix_divider", "end") or s.get("_cont"):
+    if not lim or a in ("cover", "section_divider", "agenda", "appendix_divider", "end") or s.get("_cont"):
         return s
     s = copy.deepcopy(s)
     notes = _Notes()

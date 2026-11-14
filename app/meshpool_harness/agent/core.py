@@ -168,7 +168,9 @@ when the user asks for it. Use Python through bash for quick calculations.
 Research budget: when the request or its files already hold sourced research, use it and only look up what they \
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
 stop researching once each number you need has a source. Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
-office_task can make it: the engines carry the design system and the checks. If an engine call returns a job id, \
+office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
+user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
+with python-pptx code. If an engine call returns a job id, \
 wait for it with office_job_status. If its result has a problem, call it again with the specific fix in the request \
 (e.g. "exactly 10 slides; merge the two risk slides"). Run check_deck on every .pptx, check_workbook on every .xlsx \
 and check_document on every .docx you deliver; fix each failure it lists (content \
@@ -452,7 +454,8 @@ class Agent:
             text += SK.catalog_text()
         except Exception:
             pass
-        return text
+        from meshpool_harness.assistant import HONESTY
+        return text + "\n\n" + HONESTY
 
     def tool_schemas(self) -> list:
         if self.plan:
@@ -905,8 +908,57 @@ class Agent:
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
 
     # ---------- tools ------------------------------------------------------------------------------------------
+    def _outside(self, name: str, args: dict) -> str:
+        """Why a read-only call still needs a yes in Supervised and Auto-accept edits: it reads outside the project
+        (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
+        if name in ("read_file", "grep"):
+            p = os.path.expanduser(str(args.get("path") or "."))
+        elif name == "glob":
+            pat = str(args.get("pattern") or "").replace("\\", "/")
+            return ("" if not (pat.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", pat) or ".." in pat.split("/"))
+                    else f"List files outside the project ({pat[:80]})?")
+        elif name in ("fetch_url", "mcp__meshpool_web__web_fetch"):
+            from urllib.parse import urlparse
+            u = urlparse(str(args.get("url") or ""))
+            long_part = max([len(x) for x in u.path.split("/")] + [0])
+            return (f"Send this to {u.hostname or 'a website'}? The address carries {len(u.query) + long_part} "
+                    "characters of data." if len(u.query) > 200 or long_part > 120 else "")
+        else:
+            return ""
+        try:
+            q = Path(p).resolve() if os.path.isabs(p) else (self.ws.root / p).resolve()
+        except (OSError, ValueError):
+            return f"Read {p[:80]} (outside the project)?"
+        ok = [self.ws.root, self.dir.resolve(), C.runs_dir().resolve()]   # the project, this chat's tool output
+        return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
+
+    # A new deck or workbook written in code instead of through the engines (python-pptx, openpyxl, xlsxwriter,
+    # pptxgenjs). Reading or editing cell values in an existing workbook (load_workbook) is fine.
+    _HANDMADE = re.compile(r"\bPresentation\(\s*\)|\.slides\.add_slide\(|\bWorkbook\(\s*\)|\bxlsxwriter\b|"
+                           r"pptxgenjs|PptxGenJS")
+
+    def _engine_only(self, name: str, args: dict) -> str:
+        """In Work, every slide and every workbook goes through the engines (make_deck, add_slides,
+        make_spreadsheet, office_task): they carry the house style and the checks. A command or file that builds one
+        by hand is not run; the reply says which tool to use instead. "" when the call is fine."""
+        if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit"):
+            return ""
+        text = " ".join(str(args.get(k) or "") for k in ("command", "content", "new")) + \
+            " ".join(str(c) for c in args.get("commands") or [])
+        m = self._HANDMADE.search(text)
+        if not m:
+            return ""
+        deck = any(k in m.group(0) for k in ("Presentation", "slide", "pptx", "Pptx"))
+        return ("Not run: slides are never written by hand here. Use make_deck for a new deck, or add_slides to add "
+                "slides to a deck the user has (it keeps the deck's look). Put what each slide must show, with the "
+                "numbers or the files that hold them, in the request." if deck else
+                "Not run: workbooks are never built by hand here. Use make_spreadsheet (or office_task) for a new "
+                "workbook or model; describe the sheets, inputs and outputs in the request. To read or change a few "
+                "values in an existing workbook, openpyxl.load_workbook is fine.")
+
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
-        if self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP:
+        risky = self._outside(name, args) if self.mode != "auto" else ""
+        if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
@@ -914,11 +966,15 @@ class Agent:
                 self._diff(name, args) == "(no change)":
             return True, ""                    # nothing would change: do not ask
         group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
+        if risky:
+            group = "outside-" + name
         if group in self.always:
             return True, ""
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
-        if name == "bash":
+        if risky:
+            kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
+        elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
         elif name == "bash_many":
             cmds = [str(c) for c in args.get("commands") or []]
@@ -1003,8 +1059,11 @@ class Agent:
         try:
             if bad:
                 raise bad
-            allowed, note = self._permit(name, args)
-            if not allowed:
+            steer = self._engine_only(name, args)
+            allowed, note = (False, "") if steer else self._permit(name, args)
+            if steer:
+                out, ok = steer, False
+            elif not allowed:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."

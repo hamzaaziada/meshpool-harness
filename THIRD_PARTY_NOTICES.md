@@ -6,9 +6,9 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 
 | Component | License | Source |
 |---|---|---|
-| Hermes Agent 0.21.2 (Nous Research) | MIT | https://github.com/NousResearch/hermes-agent (two small patches in acp_adapter/server.py, marked "Meshpool patch") |
+| Hermes Agent 0.21.2 (Nous Research) | MIT | https://github.com/NousResearch/hermes-agent (small patches in acp_adapter/server.py and tools/approval.py: `packaging/hermes-acp-server.patch`) |
 | Pi coding agent (Mario Zechner) | MIT | https://www.npmjs.com/package/@earendil-works/pi-coding-agent |
-| Node.js 24 | MIT and bundled licenses | https://nodejs.org |
+| Node.js 22 | MIT and bundled licenses | https://nodejs.org |
 | Python 3.12 (python-build-standalone) | PSF License and bundled licenses | https://github.com/astral-sh/python-build-standalone |
 | Git for Windows (Windows only) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
@@ -26,6 +26,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Bootstrap Icons 1.13.2 without brand logos (`app/engines/icons/bundles/bootstrap.json.gz`, `LICENSE-bootstrap-icons.txt`), Copyright (c) 2019-2024 The Bootstrap Authors | MIT | https://icons.getbootstrap.com (npm bootstrap-icons) |
 | Material Symbols 0.49.0, outlined, rounded and sharp at weight 400, with fill, without product logos (`app/engines/icons/bundles/material.json.gz`, `LICENSE-material-symbols.txt`), by Google | Apache-2.0 | https://fonts.google.com/icons (npm @material-symbols/svg-400) |
 | IBM Carbon icons 11.92.0, 32 px, without the Brand category and IBM product marks (`app/engines/icons/bundles/carbon.json.gz`, `LICENSE-carbon.txt`), Copyright IBM Corp. | Apache-2.0 | https://carbondesignsystem.com (npm @carbon/icons) |
+| Selawik font, Regular and Bold, compiled unmodified from source (`app/engines/forge/fonts`): measures slides set in Segoe UI | SIL Open Font License 1.1 (`Selawik-LICENSE.txt` beside it) | https://github.com/microsoft/Selawik |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
 
 ## Python packages

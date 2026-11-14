@@ -107,11 +107,23 @@ def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path
 
 
 # ------------------------------------------------------------------ fonts
+# Open fonts bundled in engines/forge/fonts (SIL OFL): Selawik has Segoe UI's metrics, so slides set in Segoe UI are
+# measured exactly before they are drawn.
+BUNDLED = {"selawik": ("Selawik-Regular.ttf", "Selawik-Bold.ttf")}
+
+
 @lru_cache(maxsize=64)
 def font_file(family: str, bold: bool = False, italic: bool = False, metric_map: tuple = ()) -> tuple[str | None, bool]:
     """Returns (path, exact). exact is False when a metric-compatible substitute or a fallback was used."""
     mapping = dict(metric_map)
     style = ("Bold" if bold else "") + ("Italic" if italic else "")
+    # fonts shipped with the engine come first: measuring is then exact on every computer (fc-match is Linux-only)
+    for name in (family, mapping.get(family)):
+        own = BUNDLED.get((name or "").lower())
+        if own and not italic:
+            path = Path(__file__).with_name("fonts") / own[1 if bold else 0]
+            if path.exists():
+                return str(path), name == family
     for name, exact in ((family, True), (mapping.get(family), False)):
         if not name:
             continue

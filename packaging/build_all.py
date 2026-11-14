@@ -28,6 +28,10 @@ PI = DEPS / "pi/node_modules"                             # Pi coding agent (npm
 NODE = {"mac-arm64": DEPS / "node-mac-arm64", "mac-x64": DEPS / "node-mac-x64", "win": DEPS / "node-win"}
 PI_NATIVE = {"mac-arm64": "darwin-arm64", "mac-x64": "darwin-x64", "win": "win32-x64"}
 RT = {"mac-arm64": DEPS / "rt-mac/python", "mac-x64": DEPS / "rt-macx64/python", "win": DEPS / "rt-win/python"}
+# The oldest macOS each Mac app opens on (Info.plist's LSMinimumSystemVersion). No Apple silicon Mac runs older than
+# 11; the Intel app opens on 10.15, where the parts that need 11 (Node agents, browser use) say so. The launcher and
+# packaging/mac/check_minos.py use the same numbers (.github/workflows/release.yml, packaging/mac/repack.sh).
+MIN_MACOS = {"mac-arm64": "11.0", "mac-x64": "10.15"}
 WINRES = PKG / "win/launcher/winres/winres.json"
 
 
@@ -42,11 +46,13 @@ VERSION = version()
 VERSION_NUM = re.match(r"\d+\.\d+\.\d+", VERSION).group(0)          # Windows and macOS want plain numbers
 
 
-def stamp(src: Path, dst: Path) -> None:
-    """Copy a text file with its version placeholders filled in."""
+def stamp(src: Path, dst: Path, extra: dict | None = None) -> None:
+    """Copy a text file with its version placeholders (and any in extra, {"NAME": value} for @NAME@) filled in."""
     text = src.read_text(encoding="utf-8")
     text = (text.replace("@VERSION_NUM@", VERSION_NUM).replace("@VERSION@", VERSION)
             .replace("@BETA@", " beta" if VERSION.startswith("0.") else ""))
+    for k, v in (extra or {}).items():
+        text = text.replace(f"@{k}@", v)
     left = sorted(set(re.findall(r"@[A-Z_]+@", text)))
     if left:
         sys.exit(f"build_all: {src.relative_to(ROOT)} has unknown placeholders: {', '.join(left)}")
@@ -131,7 +137,7 @@ def mac_app(arch: str):
     root = OUT / f"app-{arch}" / "Meshpool.app" / "Contents"
     (root / "MacOS").mkdir(parents=True)
     (root / "Resources").mkdir()
-    stamp(PKG / "mac/Info.plist", root / "Info.plist")
+    stamp(PKG / "mac/Info.plist", root / "Info.plist", {"MIN_MACOS": MIN_MACOS[arch]})
     shutil.copy2(PKG / "mac/meshpool", root / "Resources/meshpool")
     shutil.copy2(PKG / "icons/Meshpool.icns", root / "Resources/Meshpool.icns")
     shutil.copytree(RT[arch], root / "Resources/python", symlinks=True, ignore=IGN)

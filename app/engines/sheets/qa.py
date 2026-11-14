@@ -77,7 +77,7 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
         issues.append({"check": "no_formulas", "cell": "", "detail": "workbook has no live formulas"})
     return {"issues": issues, "stats": {"sheets": wb_f.sheetnames, "formulas": n_formula,
                                         "numeric_constants": n_numeric_const, "named_ranges": names,
-                                        "recalculated_copy": recalced}}
+                                        "recalculated_copy": recalced, "recalculated": wb_v is not None}}
 
 
 def value(xlsx_path: str, ref: str):
