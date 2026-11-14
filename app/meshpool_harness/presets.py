@@ -7,10 +7,8 @@ import os
 PRESETS = {
     "v2": {"MH_HARNESS_PROFILE": "minimal", "MH_STREAM": "1", "MH_CACHE_KEY": "1"},
     # v3 = v2 + loop breaker + browser page prefetch + finish in the same turn as a successful final action.
-    # (Always on in the code since v2: 400 retry, malformed-call sanitizing.) Not in v3 by design: MH_ENSEMBLE=2
-    # (about doubles cost per task), a shorter stream idle cutoff (one timeout covers both first byte and idle), and
-    # MH_EVIDENCE_RETRY (dev split: fired on 2 tasks whose first fix was already right; both second attempts were
-    # discarded, adding up to 4x tokens for nothing).
+    # (Always on in the code since v2: 400 retry, malformed-call sanitizing.) Not in v3 by design: a shorter stream
+    # idle cutoff (one timeout covers both first byte and idle).
     "v3": {"MH_HARNESS_PROFILE": "minimal", "MH_STREAM": "1", "MH_CACHE_KEY": "1", "MH_STALL": "1",
            "MH_TURN_NOTE": "1",                  # 15 turns before the cap: make the deliverable exist now
            "MH_TODO": "1",                       # required todo list; finish refused while items are open (ForgeCode)

@@ -45,7 +45,8 @@ def slug(name: str) -> str:
 
 
 def parse(text: str) -> tuple[dict, str]:
-    """Front matter (simple YAML: key: value lines) and body."""
+    """Front matter and body. Each key: value line is read as text; where the front matter is valid YAML, its string
+    values (quoted, escaped, folded or block) replace the raw text."""
     meta, body = {}, text
     if text.startswith("---"):
         end = text.find("\n---", 3)
@@ -54,8 +55,26 @@ def parse(text: str) -> tuple[dict, str]:
                 if ":" in line and not line.startswith((" ", "\t")):
                     k, v = line.split(":", 1)
                     meta[k.strip()] = v.strip().strip('"').strip("'")
+            try:
+                import yaml
+                doc = yaml.load(text[3:end], Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+            except Exception:  # noqa: BLE001 - not valid YAML (or no PyYAML): keep the line-by-line reading
+                doc = None
+            if isinstance(doc, dict):
+                for k, v in doc.items():
+                    if isinstance(k, str) and isinstance(v, str):
+                        meta[k.strip()] = v.strip()
             body = text[end + 4:].lstrip("\n")
     return meta, body
+
+
+def front_matter(**kv) -> str:
+    """A SKILL.md front matter block. Values are written as YAML (quoted when needed), so a description with a colon,
+    a '#', quotes or a leading '-' still parses in Claude, Codex and here. Empty values are left out."""
+    import yaml
+    lines = [yaml.safe_dump({k: v}, allow_unicode=True, default_flow_style=False, sort_keys=False,
+                            width=1_000_000).rstrip("\n") for k, v in kv.items() if v not in (None, "")]
+    return "---\n" + "\n".join(lines) + "\n---\n"
 
 
 def ensure_defaults():
@@ -156,16 +175,17 @@ def catalog_text() -> str:
 
 
 # ---------- changes from the app ---------------------------------------------------------------------------------
-def create(name: str, description: str, body: str) -> dict:
+def create(name: str, description: str, body: str, overwrite: bool = False) -> dict:
     if not name.strip() or not description.strip():
         raise ValueError("A skill needs a name and a one-line description.")
-    d = folder() / slug(name)
-    if d.exists():
-        raise ValueError(f"A skill named {slug(name)} already exists.")
-    d.mkdir(parents=True)
-    (d / "SKILL.md").write_text(f"---\nname: {slug(name)}\ndescription: {description.strip()}\n---\n\n{body.strip()}\n",
+    sid = slug(name)
+    d = folder() / sid
+    if d.exists() and not overwrite:
+        raise ValueError(f"A skill named {sid} already exists.")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(front_matter(name=sid, description=description.strip()) + f"\n{body.strip()}\n",
                                 encoding="utf-8")
-    return get(name)
+    return get(sid)
 
 
 def update(sid: str, text: str) -> dict:
@@ -206,7 +226,7 @@ def add_files(files: list[tuple[str, bytes]]) -> list[dict]:
             d.mkdir(parents=True, exist_ok=True)
             text = data.decode("utf-8", "replace")
             if not meta.get("description"):
-                text = f"---\nname: {sid}\ndescription: {Path(name).stem.replace('-', ' ')}\n---\n\n{text}"
+                text = front_matter(name=sid, description=Path(name).stem.replace('-', ' ')) + f"\n{text}"
             (d / "SKILL.md").write_text(text, encoding="utf-8")
             added.append(sid)
     for top, items in loose.items():

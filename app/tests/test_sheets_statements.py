@@ -281,7 +281,7 @@ def recompute(case: str) -> dict:
 
     def value(w, g):
         pv = sum(f / (1 + w) ** (t - x["mid_year"] / 2) for t, f in enumerate(o["fcf"], start=1))
-        tv = o["fcf"][-1] * (1 + g) / (w - g) / (1 + w) ** n
+        tv = o["fcf"][-1] * (1 + g) / (w - g) / (1 + w) ** (n - x["mid_year"] / 2)   # Gordon: final-year timing
         return pv, tv
     pv, pvtv = value(wacc, x["terminal_growth"])
     ev = pv + pvtv

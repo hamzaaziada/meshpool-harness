@@ -168,3 +168,13 @@ def test_forge_engine_finds_the_model_workbook(books, monkeypatch, tmp_path):
                    client=object())
     assert got["fixed_pages"] and got["slides_wanted"] == 8 + len(got["fixed_pages"])
     assert "computed from model.xlsx" in out["answer"]
+
+
+def test_comps_page_needs_recalculated_medians(books, monkeypatch):
+    from openpyxl import load_workbook
+    from engines.forge import finance_pages as FP
+    path = str(books / "val.xlsx")                     # written by openpyxl: no cached values without recalculation
+    monkeypatch.setattr(FP, "_recalc", lambda p: (load_workbook(p, data_only=True), load_workbook(p)))
+    bk = FP.Book(path)
+    assert bk.names.get("comps_ev_ebitda_median") and bk.name("comps_ev_ebitda_median") is None
+    assert FP.comps(bk) is None                        # no page of NM

@@ -25,7 +25,7 @@ meshpool work github:owner/repo#12 --workdir . --report                        #
 ```
 
 Settings, plug-ins (skills, model profiles, engines, connectors) and the GitHub Action: `docs/dev/PLUGINS.md`.
-How the harness works (loop, tools, memory): `HARNESS.md`. Contributing: `CONTRIBUTING.md`.
+How the harness works (loop, tools): `HARNESS.md`. Contributing: `CONTRIBUTING.md`.
 
 ## Setup for the benchmarks
 
@@ -69,7 +69,7 @@ if every engine finished with passing checks.
 
 | Engine | What it adds | Finish is rejected unless |
 |---|---|---|
-| code | container-native commands (no nested `docker exec` quoting), model-free locate hints, issue examples executed before turn 0, regression gate on related tests, optional cross-family reviewer, optional k-attempt ensemble with cross-test voting | a check command passed after the last edit; no existing test was modified; related tests that passed before still pass |
+| code | container-native commands (no nested `docker exec` quoting), model-free locate hints, issue examples executed before turn 0, regression gate on related tests, one fresh second attempt when the first runs out of budget (the repo is reset to the user's own state, uncommitted and untracked files included, never to HEAD) | a check command passed after the last edit; no existing test was modified; related tests that passed before still pass |
 | data | number tracing, verbatim-quote checker, lean output rules | every number in the answer appears in executed code output; every quote exists verbatim in a source; requested files exist; plain-language check passes |
 | sheets | banker-style builder (Cover -> Inputs -> Calc -> Outputs -> Checks, colored tabs, linked tab map, blue inputs) | LibreOffice recalculation shows no errors, no hardcoded numbers in calc/output tabs, Checks tab shows OK, Cover tab exists |
 | slides | JSON deck spec, deterministic renderer (layout, type scale, native charts/tables, font-metric text fitting), QA | no overflow, overlap, low contrast, >2 fonts, wrong slide count; plain-language check passes |

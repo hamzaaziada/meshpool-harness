@@ -29,13 +29,13 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from pathlib import Path
 
-APP = Path(__file__).resolve().parents[2]
-JOBS: dict[str, dict] = {}
-REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of one engine in a session before we say stop
-REBUILD_WINDOW_S = 45 * 60
+from meshpool_harness.agent import office_jobs as OJ
+
+APP = OJ.APP
+JOBS = OJ.JOBS                              # one job table and build count for the server (shared runner: office_jobs)
+REBUILD_LIMIT = OJ.REBUILD_LIMIT
 WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s client timeout; a longer job returns
                                                        # a job id for office_job_status instead of timing out
 
@@ -51,81 +51,18 @@ def _resolve(f: str) -> Path:
 
 
 def _run_job(jid: str):
-    j = JOBS[jid]
-    env = dict(os.environ, PYTHONPATH=str(APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-    env.pop("MH_EVENT_LOG", None)
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
-    try:
-        r = subprocess.run(j["cmd"], cwd=str(j["out"]), env=env, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=float(os.environ.get("OFFICE_JOB_TIMEOUT_S", "1800")), **kw)
-        out = r.stdout
-        res = json.loads(out[out.find("{"):]) if "{" in out else {}
-        j["result"], j["stderr"] = res, r.stderr[-1500:]
-    except subprocess.TimeoutExpired:
-        j["result"], j["stderr"] = {}, "The engine took longer than 30 minutes and was stopped."
-    except Exception as e:  # report, never crash the server
-        j["result"], j["stderr"] = {}, f"{type(e).__name__}: {e}"
-    j["done"] = time.time()
+    OJ.run(jid)
 
 
 def _report(jid: str) -> tuple[str, bool]:
-    j = JOBS[jid]
-    if not j.get("done"):
-        mins = int((time.time() - j["started"]) // 60)
-        return (f"Still working on the {j['engine']} job ({mins} min so far). Job id: {jid}. "
-                f"Call office_job_status with this id to get the result."), False
-    out: Path = j["out"]
-    made = [str(p) for p in sorted(out.rglob("*"))
-            if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)]
-    res = j.get("result") or {}
-    if not res:
-        return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
-    notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
-    qa = ""
-    try:                                    # forge QA on every produced deck/workbook (never fails the job)
-        from engines.forge.tools import qa_summary
-        qa = qa_summary([m for m in made if m.endswith((".pptx", ".xlsx"))])
-    except Exception:
-        pass
-    # "passed" only when nothing is flagged: an engine's ok means "a file was made", and a headline saying "passed"
-    # above a list of failing rules sent the agent into rebuild after rebuild (seen live: 8 deck builds, 20 minutes).
-    flagged = "rules failing:" in notes and not re.search(r"rules failing:\s*(none)?\s*$", notes, re.M) \
-        or bool(re.search(r"forge rules failing: (?!none)", qa))
-    if not res.get("ok"):
-        checks = "did not all pass (review the file)"
-    elif flagged:
-        checks = "flagged some items (listed below); the file is built and usable"
-    else:
-        checks = "passed"
-    lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {m}" for m in made]
-    if notes:
-        lines.append("Engine notes: " + notes[:2500])
-    if qa:
-        lines += ["Forge QA:", qa]
-    n = j.get("build_no", 1)
-    if n >= REBUILD_LIMIT:
-        lines.append(f"This is build {n} from the {j['engine']} engine in this session. If you are rebuilding to clear "
-                     "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
-                     "far and tell the user which checks remain. Build again only for a new request from the user.")
-    return "\n".join(lines), not made
+    return OJ.report(jid)
 
 
 def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
-    paths = []
-    for f in files or []:
-        p = _resolve(f)
-        if not p.exists():
-            return f"Input file not found: {f}", True
-        paths.append(str(p))
-    jid = uuid.uuid4().hex[:8]
-    out = _project() / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}"
-    out.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, "-m", "meshpool_harness", "run", request, "--engine", engine, "--out", str(out)]
-    if paths:
-        cmd += ["--files", *paths]
-    now = time.time()
-    recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
-    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1}
+    paths, missing = OJ.resolve_files(_project(), files)
+    if missing:
+        return f"Input file not found: {missing}", True
+    jid = OJ.new_job(engine, request, paths, _project())
     t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
     t.start()
     t.join(WAIT)
@@ -189,7 +126,7 @@ def _runs(par, text: str):
             par.add_run(part)
 
 
-def make_document(markdown: str, filename: str = "document.docx", title: str | None = None):
+def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
     from docx import Document
     from docx.shared import Pt
     name = re.sub(r"[^\w .-]", "_", Path(filename).name).strip() or "document.docx"
@@ -203,7 +140,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
     if title:
         doc.add_heading(title, level=0)
     clarity_note = ""
-    if os.environ.get("MH_CLARITY", "1") != "0":          # a second, smaller model reads the prose for clarity;
+    if _clarity and os.environ.get("MH_CLARITY", "1") != "0":   # a second, smaller model reads the prose for clarity;
         try:                                               # numbers and facts are guarded, failures never block
             if str(APP) not in sys.path:
                 sys.path.insert(0, str(APP))
@@ -373,8 +310,10 @@ def convert_document(path: str, to: str = "pdf"):
         return f"File not found: {src}", True
     to = to.lower().lstrip(".")
     if src.suffix.lower() in (".md", ".txt") and to in ("pdf", "docx"):
-        text = src.read_text(encoding="utf-8", errors="replace")
-        return (make_pdf if to == "pdf" else make_document)(text, src.stem + "." + to)
+        text = src.read_text(encoding="utf-8", errors="replace")      # a conversion keeps the words as they are:
+        if to == "pdf":                                                # no clarity rewrite
+            return make_pdf(text, src.stem + ".pdf")
+        return make_document(text, src.stem + ".docx", _clarity=False)
     exe = _soffice()
     if not exe:
         return ("Converting Office files needs LibreOffice, which is not installed. Install it from libreoffice.org, "
@@ -476,37 +415,44 @@ except Exception:
     pass
 
 
-def handle(msg: dict) -> dict | None:
-    m, rid = msg.get("method"), msg.get("id")
-    if rid is None:
-        return None
-    if m == "initialize":
-        ver = (msg.get("params") or {}).get("protocolVersion") or "2025-06-18"
-        res = {"protocolVersion": ver, "capabilities": {"tools": {}},
-               "serverInfo": {"name": "meshpool-office", "version": "1.0.0"}}
-    elif m == "ping":
-        res = {}
-    elif m == "tools/list":
-        res = {"tools": [{"name": k, "description": d, "inputSchema": {"type": "object", "properties": p, "required": r}}
-                         for k, (_, d, p, r) in TOOLS.items()]}
-    elif m == "tools/call":
-        p = msg.get("params") or {}
-        name, args = p.get("name"), p.get("arguments") or {}
-        if name not in TOOLS:
-            return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"unknown tool {name}"}}
-        props = TOOLS[name][2] or {}
+def _as_mcp(fn, props: dict):
+    """An office tool (returns (text, failed)) as an mcp_stdio tool (returns text, raises on failure). Made-up
+    arguments not in the schema (seen: engine=) are dropped with a note instead of failing the call."""
+    from meshpool_harness.agent.mcp_stdio import ToolFailed
+
+    def call(**args):
         extra = sorted(k for k in args if k not in props) if props else []
-        args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument (seen: engine=) costs a turn
-        try:
-            text, err = TOOLS[name][0](**args)
-        except Exception as e:
-            text, err = f"{type(e).__name__}: {e}", True
+        text, err = fn(**{k: v for k, v in args.items() if k not in extra})
         if extra:
             text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
-        res = {"content": [{"type": "text", "text": text}], "isError": bool(err)}
-    else:
-        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {m}"}}
-    return {"jsonrpc": "2.0", "id": rid, "result": res}
+        if err:
+            raise ToolFailed(text)
+        return text
+    return call
+
+
+def tools() -> dict:
+    from meshpool_harness.agent.mcp_stdio import Tool
+    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items()}
+
+
+def handle(msg: dict, wait_s: float = 900) -> dict | None:
+    """One JSON-RPC request -> the reply mcp_stdio.serve gives it (tests and in-process callers)."""
+    import io
+    from meshpool_harness.agent import mcp_stdio
+    if msg.get("id") is None:
+        return None
+    out, old_in, old_out = io.StringIO(), sys.stdin, sys.stdout
+    try:
+        sys.stdin, sys.stdout = io.StringIO(json.dumps(msg) + "\n"), out
+        mcp_stdio.serve("meshpool-office", tools())
+        end = time.time() + wait_s                  # serve answers on its own thread
+        while "\n" not in out.getvalue() and time.time() < end:
+            time.sleep(0.01)
+    finally:
+        sys.stdin, sys.stdout = old_in, old_out
+    lines = [ln for ln in out.getvalue().splitlines() if ln.strip()]
+    return json.loads(lines[0]) if lines else None
 
 
 def main():
@@ -516,20 +462,8 @@ def main():
         C.load_into_env()                    # the Meshpool key and model, for the engines
     except Exception:
         pass
-    lock = threading.Lock()
-
-    def serve(line):
-        try:
-            out = handle(json.loads(line))
-        except ValueError:
-            out = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
-        if out is not None:
-            with lock:
-                sys.stdout.write(json.dumps(out) + "\n")
-                sys.stdout.flush()
-    for line in sys.stdin:
-        if line.strip():
-            threading.Thread(target=serve, args=(line.strip(),), daemon=True).start()
+    from meshpool_harness.agent import mcp_stdio
+    mcp_stdio.serve("meshpool-office", tools())
 
 
 if __name__ == "__main__":

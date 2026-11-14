@@ -3,6 +3,7 @@ Env: MESHPOOL_BASE_URL (or OPENAI_BASE_URL), MESHPOOL_API_KEY (or OPENAI_API_KEY
 A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in, an Anthropic or a Gemini key."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -11,7 +12,10 @@ import urllib.request
 
 
 def to_responses(body: dict) -> dict:
-    """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable)."""
+    """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable).
+    Content parts (text and images) convert as for the ChatGPT sign-in (chatgpt._parts); unlike that endpoint, system
+    messages stay in the input and the output limit and temperature are sent."""
+    from .chatgpt import _parts
     items = []
     for m in body.get("messages", []):
         role = m.get("role")
@@ -20,7 +24,9 @@ def to_responses(body: dict) -> dict:
                           "output": str(m.get("content") or "")})
             continue
         if m.get("content"):
-            items.append({"role": role, "content": m["content"] if isinstance(m["content"], str) else json.dumps(m["content"])})
+            c = m["content"]
+            items.append({"role": role, "content": c if isinstance(c, str) else
+                          json.dumps(c) if role in ("assistant", "tool") else _parts(c)})
         for c in m.get("tool_calls") or []:
             f = c.get("function", {})
             items.append({"type": "function_call", "call_id": c.get("id", ""), "name": f.get("name", ""),
@@ -187,8 +193,8 @@ class SimpleLedger:
                            else r.read())
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as e:
+                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429) or attempt == retries:
                 break
             time.sleep(1.5 * (attempt + 1))

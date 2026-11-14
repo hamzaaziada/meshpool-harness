@@ -1,0 +1,39 @@
+name: Report a problem
+description: Something in Meshpool did not work. The app fills in your version and system when you use Report a problem.
+title: "[Beta] "
+labels: ["beta", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the Meshpool beta. Tell us what broke and we will fix it. Do not paste API keys or private files.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error shown
+      description: Filled in when you click Report this on an error.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Meshpool version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Computer
+      placeholder: macOS 15, Windows 11, Ubuntu 24.04...
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and model
+      placeholder: Meshpool Code, deepseek-v4.1-flash

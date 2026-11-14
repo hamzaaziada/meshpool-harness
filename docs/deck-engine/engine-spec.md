@@ -119,9 +119,8 @@ Input: the approved storyline (`storyline.json`), the slide JSON list, the templ
 
 ## 5. Workbook block schema
 
-Full JSON Schema: `app/engines/forge/schemas/workbook_block.schema.json`. It extends the existing sheets pipeline
-spec (`engines/sheets/pipeline.py`) with sources, reported totals, checks, circularity policy, a dashboard and
-recompute targets. The model writes keys and formula templates (`={revenue@prev}*(1+growth)`). The builder assigns
+Full JSON Schema: `app/engines/forge/schemas/workbook_block.schema.json`. It describes the model's rows and
+inputs together with sources, reported totals, checks, circularity policy, a dashboard and recompute targets. The model writes keys and formula templates (`={revenue@prev}*(1+growth)`). The builder assigns
 cells, named ranges, styles, number formats, frozen panes, the Checks sheet and the cover's `MasterCheck`.
 
 Sheet roles: Cover, Inputs (blue constants, each with a source), Calc (IS/BS/CF and schedules), Outputs, Dashboard

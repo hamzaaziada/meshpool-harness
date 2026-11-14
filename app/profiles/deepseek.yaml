@@ -6,7 +6,7 @@ caching: {mode: automatic_prefix, note: "byte-stable system+tools prefix; append
 tool_calling: {style: native, parallel: true, strict_schemas: true}
 edit_format: exact_replace          # edit(old,new) with uniqueness + staleness checks
 reasoning: {planner: default, worker: default, verifier: default}
-sampling: {worker: {temperature: 0.0}, planner: {temperature: 0.0}, ensemble: [0.0, 0.4, 0.8]}
+sampling: {worker: {temperature: 0.0}, planner: {temperature: 0.0}}
 limits: {max_output_tokens: 8192, meshpool_output_cap: 16384}
 prompt_style: {numbered_method: true, examples: minimal, negative_rules: few_and_specific}
 billing: {meshpool_factor_vs_offpeak_list: 1.97, note: "meshpool bills ~DeepSeek peak rate; see results.md"}

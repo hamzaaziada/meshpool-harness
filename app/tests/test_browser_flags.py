@@ -1,9 +1,12 @@
 """Browser tool flags on local pages (real Chromium, no model calls): MH_BROWSER_SETTLE, MH_BROWSER_READONLY,
 MH_BROWSER_STATES, MH_BROWSER_KEYTYPE. Skipped when Playwright or Chromium is missing."""
+import functools
+import http.server
 import os
-import socket
+import shlex
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -24,24 +27,33 @@ document.getElementById('keys').addEventListener('keydown', e => {
 </script></body></html>"""
 
 
-def _port():
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+def _serve_dir(d) -> str:
+    h = functools.partial(type("Q", (http.server.SimpleHTTPRequestHandler,), {"log_message": lambda *a: None}),
+                          directory=str(d))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}"
 
 
 @pytest.fixture(scope="module")
 def browser(tmp_path_factory):
-    page = tmp_path_factory.mktemp("pg") / "p.html"
-    page.write_text(PAGE)
-    env = dict(os.environ, MH_BROWSER_PORT=str(_port()), PYTHONPATH=str(APP), MH_BROWSER_DIFF="1",
-               MH_BROWSER_SETTLE="1", MH_BROWSER_READONLY="1", MH_BROWSER_STATES="1", MH_BROWSER_KEYTYPE="1")
+    pg = tmp_path_factory.mktemp("pg")
+    (pg / "p.html").write_text(PAGE)
+    # the command the browser engine gives the model: ctl.py by its path, no PYTHONPATH, run from another folder
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "MH_BROWSER_PORT")}
+    env.update(MESHPOOL_HOME=str(tmp_path_factory.mktemp("home")), MH_BROWSER_DIFF="1", MH_BROWSER_SETTLE="1",
+               MH_BROWSER_READONLY="1", MH_BROWSER_STATES="1", MH_BROWSER_KEYTYPE="1")
+    sys.path.insert(0, str(APP))
+    from engines.browser.engine import ctl_command
+    cmd = ctl_command()
 
     def ctl(*a):
-        r = subprocess.run([sys.executable, "-m", "engines.browser.ctl", *a], cwd=APP, env=env, capture_output=True,
-                           text=True, timeout=90)
+        r = subprocess.run(cmd + " " + " ".join(shlex.quote(x) for x in a), shell=True, cwd=pg, env=env,
+                           capture_output=True, text=True, timeout=90)
         return r.stdout + r.stderr
     if "started" not in ctl("start"):
         pytest.skip("browser did not start")
-    ctl("goto", page.as_uri())
+    ctl("goto", f"{_serve_dir(pg)}/p.html")
     yield ctl
     ctl("stop")
 

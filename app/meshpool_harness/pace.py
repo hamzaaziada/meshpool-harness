@@ -26,7 +26,8 @@ _ASK = re.compile(r"^\s*(what|which|who|whom|whose|when|where|why|how|is|are|was
                   r"search|research|quick(ly)?|briefly|any idea|i wonder)\b|\?\s*$|\b(quick|short|brief|briefly|"
                   r"in (one|a few|two|three) (words?|sentences?|lines?))\b", re.I)
 
-NOTE = ("\n\n\u200b[Meshpool] This is a quick request. Answer within about 30 seconds: use only the tools you need. "
+SEP = "\n\n\u200b"      # the separator every producer puts before notes only the model sees
+NOTE = (SEP + "[Meshpool] This is a quick request. Answer within about 30 seconds: use only the tools you need. "
         "For research, run one web_research call with 2 or 3 queries; if its results do not answer the question, "
         "open the single most relevant page (for example the official site) and answer from that. Do not create or "
         "change files. Always end with a direct answer, briefly, with links for facts you looked up; offer to dig "
@@ -36,7 +37,7 @@ WRAP = ("[Meshpool] Time is up for this quick request. Answer now with what you 
 
 
 def classify(text: str, has_files: bool = False) -> str:
-    t = str(text or "").split("​")[0].strip()
+    t = str(text or "").split(SEP)[0].strip()   # model-only notes follow SEP; a pasted bare \u200b is user text
     if not t:
         return "normal"
     if _DEEP.search(t):

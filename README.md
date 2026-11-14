@@ -1,6 +1,42 @@
-# Meshpool
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/meshpool_harness/ui/brand/logo-dark.png">
+    <img src="app/meshpool_harness/ui/brand/logo-light.png" alt="Meshpool" width="360">
+  </picture>
+</p>
 
-Meshpool is a desktop agent for Mac and Windows. It does research, writing, analysis, spreadsheets, decks and code on your own computer, with any model on the Meshpool endpoint. All you need is a Meshpool API key.
+<p align="center"><strong>One desktop agent for code, documents, spreadsheets, decks and research, on any model.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/hamzaaziada/meshpool-harness/releases"><img alt="Version 0.1.0 beta" src="https://img.shields.io/badge/version-0.1.0%20beta-1670E8"></a>
+  <img alt="Mac and Windows app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows-16181D">
+  <img alt="Command line on macOS, Linux and Windows" src="https://img.shields.io/badge/CLI-macOS%20%7C%20Linux%20%7C%20Windows-16181D">
+  <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-16181D"></a>
+</p>
+
+Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own API keys, or the ChatGPT, Claude and Gemini plans you already pay for.
+
+> [!NOTE]
+> **Meshpool 0.1.0 is a beta.** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
+
+## Why Meshpool
+
+- **Every strong agent in one app.** Meshpool Code, Meshpool Work, Pi, Hermes, Codex, Claude Code and Gemini CLI, switchable per chat, with the same files, skills and connectors.
+- **Meshpool Auto picks the agent for you.** For each task it takes the best measured quality for that kind of work, then the lowest cost, then the fastest. It never trades quality for price: an agent is only a cheaper choice when it scores as well (see [ROUTING.md](docs/ROUTING.md)).
+- **Any model on one key.** One Meshpool key reaches every model on the Meshpool endpoint. OpenAI-compatible endpoints, Anthropic and Gemini keys, and ChatGPT, Claude and Google sign-ins work too.
+- **Office files that open clean.** Real Word, Excel (with live formulas) and PowerPoint. Every deck is checked against 20 design rules, every workbook against 13, and every file against the Office file schemas before it reaches you.
+- **Your tools come with you.** 58 connectors plus any remote MCP server, about 100 skills, and the skills and MCP servers you already set up in Claude, Codex, Cursor, VS Code and others.
+- **Local by design.** Your files stay on your computer, and connector sign-ins go straight from your computer to the app, with no Meshpool server in between.
+
+### Measured, not claimed
+
+Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with the same graders, at the same time. The full tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+| Agent | Best at | Result |
+|---|---|---|
+| **Meshpool Code** | Coding in your project | SWE-bench Verified: 18 of 20 solved at $0.0079 per solved task. Codex CLI solved 17 at $0.0101. |
+| **Meshpool Work** | Word, Excel, PowerPoint and PDF work | Practical office run: all 7 tasks passed (proposal, live-formula workbook, chart deck, contract edit in place, invoices to Excel, PDF, letters). The Word proposal took 42 s; Hermes took 64 s. |
+| **Meshpool's agent loop, browser use** | Web forms and web apps | MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task. Claude Code also solved 97, at $0.0082 and 21 s. |
 
 ## Download
 
@@ -65,7 +101,7 @@ On first launch, and later under **Settings**, Meshpool finds the skills and MCP
   - **Cowork** is a chat with a live progress panel and the files the task made.
   - **Code** adds diff, terminal, Git, pull request, CI and deployment panels.
 - **Harnesses (the agent behind a thread), switchable per thread:**
-  - **Meshpool Auto** picks the best harness for each task, based on benchmark results. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+  - **Meshpool Auto** picks the agent for each task from benchmark results: quality first, then cost, then speed. See [docs/ROUTING.md](docs/ROUTING.md).
   - **Meshpool Code, Meshpool Work, Pi and Hermes** run on your Meshpool key, another API key, an Anthropic or Gemini key, or your ChatGPT sign-in.
   - **Codex** runs on your Meshpool key, another API key, or your ChatGPT sign-in.
   - **Claude Code** runs on your Claude sign-in or an Anthropic API key.

@@ -26,35 +26,16 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.harnesses.acp import _kill_tree
+from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
-READ_ONLY = {"read", "grep", "find", "ls", "tool_search", "codemode", "list_mcp_resources",
-             "list_mcp_resource_templates", "read_mcp_resource", "mcp__meshpool_office__read_document",
-             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time", "mcp__meshpool_tools__calculate",
-             "mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
-             "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__memory_save",
-             "mcp__meshpool_assistant__memory_forget", "mcp__meshpool_assistant__schedule_task",
-             "mcp__meshpool_assistant__search_chats", "mcp__meshpool_assistant__list_scheduled_tasks",
-             "mcp__meshpool_assistant__run_subtasks"}
+# Pi's own read-only tools, plus the MCP tools every Meshpool agent runs without asking (one list, safe_tools.py).
+# pi_gate.js gets the same set through MESHPOOL_PI_SAFE, so it never asks for these.
+READ_ONLY = frozenset({"read", "grep", "find", "ls", "tool_search", "codemode", "list_mcp_resources",
+                       "list_mcp_resource_templates", "read_mcp_resource"}) | SAFE_MCP
 LABEL = {"read": "Read", "write": "Wrote", "edit": "Edited", "bash": "Ran", "powershell": "Ran", "grep": "Searched",
          "find": "Listed", "ls": "Listed", "tool_search": "Found tools", "codemode": "Ran a script"}
 
-
-
-def _kill_tree(proc) -> None:
-    """End a harness process and everything it started (commands, MCP servers)."""
-    if not proc:
-        return
-    try:
-        import psutil
-        root = psutil.Process(proc.pid)
-        kids = root.children(recursive=True)
-    except Exception:  # noqa: BLE001
-        kids = []
-    for k in kids:
-        try:
-            k.kill()
-        except Exception:  # noqa: BLE001
-            pass
 
 class PiError(Exception):
     pass
@@ -156,12 +137,8 @@ def prepare(root: Path) -> Path:
         mcp = _mcp_for_pi(root)
     except Exception:  # noqa: BLE001
         mcp = {"mcpServers": {}}
-    p = h / "mcp.json"
-    p.write_text(json.dumps(mcp, indent=1), encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)                         # carries connector tokens
-    except OSError:
-        pass
+    from meshpool_harness.harnesses import write_private
+    write_private(h / "mcp.json", json.dumps(mcp, indent=1))     # carries connector tokens
     sp = h / "settings.json"
     try:
         settings = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else {}
@@ -287,6 +264,7 @@ class PiAgent:
             env.pop(k, None)
         from meshpool_harness import providers as PV
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
+                    "MESHPOOL_PI_SAFE": json.dumps(sorted(READ_ONLY)),     # pi_gate.js: tools that never ask
                     "MESHPOOL_API_KEY": PV.key(), "ANTHROPIC_API_KEY": PV.anthropic_key(),
                     "GEMINI_API_KEY": PV.gemini_key()})
         if PV.ready("chatgpt"):
@@ -453,7 +431,8 @@ class PiAgent:
         kind = "edit" if name in ("write", "edit") else "bash" if name in ("bash", "powershell") else "mcp"
         if name in READ_ONLY:
             return True
-        if self.plan and kind == "edit":
+        if self.plan:
+            # Plan mode only investigates: no edits, no commands, no tools that could change something.
             self._denied.add(tid)
             return False
         if self.mode == "auto" or kind in self._always or (self.mode == "edits" and kind == "edit"):
@@ -517,7 +496,8 @@ class PiAgent:
         body = text
         if self.plan:
             body = ("[Plan mode] Investigate as needed, then reply with a clear, numbered plan for the request below. "
-                    "Do not change any files; the user will review the plan first.\n\n" + text)
+                    "Do not change any files or run commands that change anything; the user will review the plan "
+                    "first.\n\n" + text)
         self._text, self._denied = [], set()
         self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         final = ""

@@ -44,7 +44,7 @@ func main() {
 		"PYTHONPATH="+filepath.Join(dir, "app"),
 		"PYTHONUTF8=1", "PYTHONIOENCODING=utf-8", "PYTHONNOUSERSITE=1",
 		"PYTHONDONTWRITEBYTECODE=1",
-		"MESHPOOL_CLI="+filepath.Join(dir, "meshpool.cmd"),
+		"MESHPOOL_CLI="+filepath.Join(dir, "bin", "meshpool.cmd"), // its own folder on PATH, so `meshpool` never finds Meshpool.exe
 		"PATH="+filepath.Join(dir, "runtime")+";"+filepath.Join(dir, "runtime", "Scripts")+";"+os.Getenv("PATH"),
 	)
 	cmd.Env = env

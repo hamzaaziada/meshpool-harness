@@ -17,10 +17,9 @@ from hashlib import sha256 as _sha
 from pathlib import Path
 
 from lxml import etree
-from pptx import Presentation
 from pptx.oxml.ns import qn
 
-from .common import EMU_PER_IN, evidence_id, font_file, load_rules, sha256, wrap_lines
+from .common import EMU_PER_IN, evidence_id, font_file, load_rules, open_pptx, sha256, wrap_lines
 
 NS = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main",
       "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -276,7 +275,7 @@ def measure(path: str, rules: dict | None = None) -> dict:
     rules = rules or load_rules()
     R = rules["pptx"]
     file_sha = sha256(path)
-    prs = Presentation(path)
+    prs = open_pptx(path)                                 # .pptx or .potx
     W, H = _in(prs.slide_width), _in(prs.slide_height)
     theme = _theme(prs)
     pres_el = prs.part._element

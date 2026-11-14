@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -188,3 +189,70 @@ def positive_axis_ids(chart):
         if v and v.startswith("-"):
             el.set("val", seen.setdefault(v, str(50000 + 1000 * len(seen) + abs(int(v)) % 1000)))
 
+
+# ------------------------------------------------------------------ PowerPoint templates
+_MAIN_TYPES = (b"application/vnd.openxmlformats-officedocument.presentationml.template.main+xml",
+               b"application/vnd.ms-powerpoint.template.macroEnabled.main+xml",
+               b"application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml")
+
+
+def open_pptx(path):
+    """python-pptx Presentation for a .pptx, or a .potx / .pptm / .potm, which python-pptx refuses by the content
+    type of the main part: those are opened from an in-memory copy with the type rewritten to a presentation's."""
+    import io
+    import zipfile
+    from pptx import Presentation
+    with zipfile.ZipFile(path) as zin:
+        ct = zin.read("[Content_Types].xml")
+        if not any(t in ct for t in _MAIN_TYPES):
+            return Presentation(path)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "[Content_Types].xml":
+                    for t in _MAIN_TYPES:
+                        data = data.replace(t, b"application/vnd.openxmlformats-officedocument.presentationml."
+                                               b"presentation.main+xml")
+                zout.writestr(item, data)
+    buf.seek(0)
+    return Presentation(buf)
+
+
+# ------------------------------------------------------------------ numbers
+# One extractor for every number check: the renderer records numbers with it (provenance) and P13 / P14 and the
+# pre-render fact check read numbers with it, so what was recorded is exactly what is checked.
+NUM = re.compile(r"(?<![\w.])[-+]?\$?\(?\d[\d,]*(?:\.\d+)?\)?\s?(?:%|pp|x|bn|b|m|mm|k|million|billion|thousand)?(?![\w])", re.I)
+
+
+def numbers(text: str, ignore: re.Pattern | None = None) -> list[tuple[str, float, str]]:
+    """(raw, value, unit) for every number in text; years and small ordinals filtered by `ignore`."""
+    out = []
+    for m in NUM.finditer(text):
+        raw = m.group(0).strip()
+        core = re.sub(r"[^\d.]", "", raw.split()[0] if " " in raw else raw)
+        if not core or core == ".":
+            continue
+        if ignore is not None and ignore.match(core) and not re.search(r"%|\$|bn|b$|m$|k$|x$|million|billion|thousand", raw, re.I):
+            continue
+        try:
+            v = float(core)
+        except ValueError:
+            continue
+        if raw.startswith("-") or raw.startswith("("):
+            v = -v
+        unit = (re.search(r"(%|pp|x|bn|b|mm|m|k|million|billion|thousand)\s*$", raw, re.I) or [None])[0]
+        unit = unit.lower() if unit else ""
+        out.append((raw, v, unit))
+    return out
+
+
+SCALE = {"": 1, "k": 1e3, "thousand": 1e3, "m": 1e6, "mm": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
+
+
+def candidates(v: float, unit: str) -> list[float]:
+    """A quoted number may be stated in the chart's own units or scaled: compare against all plausible readings."""
+    if unit in ("%", "pp"):
+        return [v, v / 100]
+    s = SCALE.get(unit, 1)
+    return sorted({v, v * s, v * s / 1e3, v * s / 1e6, v * s / 1e9})

@@ -99,6 +99,10 @@ class Terminal:
         self.spin = Spinner(self.st, self.info)
         self.in_text = False
         self.agent = None
+        self.failed = False               # an error or a stop in the turn (meshpool -p then exits non-zero)
+        self.stopping = False             # Ctrl+C stopped the turn: questions still arriving are answered "no"
+        self.idle = threading.Event()     # cleared while a question is waiting for an answer at the terminal
+        self.idle.set()
 
     def p(self, s="", end="\n", to=None):
         self.spin.stop()
@@ -160,8 +164,10 @@ class Terminal:
                 txt = e.get("content", "")
                 self.p(f"  {mark.get(e.get('status'), st.dim('[ ]'))} " + (st.dim(txt) if e.get("status") == "completed" else txt))
         elif t == "error":
+            self.failed = True
             self.p(st.red("\n" + ev["text"]))
         elif t == "interrupted":
+            self.failed = True
             self.p(st.amber("\n" + ev["text"]))
         elif t == "turn_end":
             self.spin.stop()
@@ -176,6 +182,22 @@ class Terminal:
         self.spin.stop()
         if not sys.stdin.isatty():
             return "no", "No terminal to ask in. Run with --auto."
+        if self.stopping:
+            return "no", ""
+        self.idle.clear()
+        try:
+            choice, note = self._approve(kind, title, detail)
+        finally:
+            self.idle.set()
+        if self.stopping:                 # Ctrl+C while the question was open: the turn is over
+            return "no", ""
+        if choice == "always" and options:
+            # an ACP harness (options from its permission request): "always" is its own allow-always option
+            return next((o["id"] for o in options if o.get("kind") == "allow_always"), "yes"), note
+        return choice, note
+
+    def _approve(self, kind: str, title: str, detail: str):
+        st = self.st
         self.p("")
         self.p(st.amber(title))
         for line in detail.splitlines()[:80]:
@@ -189,10 +211,14 @@ class Terminal:
         while True:
             try:
                 a = input(B.prompt(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
-                                   f"{st.bold('n')} no > ")).strip().lower()
+                                   f"{st.bold('n')} no (Enter: no) > ")).strip().lower()
             except EOFError:
                 return "no", ""
-            if a in ("y", "yes", ""):
+            if self.stopping:
+                return "no", ""
+            if a == "":                   # Enter alone never approves a change
+                return "no", ""
+            if a in ("y", "yes"):
                 return "yes", ""
             if a in ("a", "always"):
                 return "always", ""
@@ -283,21 +309,42 @@ def _banner(term: Terminal, agent, mcp, logo: bool = True):
 
 
 def _context() -> str:
-    """The user's instructions and memory (shared with the app), sent out of sight with a session's first message."""
+    """The user's instructions and memory (shared with the app), sent out of sight with a session's first message.
+    The same block the app sends (assistant.context_block), so the two never drift apart."""
     try:
         from meshpool_harness import assistant as AS
-        st = AS.settings()
-        ins = AS.instructions() if st["instructions_on"] else ""
-        mem = AS.memory() if st["memory_on"] else ""
+        return AS.context_block() or ""
     except Exception:  # noqa: BLE001
         return ""
-    parts = []
-    if ins:
-        parts.append("The user's instructions for every chat (follow them):\n" + ins[:6000])
-    if mem:
-        parts.append("What you remember about the user from earlier chats (use it only where it changes the answer; "
-                     "do not mention that it came from memory):\n" + mem[-6000:])
-    return "\n\n".join(parts)
+
+
+def _stop_turn(term: Terminal, agent, wait: float = 4.0):
+    """Ctrl+C during a turn: stop the agent itself (an ACP harness keeps running otherwise, and its permission
+    questions would race the prompt for input), let an open question finish, and wait briefly for the turn to end."""
+    term.stopping = True
+    term.spin.stop()
+    try:
+        agent.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if not term.idle.is_set():        # a question is waiting for a line in another thread: let it take one
+            term.p(term.st.dim("  Press Enter to dismiss the open question."))
+            term.idle.wait()
+        # an ACP harness answers its open session/prompt request once it has cancelled
+        cv, pending, rid = (getattr(agent, a, None) for a in ("_cv", "_pending", "_id"))
+        if cv is not None and isinstance(pending, dict) and rid:
+            end = time.time() + wait
+            with cv:
+                while rid not in pending and getattr(agent, "_alive", False) and time.time() < end:
+                    cv.wait(0.2)
+                answered = pending.pop(rid, None) is not None
+            if not answered and getattr(agent, "_alive", False) and hasattr(agent, "_hard_restart"):
+                agent._hard_restart()     # it ignored the cancel: end it; the next message restarts it
+    except KeyboardInterrupt:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _mcp_status(term: Terminal, mcp):
@@ -407,19 +454,22 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             block = _context()
             if block:
                 text += "\n\n\u200b" + block
-        return agent.send(text)
+        term.stopping = term.failed = False
+        try:
+            return agent.send(text)
+        except KeyboardInterrupt:
+            term.p(st.amber("\n  Stopped."))
+            term.failed = True
+            _stop_turn(term, agent)
     try:
         if prompt is not None:
             send(prompt)
-            return 0
+            return 1 if term.failed else 0
         _banner(term, agent, mcp, logo=not onboarded)
         last_ctrl_c = 0.0
         if first:
             term.p("\n" + st.blue("> ") + first)
-            try:
-                send(first)
-            except KeyboardInterrupt:
-                term.p(st.amber("\n  Stopped."))
+            send(first)
         while True:
             try:
                 text = _read(term)
@@ -446,6 +496,11 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     term.p(st.dim("  New conversation. Same folder and settings."))
                 elif cmd == "auto":
                     agent.mode = "ask" if agent.mode == "auto" else "auto"
+                    if hasattr(agent, "apply_mode"):   # Codex & co. have their own modes: switch them too
+                        try:
+                            agent.apply_mode()
+                        except Exception as e:  # noqa: BLE001
+                            term.p(st.red(f"  Couldn't switch the harness's own mode: {e}"))
                     term.p(st.dim("  Edits and commands are now " +
                                   ("allowed without asking." if agent.mode == "auto" else "asked first.")))
                 elif cmd == "model":
@@ -466,17 +521,22 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                            f"{u['out']:,} output tokens.")
                 elif cmd == "connect":
                     from meshpool_harness.agent import connect_cli
-                    if not arg.strip():
-                        connect_cli.listing(st)
-                    else:
-                        ok, cid = connect_cli.connect(arg.strip(), st=st)
-                        if ok and mcp:                    # its tools work in this session at once
-                            from meshpool_harness import mcp_apps as CN
-                            spec = CN.servers().get(cid)
-                            if spec:
-                                mcp.add(cid, spec)
-                        elif ok:
-                            term.p(st.dim("  New sessions use it."))
+                    try:
+                        if not arg.strip():
+                            connect_cli.listing(st)
+                        else:
+                            ok, cid = connect_cli.connect(arg.strip(), st=st)
+                            if ok and mcp:                    # its tools work in this session at once
+                                from meshpool_harness import mcp_apps as CN
+                                spec = CN.servers().get(cid)
+                                if spec:
+                                    mcp.add(cid, spec)
+                            elif ok:
+                                term.p(st.dim("  New sessions use it."))
+                    except KeyboardInterrupt:
+                        term.p(st.amber("\n  Cancelled."))
+                    except Exception as e:  # noqa: BLE001  (a network error must not end the session)
+                        term.p(st.red(f"  Couldn't connect: {e}"))
                 elif cmd == "import":
                     from meshpool_harness.agent import onboard
                     onboard.context_step(st)
@@ -493,10 +553,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 else:
                     term.p(st.amber(f"  Unknown command /{cmd}. Type /help."))
                 continue
-            try:
-                send(text)
-            except KeyboardInterrupt:
-                term.p(st.amber("\n  Stopped."))
+            send(text)
     finally:
         term.spin.stop()
         if mcp:

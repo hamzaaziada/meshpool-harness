@@ -12,13 +12,17 @@ import sys
 from pathlib import Path
 
 
+def _inputs(workdir: str, files: list[str] | None) -> list[str]:
+    """The files given with the request; with none given (the CLI), the input files in the work folder."""
+    if files:
+        return list(files)
+    return [str(f) for f in sorted(Path(workdir).iterdir()) if f.is_file()
+            and f.suffix.lower() in (".md", ".txt", ".pdf", ".docx", ".pptx", ".potx", ".xlsx", ".csv")]
+
+
 def _brief(task: str, workdir: str, files: list[str] | None) -> str:
     parts = [task]
-    names = list(files or [])
-    for f in Path(workdir).iterdir() if not names else []:
-        if f.is_file() and f.suffix.lower() in (".md", ".txt", ".pdf", ".docx", ".pptx", ".xlsx", ".csv"):
-            names.append(str(f))
-    for f in names:
+    for f in _inputs(workdir, files):
         p = Path(f)
         try:
             if p.suffix.lower() in (".md", ".txt", ".csv"):
@@ -91,13 +95,14 @@ def density_from(task: str, options: dict | None = None, density: str | None = N
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
     from engines.forge.build import build
-    from engines.forge.brief import complete
+    from engines.forge.brief import complete, slide_count
+    attached = _inputs(workdir, files)                          # the CLI passes no files: the work folder's inputs
     # an open brief (audience, density, length, look) gets the recommended answers (engines/forge/brief.py)
-    task = complete(task, files)
+    n = (options or {}).get("slides")                           # an explicit slides field wins over the wording
+    task = complete(task, attached, {"slides": n} if n else None)
     if model:
         os.environ.setdefault("FORGE_MODEL", model)
-    m = re.search(r"\b(\d{1,2})[- ]slide", task)
-    slides = int(m.group(1)) if m else 10
+    slides = slide_count(task) or 10
     mode = density_from(task, options, density)
     fixed, extra = [], []
     from engines.forge.finance_pages import finance_workbook, pages_from_workbook
@@ -108,7 +113,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
             fixed, extra = pages_from_workbook(wbk)
         except Exception as e:                                  # noqa: BLE001 - the deck still builds without them
             print(f"model pages skipped: {type(e).__name__}: {e}", file=sys.stderr)
-    look, prof = brand_from(task, files)
+    look, prof = brand_from(task, attached)
     res = build(_brief(task, workdir, files), workdir, slides + len(fixed), client=client, task_id=task_id,
                 density=mode, fixed_pages=fixed, extra_facts=extra, **look)
     pptx = res["pptx"]

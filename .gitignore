@@ -19,6 +19,14 @@ app/engines/forge/schemas/ooxml/
 # the app run from source keeps its settings and data in the repo root (MESHPOOL_HOME defaults there)
 /meshpool.config
 /mcp.json
+/mcp.json.*.tmp
+# connector sign-ins: access and refresh tokens and client secrets (mcp_apps), and which connectors are on
+/mcp-auth.json
+/mcp-auth.tmp
+/mcp-auth.json.*.tmp
+/connectors.json
+/connectors.tmp
+/connectors.json.*.tmp
 /harnesses/
 /memory/
 /brand/

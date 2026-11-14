@@ -16,14 +16,16 @@ from meshpool_harness.core.loop import run  # noqa: E402
 from meshpool_harness.core.tools import Workspace  # noqa: E402
 
 
-def _free_port() -> str:
-    """A free local port: fixed ones collide with a running app (8791-8799 are its usual UI ports)."""
-    import socket
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return str(p)
+def _serve_dir(d) -> str:
+    """Serve folder d over local HTTP (the browser daemon refuses file:// URLs); returns the base URL."""
+    import functools
+    import http.server
+    import threading
+    h = functools.partial(type("Q", (http.server.SimpleHTTPRequestHandler,), {"log_message": lambda *a: None}),
+                          directory=str(d))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}"
 
 
 def test_guard_defaults_and_overrides(monkeypatch):
@@ -98,7 +100,8 @@ def test_timing_log(monkeypatch, tmp_path):
 
 def test_typed_roles(monkeypatch):
     pytest.importorskip("playwright")
-    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
+    monkeypatch.delenv("MH_BROWSER_PORT", raising=False)   # a free port, chosen by the daemon
+    monkeypatch.setenv("MESHPOOL_HOME", tempfile.mkdtemp())
     monkeypatch.setenv("MH_BROWSER_TYPED_ROLES", "1")
     import importlib
     from engines.browser import ctl
@@ -108,7 +111,7 @@ def test_typed_roles(monkeypatch):
                                  '</body></html>')
     assert ctl.main(["start"]) == 0
     try:
-        els = "\n".join(ctl.call("goto", f"file://{d}/w.html")["elements"])
+        els = "\n".join(ctl.call("goto", f"{_serve_dir(d)}/w.html")["elements"])
         assert '[1] textbox "' in els and '[2] textarea "' in els and '[3] textbox[email] "' in els
     finally:
         ctl.call("stop")
@@ -116,7 +119,8 @@ def test_typed_roles(monkeypatch):
 
 def test_date_inputs_accept_us_dates(monkeypatch):
     pytest.importorskip("playwright")
-    monkeypatch.setenv("MH_BROWSER_PORT", _free_port())
+    monkeypatch.delenv("MH_BROWSER_PORT", raising=False)   # a free port, chosen by the daemon
+    monkeypatch.setenv("MESHPOOL_HOME", tempfile.mkdtemp())
     import importlib
     from engines.browser import ctl
     importlib.reload(ctl)
@@ -124,7 +128,7 @@ def test_date_inputs_accept_us_dates(monkeypatch):
     Path(d, "d.html").write_text('<html><body><label>When <input type="date" id="w"></label></body></html>')
     assert ctl.main(["start"]) == 0
     try:
-        els = "\n".join(ctl.call("goto", f"file://{d}/d.html")["elements"])
+        els = "\n".join(ctl.call("goto", f"{_serve_dir(d)}/d.html")["elements"])
         assert "textbox[date] (format YYYY-MM-DD)" in els
         ctl.call("type", "1", "04/03/2018")
         assert ctl.call("_eval", "() => document.getElementById('w').value")["value"] == "2018-04-03"
@@ -132,26 +136,3 @@ def test_date_inputs_accept_us_dates(monkeypatch):
         assert ctl.call("_eval", "() => document.getElementById('w').value")["value"] == "2019-12-31"
     finally:
         ctl.call("stop")
-
-
-def test_endstate_check_shown_once(monkeypatch, tmp_path):
-    d = tmp_path / "w"
-    d.mkdir()
-    (d / "out.txt").write_text("x\n")
-    task = f"Write the result to {d}/out.txt and make the check pass."
-    script = [tool_call("run_tests", {"command": "true"}),
-              tool_call("write_file", {"path": "out.txt", "content": "y\n"}),
-              tool_call("finish", {"answer": "done", "evidence": []}),
-              tool_call("finish", {"answer": "done", "evidence": []})]
-    monkeypatch.setenv("MH_ENDSTATE_CHECK", "1")
-    client = MockClient(list(script))
-    r = run(task, client=client, model="m", profile=None, ws=Workspace(str(d), str(d / ".run")), ctx={"task_id": "e"},
-            system_text="s", require_check=False)
-    assert r.ok and client.requests and len(client.requests) == 4
-    shown = [m for m in client.requests[3]["messages"] if m["role"] == "tool" and "End-state check" in str(m["content"])]
-    assert len(shown) == 1 and "re-run" in shown[0]["content"] and "out.txt" in shown[0]["content"]
-    monkeypatch.setenv("MH_ENDSTATE_CHECK", "0")
-    client = MockClient(list(script[:3]))
-    r = run(task, client=client, model="m", profile=None, ws=Workspace(str(d), str(d / ".run")), ctx={"task_id": "e2"},
-            system_text="s", require_check=False)
-    assert r.ok and len(client.requests) == 3

@@ -30,7 +30,7 @@ import re
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 STORE = "sources.json"
@@ -593,17 +593,16 @@ class Corpus:
                 age = _age_years(s.date, self.now)
                 if age is not None:
                     sc *= 1.0 if age <= 1 else max(0.7, 1 - 0.06 * (age - 1))
-            p.score, p.source = sc, s
-            scored.append(p)
-        scored.sort(key=lambda p: -p.score)
+            scored.append((sc, p, s))                           # local: find() runs from many threads (grid)
+        scored.sort(key=lambda x: -x[0])
         out, per, texts = [], {}, set()
-        for p in scored:
+        for sc, p, s in scored:
             key = re.sub(r"\W+", "", p.text.lower())[:300]
             if per.get(p.source_id, 0) >= per_source or key in texts:     # filings repeat risk factors verbatim
                 continue
             texts.add(key)
             per[p.source_id] = per.get(p.source_id, 0) + 1
-            out.append(p)
+            out.append(replace(p, source=s, score=sc))          # a copy: the shared passage is never mutated
             if len(out) >= k:
                 break
         return out
@@ -653,10 +652,9 @@ class Corpus:
 def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     """Append a Sources section listing every cited source (and a note of what could not be read), save the
     corpus, and write a .docx next to the report. Returns {"report", "docx", "cited"}."""
-    from .verify import citations_in
+    from .verify import citations_in, split_sources
     p = Path(report_path)
-    text = p.read_text()
-    text = re.sub(r"\n## Sources\n.*\Z", "", text, flags=re.S).rstrip() + "\n"
+    text = split_sources(p.read_text())[0].rstrip() + "\n"
     cited = {c.split(".")[0] for c in citations_in(text)}
     text += "\n## Sources\n" + corpus.bibliography(cited) + "\n"
     p.write_text(text)

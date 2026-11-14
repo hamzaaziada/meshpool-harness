@@ -32,14 +32,17 @@ def _get(url: str, timeout: float = 30) -> str:
 
 
 def treasury_yield(tenor: str = "10Y", year: int | None = None, text: str | None = None) -> dict:
-    """Latest par yield for the tenor. Returns {value (decimal), date, source, url}."""
+    """Latest par yield for the tenor. Returns {value (decimal), date, source, url}. With the current year and no
+    text given, an empty feed (the first days of January) falls back to last year's feed."""
+    this_year = year is None
     year = year or int(time.strftime("%Y"))
     url = TREASURY.format(year=year)
+    fetched = text is None
     text = text if text is not None else _get(url)
     tag = TENORS[tenor]
     rows = re.findall(r"<d:NEW_DATE[^>]*>(\d{4}-\d{2}-\d{2})T[^<]*<.*?<d:" + tag + r"[^>]*>([\d.]+)<", text, re.S)
     if not rows:
-        if text is None and year > 2000:
+        if fetched and this_year:
             return treasury_yield(tenor, year - 1)
         raise ValueError(f"no {tenor} yields in the Treasury feed for {year}")
     d, v = max(rows)

@@ -11,4 +11,5 @@ export PATH="$RES/python/bin:$PATH"
 export PYTHONPATH="$RES/app" PYTHONUTF8=1 PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
 export PYTHONDONTWRITEBYTECODE=1   # bytecode is precompiled inside the app; never write into it
 export MESHPOOL_CLI="$RES/meshpool"
-exec "$RES/python/bin/python3" -m meshpool_harness "$@"
+# -P: never import modules from the folder the command is typed in (a json.py in a project must not run).
+exec "$RES/python/bin/python3" -P -m meshpool_harness "$@"

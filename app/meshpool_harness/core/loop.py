@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 from dataclasses import dataclass, field
 
-from .guards import Guards, enabled, log_failure
+from .guards import Abort, Guards, enabled, log_failure
 from .metrics import CacheMeter
 from .tools import CORE, ToolError, Workspace, schemas, validate
 
@@ -50,7 +50,7 @@ def build_prefix(system_text: str, tool_names: list[str], skill_index: dict[str,
 def _compact(messages: list, keep_recent: int) -> list:
     """Elide old tool outputs (they are saved to files already). Keeps system, task, and recent turns verbatim."""
     tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    for i in tool_idx[:-keep_recent]:
+    for i in tool_idx[:max(0, len(tool_idx) - keep_recent)]:
         c = messages[i].get("content") or ""
         if len(c) > 400 and not c.startswith("[elided"):
             messages[i] = dict(messages[i], content="[elided at compaction] " + c[:300])
@@ -76,60 +76,6 @@ def _sanitize_calls(calls: list) -> list:
         c["type"] = "function"
         out.append(c)
     return out
-
-
-FINISH_REVIEW = """You check whether an agent's finished work meets the task. You see the task, the agent's answer, its
-last command outputs, and its code diff if any. Answer in JSON: {"verdict": "ok" | "concern", "concern": "<one or two
-sentences>"}. Say "concern" ONLY for something concrete you can point to: a requirement the task states explicitly
-(a file, path, name, format, output value, behaviour) that the evidence shows is missing or wrong, or output that
-shows an error the agent did not fix. Do not ask for more tests, style changes or extra features. If unsure, say "ok"."""
-
-
-def _finish_review(task_text: str, answer: str, messages: list, ws, client, model: str, ctx: dict) -> str | None:
-    """v3 one-call second opinion at the first finish (MH_REVIEW=1). Shown once; never blocks a second finish."""
-    import subprocess as _sp
-    tails = [str(m.get("content") or "")[-1200:] for m in messages if m.get("role") == "tool"][-3:]
-    diff = ""
-    try:
-        r = _sp.run(["git", "diff", "HEAD", "--", ".", ":!.run", ":!.junie"], cwd=str(ws.root), capture_output=True,
-                    text=True, timeout=20)
-        diff = r.stdout[:8000] if r.returncode == 0 else ""
-    except Exception:
-        pass
-    body = (f"<task>\n{task_text[:6000]}\n</task>\n<answer>\n{answer[:1500]}\n</answer>\n<last_outputs>\n"
-            + "\n---\n".join(tails) + "\n</last_outputs>" + (f"\n<diff>\n{diff}\n</diff>" if diff.strip() else ""))
-    try:
-        resp = client.chat(model=model, messages=[{"role": "system", "content": FINISH_REVIEW},
-                                                  {"role": "user", "content": body}],
-                           max_tokens=300, task_id=ctx.get("task_id", "") + "-rv", role="verifier",
-                           extra={"response_format": {"type": "json_object"}})
-        txt = resp["choices"][0]["message"].get("content") or ""
-        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
-    except Exception:
-        return None
-    if d.get("verdict") == "concern" and str(d.get("concern", "")).strip():
-        return ("REVIEW (a second reader saw the task, your answer and your last outputs): " + d["concern"].strip()
-                + "\nIf it is right, fix it and finish again. If it is wrong, finish again with the same answer.")
-    return None
-
-
-def _endstate_report(task_text: str, ws) -> str:
-    """P1 light end-state check (MH_ENDSTATE_CHECK=1): shown once at the first finish, never enforced. Re-runs the
-    last check command if files changed after it, and lists the absolute paths the task names."""
-    import re as _re
-    parts = []
-    checks = [c for c in getattr(ws, "commands", []) if c.get("kind") == "check"]
-    if checks and checks[-1].get("after_edit", 0) < getattr(ws, "edits", 0):
-        out, code = ws._run(checks[-1]["cmd"], 300, "check")
-        parts.append(f"$ {checks[-1]['cmd']}  (re-run: files changed after it last ran)\n{out[-1500:]}")
-    paths = []
-    for m in _re.findall(r"(?<![\w.])(/(?:[\w.\-]+/)*[\w.\-]+)", task_text):
-        if m not in paths and not m.startswith(("/dev/", "/proc/", "/usr/", "/bin/", "/etc/")) and len(paths) < 8:
-            paths.append(m)
-    if paths:
-        out, _ = ws._run("ls -ld " + " ".join(json.dumps(x) for x in paths) + " 2>&1", 30, "bash", record=False)
-        parts.append("Paths named in the task:\n" + out[-1200:])
-    return "\n\n".join(parts)
 
 
 from .finishing import scope_report as _scope_report  # noqa: E402,F401  (shared with the app agent)
@@ -223,8 +169,6 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_OBSERVE") == "1" and "bash" in tool_names and "probe" not in tool_names:
         i = tool_names.index("bash") + 1                                     # see the bug before editing it
         tool_names = tool_names[:i] + ["probe", "trace"] + tool_names[i:]
-    if os.environ.get("MH_NAV") == "1" and "grep" in tool_names and "symbol" not in tool_names:
-        tool_names = tool_names[:tool_names.index("grep") + 1] + ["symbol"] + tool_names[tool_names.index("grep") + 1:]
     if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # v3: required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
@@ -317,22 +261,6 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                "then finish.")
                         messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": out})
                         continue
-                    if name == "finish" and os.environ.get("MH_REVIEW") == "1" and not res.usage.get("review_done"):
-                        res.usage["review_done"] = 1
-                        rv = _finish_review(task_text, args.get("answer", ""), messages, ws, client, model, ctx)
-                        if rv:
-                            log_failure(ctx, "review_concern", True, rv[:200])
-                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": rv})
-                            continue
-                    if name == "finish" and os.environ.get("MH_ENDSTATE_CHECK") == "1" and not res.usage.get("endstate_shown"):
-                        res.usage["endstate_shown"] = 1
-                        rep = _endstate_report(task_text, ws)
-                        if rep:
-                            messages.append({"role": "tool", "tool_call_id": c.get("id", ""),
-                                             "content": "End-state check (shown once; finish is accepted next time):\n"
-                                                        + rep + "\nIf this matches what the task asks for, call finish "
-                                                                "again. If not, fix it first."})
-                            continue
                     if (name == "finish" and os.environ.get("MH_SCOPE_CHECK") == "1" and require_check
                             and not res.usage.get("scope_shown")):
                         res.usage["scope_shown"] = 1
@@ -384,9 +312,12 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                 True, str(e))
                     if "stale edit" in str(e):
                         log_failure(ctx, "stale_edit", True, str(e))
-                except RuntimeError as e:
+                except Abort as e:
                     res.reason = str(e)
                     return res
+                except Exception as e:  # noqa: BLE001  any other tool failure (OSError, NotImplementedError ...) is
+                    out = f"ERROR: {type(e).__name__}: {e}"            # the model's to handle, not the end of the run
+                    log_failure(ctx, "tool_error", True, out[:200])
                 messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": str(out)})
                 if str(out).startswith("ERROR") or "batch STOPPED" in str(out) or "\nERROR:" in str(out):
                     turn_failed = True

@@ -20,8 +20,14 @@ def _cexec(container, cdir, cmd, timeout=60):
 
 def discover(host_root: str, container: str | None, cdir: str | None) -> str:
     root = Path(host_root)
-    run = (lambda c: _cexec(container, cdir, c)) if container else (
-        lambda c: subprocess.run(c, shell=True, cwd=root, capture_output=True).returncode)
+
+    def run(code: str) -> int:                       # exit code of `python -c code`, in the container or here
+        if container:
+            return _cexec(container, cdir, f"python -c '{code}' 2>/dev/null")
+        try:                                         # list args: no shell syntax, so it works under Windows too
+            return subprocess.run(["python", "-c", code], cwd=root, capture_output=True, timeout=60).returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return 1
     lines = []
     if (root / "tests" / "runtests.py").exists() and (root / "django").is_dir():
         lines.append("This is Django: run tests with `python tests/runtests.py <app_label or dotted test path> "
@@ -30,7 +36,7 @@ def discover(host_root: str, container: str | None, cdir: str | None) -> str:
     elif (root / "bin" / "test").exists() and (root / "sympy").is_dir():
         lines.append("This is SymPy: run tests with `bin/test <path/to/test_file.py> -k <name>` "
                      "(pytest may also work: check once).")
-    has_pytest = run("python -c 'import pytest' 2>/dev/null") == 0
+    has_pytest = run("import pytest") == 0
     if not lines:
         if has_pytest:
             lines.append("Run tests with `python -m pytest -q <path/to/test_file.py>::<test_name>`.")

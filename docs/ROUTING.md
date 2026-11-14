@@ -1,29 +1,34 @@
+<img src="../app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Meshpool Auto and adding harnesses
 
 ## How Meshpool Auto picks a harness
 
-When a new thread starts with **Meshpool Auto**, Meshpool:
+When a new chat starts with **Meshpool Auto**, Meshpool:
 
-1. Sorts the task into a category: code, terminal, browser, research, documents, data, gtm or general. It does this by matching keywords, with no model call.
-2. Takes that category's score for each harness from the routing table. It adds a small bonus for the current mode (Cowork or Code).
-3. Picks the highest-scoring harness that is installed and can run on your provider (see [PROVIDERS.md](PROVIDERS.md)). A harness on a Claude or ChatGPT sign-in you did not choose as the provider is picked only when **Let Auto use your other subscriptions** is on.
+1. Sorts the task into a category: code, terminal, browser, research, documents, data, gtm or general. It matches keywords, with no model call. A phrase of several words counts for more than a single generic word, and a tie goes to the category named first in the request.
+2. Takes each agent's benchmark quality for that category from the routing table, plus a small bonus for the current mode (Work or Code). Only agents that are installed and can run on your provider count (see [PROVIDERS.md](PROVIDERS.md)). An agent on a Claude or ChatGPT sign-in you did not choose as the provider counts only when **Let Auto use your other subscriptions** is on.
+3. **Quality first.** It finds the best quality among those agents. Every agent within `quality_band` points of it (5 by default: one task in twenty, inside run-to-run noise) counts as equally good. An agent below that is never picked, however cheap.
+4. **Then cost, then speed.** Among the equally good agents it picks the lowest cost per solved task, then the shortest time. Where the table has no cost or time for an agent, quality decides.
 
-The thread shows which harness Auto picked and why.
+The chat shows which agent Auto picked and why, for example: "Benchmark quality within 5 points of the best for a code task (fix, test), at the lowest cost ($0.0069 per solved task vs $0.0079)."
 
-## Updating the scores from benchmarks
+## Updating the numbers from benchmarks
 
-The routing table is `app/defaults/routing.json`. The current scores come from the results in [BENCHMARKS.md](BENCHMARKS.md). A copy saved as `routing.json` in the Meshpool data folder overrides it on one computer.
+The routing table is `app/defaults/routing.json`. The numbers come from [BENCHMARKS.md](BENCHMARKS.md). A copy saved as `routing.json` in the Meshpool data folder overrides it on one computer.
 
-For each category, set `scores` to your benchmark results, from 0 to 100 per harness id. Update `source` to say where the numbers came from.
+Per category, `scores` is the quality from 0 to 100 (the solve rate where measured). `cost_usd` and `seconds` are the cost and time per solved task; take them from one run where every agent ran at the same time, or leave an agent out. Update `source` to say where the numbers came from.
 
 ```json
 "data": {
   "keywords": ["excel", "spreadsheet", "forecast"],
-  "scores": {"meshpool-work": 84, "meshpool-data": 91, "hermes": 74}
+  "scores": {"meshpool-work": 84, "hermes": 74},
+  "cost_usd": {"meshpool-work": 0.012},
+  "seconds": {"meshpool-work": 111}
 }
 ```
 
-To add a category, give it `keywords` and `scores`. A harness with no score in a category is never picked for it.
+To add a category, give it `keywords` and `scores`. An agent with no score in a category is never picked for it.
 
 ## Adding a new harness
 

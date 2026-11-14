@@ -55,6 +55,17 @@ _DENSITY_SAID = re.compile(r"(?i)[\"']?density[\"']?\s*[:=]|\b(?:present|balance
                            r"\bstand[- ]?alone\b|\btext[- ]heavy\b|\bfew(?:er)? words\b|\b(?:less|not too) (?:dense|wordy)\b")
 
 
+def slide_count(text: str) -> int | None:
+    """The slide count a request asks for ("6 slides", "6-page", "slides: 6", "6slides"); the Brief line that
+    apply() writes wins over the request's own wording. None when it says none. The engine parses with this too."""
+    brief = re.search(r"\n\nBrief: ([^\n]*)\s*$", text or "")
+    for part in ([brief.group(1)] if brief else []) + [text or ""]:
+        m = _SLIDES.search(part)
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
 def _text(request: str, files=None) -> str:
     names = " ".join(Path(str(f)).stem.replace("_", " ").replace("-", " ") for f in files or [])
     return f"{request or ''} {names}"
@@ -123,8 +134,7 @@ def recommend(request: str, files=None, fields: dict | None = None) -> dict:
                 else "balanced")
         if re.search(r"(?i)\breport\b|\bdetailed\b|\bin[- ]depth\b|\bcomprehensive\b|\bdeliverable\b", t):
             dens = "read"
-    m = _SLIDES.search(request or "")
-    slides = (_norm_answer("slides", _given(fields, "slides") or "") or (m and (m.group(1) or m.group(2)))
+    slides = (_norm_answer("slides", _given(fields, "slides") or "") or slide_count(request)
               or {"present": 8, "balanced": 10, "read": 12}[dens])
     theme = str(_given(fields, "theme") or "").lower()
     if theme not in THEMES:
@@ -188,7 +198,7 @@ def apply(request: str, answers: dict | None) -> str:
         bits.append(f"purpose: {a['purpose']}")
     if a.get("density") in DENSITIES and not re.search(r"(?i)density\s*[:=]", request or ""):
         bits.append(f"density: {a['density']}")
-    if a.get("slides") and not have["slides"]:
+    if a.get("slides") and (not have["slides"] or slide_count(request) != int(a["slides"])):   # a field wins
         bits.append(f"{a['slides']} slides")
     if a.get("theme") in THEMES and not re.search(r"(?i)\b" + a["theme"] + r"\s+theme\b", request or ""):
         bits.append(f"{a['theme']} theme")

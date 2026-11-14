@@ -48,11 +48,15 @@ OUT["research"] = [
 CREDIT = (r"\b(credit (memo|analysis|review|approval|request)|dscr|debt service coverage|cash available for debt "
           r"service|debt capacity|loan (request|approval|underwriting|application)|underwrit\w+ (the|a|this) loan|"
           r"covenant (tests?|compliance)|global cash flow|borrower)\b")
-# phrases that look like one engine but are not ("data" in "data pipeline code" is code)
-NEG = {
-    "data": [r"\bdata (pipeline|loader|class|model) (code|bug|test)", r"\bcsv (parser|reader|writer) (bug|code)"],
-    "sheets": [r"\b(read|parse|write|load|open) (an? |this |the )?(excel|xlsx) (file )?(in|with|using) (python|pandas|openpyxl)"],
-}
+# An artifact word directly modifying a code noun (or handled with a programming tool) names code, not the artifact:
+# "the slide renderer test", "the pptx exporter", "the survey parser", "an excel file with openpyxl". One general rule
+# instead of a hand list of phrases.
+ARTIFACT_OF = {"slide": "slides", "slides": "slides", "deck": "slides", "decks": "slides", "pptx": "slides",
+               "excel": "sheets", "xlsx": "sheets", "csv": "data", "survey": "data", "data": "data"}
+CODE_NOUN = (r"\b(?P<art>" + "|".join(sorted(ARTIFACT_OF, key=len, reverse=True)) + r")[ _-]+"
+             r"(?:parser|renderer|exporter|importer|loader|reader|writer|tests?|module|class|function|script|api)s?\b"
+             # a workbook handled in code (reading data in pandas stays data work)
+             r"|\b(?P<book>excel|xlsx) (?:files? )?(?:in|with|using) (?:python|pandas|openpyxl|polars|javascript|node)\b")
 CREATE = (r"\b(make|create|build|generate|produce|put together|prepare|draft|design|set up|update|add|turn|"
           r"convert|give me|need|want|write)\b")
 TABULAR = {".csv", ".tsv", ".parquet", ".json", ".jsonl", ".xlsx", ".xls", ".feather"}
@@ -80,11 +84,12 @@ def _score_text(text: str) -> dict[str, float]:
     for e, pats in OUT.items():
         for p, w in pats:
             sc[e] += w * len(re.findall(p, t))
-    for e, pats in NEG.items():
-        for p in pats:
-            if re.search(p, t):
-                sc[e] = max(0.0, sc[e] - 3.0)
-                sc["code"] += 2.0
+    for m in re.finditer(CODE_NOUN, t):        # "the survey parser" is code: take back the artifact word's points
+        word = m.group("art") or m.group("book")
+        e = ARTIFACT_OF[word]
+        if re.search(OUT[e][0][0], word):       # only what the word itself scored ("data" alone scores nothing)
+            sc[e] = max(0.0, sc[e] - OUT[e][0][1])
+        sc["code"] += 2.0
     return sc
 
 

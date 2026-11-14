@@ -139,3 +139,62 @@ def test_router_sends_credit_work_to_the_credit_engine():
     assert decide("Prepare a credit memo with DSCR for this borrower", ["fs.xlsx"])[0] == ["credit"]
     assert decide("What is the debt capacity of Acme at 1.25x DSCR?")[0] == ["credit"]
     assert decide("Fix the failing DSCR unit test in the loan module")[0] != ["credit"]
+
+
+def test_parse_request_amounts_rate_and_amortisation():
+    from engines.credit.engine import parse_request
+    r = parse_request("A $45,000,000 term loan at 80% LTV, 6.5% interest, 5-year term with 20-year amortization")
+    assert r["amount"] == pytest.approx(45.0) and r["rate"] == 0.065
+    assert r["amort_years"] == 20.0 and r["term_years"] == 5.0
+    r = parse_request("Refinance 100% of debt with USD 3,500,000 at 7.25%, amortizing over 10 years")
+    assert r["amount"] == pytest.approx(3.5) and r["rate"] == 0.0725 and r["amort_years"] == 10.0
+    assert "rate" not in parse_request("$5m loan, 75% loan-to-value")
+
+
+def _table(tmp_path, text, name="t.csv"):
+    p = tmp_path / name
+    p.write_text(text)
+    return A.from_table(str(p))
+
+
+def test_from_table_newest_first_and_label_exclusions(tmp_path, fin):
+    import csv
+    import io
+    out = io.StringIO()
+    csv.writer(out).writerows([r[0], r[2], r[1]] for r in csv.reader(io.StringIO(CSV)) if r)   # FY2025 first
+    swapped = out.getvalue()
+    rev = _table(tmp_path, swapped.replace("Net sales,", "Interest income,1,1\nNet sales,"))
+    assert rev.years == ["FY2024", "FY2025"] and rev.v("FY2025", "revenue") == 110
+    assert rev.v("FY2025", "interest_expense") == -2.5 and "Interest income" in rev.sources["_unmapped"]
+    assert A.analyse(rev)["history"][-1]["ebitda"] == A.analyse(fin)["history"][-1]["ebitda"]
+    for lab in ("Accumulated depreciation", "Common stock", "Treasury stock", "Income tax payable",
+                "Accrued interest", "Sales and marketing", "Deferred revenue"):
+        assert A.match_label(lab) is None, lab
+    assert A.match_label("Interest expense, net of interest income") == "interest_expense"
+    dup = _table(tmp_path, "X,FY2025\nRevenue,10\nNet sales,12\n", "dup.csv")
+    assert dup.v("FY2025", "revenue") == 10 and any("Net sales" in u for u in dup.sources["_unmapped"])
+
+
+def test_negative_tnw_and_ebitda_fail_their_covenants(fin):
+    from engines.credit import memo
+    loan = A.Loan(amount=1, rate=0.08, amort_years=5)
+    neg_tnw = A.Financials("X", fin.years, {y: dict(fin.values[y]) for y in fin.years})
+    neg_tnw.values["FY2025"]["goodwill"] = 60                                  # TNW = 51 - 60 < 0
+    r = A.analyse(neg_tnw, loan)
+    tnw = next(c for c in r["covenants"] if "TNW" in c["covenant"])
+    assert tnw["value"] is None and tnw["pass"] is False
+    assert memo.recommendation(r)[0] != "Approve"
+    loss = A.Financials("L", fin.years, {y: dict(fin.values[y]) for y in fin.years})
+    loss.values["FY2025"]["operating_income"] = -20                          # EBITDA = -14
+    r = A.analyse(loss, loan)
+    lev = next(c for c in r["covenants"] if "leverage" in c["covenant"])
+    assert r["pro_forma"]["leverage"] is None and lev["pass"] is False and r["history"][-1]["leverage"] is None
+    assert r["covenants"][0]["ebitda_cushion"] is None and r["ebitda_decline_to_min_dscr"] is None
+    assert r["rating"]["components"]["leverage"] == 5
+    assert r["stress"][0]["ebitda"] == pytest.approx(-14 - 1.4)               # a loss gets worse under stress
+
+
+def test_tax_benefit_is_not_a_cash_tax(fin):
+    ben = A.Financials("B", fin.years, {y: dict(fin.values[y]) for y in fin.years})
+    ben.values["FY2025"]["income_tax"] = 3.0                                  # a benefit (expense is negative)
+    assert A.analyse(ben)["history"][-1]["cash_taxes"] == 0.0

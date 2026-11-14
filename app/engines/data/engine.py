@@ -77,9 +77,6 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
                 sources[os.path.basename(f)] = "\n".join(p.text for p in docx.Document(f).paragraphs)
             except Exception:
                 pass
-    if os.environ.get("MH_MEMORY", "1") == "1":
-        from meshpool_harness.memory import block as _lessons
-        task += _lessons("data", task[:4000])
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     system = SYSTEM + (LEAN if os.environ.get("MH_DATA_VARIANT", "v2") == "v2" else "")

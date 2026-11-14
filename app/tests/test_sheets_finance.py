@@ -103,7 +103,7 @@ def recompute():
 
     def per_share(w, g):
         pv = (fcf / (1 + w) ** (t - x["mid_year"] / 2)).sum()
-        tv = fcf[-1] * (1 + g) / (w - g) / (1 + w) ** n
+        tv = fcf[-1] * (1 + g) / (w - g) / (1 + w) ** (n - x["mid_year"] / 2)     # Gordon: final-year timing
         return pv, tv, (pv + tv - x["debt"] + x["cash"]) / x["shares"]
     pv, pvtv, ps = per_share(wacc, x["terminal_growth"])
     ev = pv + pvtv
@@ -216,3 +216,15 @@ def test_engine_refuses_source_reads_and_pushes_a_first_build(tmp_path):
     assert "[exit 0]" in ws.bash("python -c \"from engines.sheets import builder as B; print(B.FMT['pct'])\"")
     (tmp_path / "model.xlsx").write_bytes(b"x")
     assert E.build_first(4, 5, ws) is None                                 # a saved workbook: no nudge
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed for recalculation")
+def test_terminal_growth_at_or_above_wacc_is_flagged(tmp_path, monkeypatch):
+    monkeypatch.setitem(INP, "terminal_growth", 0.2)                     # above any WACC here
+    p = tmp_path / "g.xlsx"
+    _, _, dcf, _ = build(p)
+    wb = load_workbook(qa.recalc(str(p), str(tmp_path / "rc")), data_only=True)
+    assert wb["DCF"][f"B{dcf['rows']['tv']}"].value == "#N/A"
+    ch = wb["Checks"]
+    row = next(r for r in range(4, ch.max_row + 1) if "growth is below WACC" in str(ch[f"A{r}"].value))
+    assert ch[f"C{row}"].value == "ERROR" and ch["F3"].value == "ERROR"

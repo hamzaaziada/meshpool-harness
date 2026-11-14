@@ -73,9 +73,40 @@ def _short(p: Path) -> str:
 
 # ---------- step 1: the key ---------------------------------------------------------------------------------------
 
+KEY_ENV = ("MESHPOOL_BASE_URL", "MH_MODEL", "MESHPOOL_API_KEY")
+
+
 def key_step(st, header: bool = False, n: int | None = None, custom: bool = False) -> bool:
     """Ask for the key, check it with one tiny model call, save it only if it works. With custom, ask for another
-    provider's OpenAI-compatible address first."""
+    provider's OpenAI-compatible address first. The endpoint, model and key in this process change only when a key is
+    saved: a cancel (Ctrl+C, end of input) or failed keys put the old ones back, so a running session never sends the
+    old key to the new address."""
+    before = {k: os.environ.get(k) for k in KEY_ENV}
+    ok = False
+    try:
+        ok = _key_step(st, header, n, custom)
+        return ok
+    finally:
+        if not ok:
+            for k, v in before.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+def _check_model(custom: bool) -> str:
+    """A model for the key check that the endpoint just entered serves: never a chatgpt:/anthropic: model, which would
+    test that sign-in or key instead of the pasted one."""
+    from meshpool_harness import providers as PV
+    m = (os.environ.get("MH_MODEL") or "").strip()
+    head, sep, bare = m.partition(":")
+    if sep and head in PV.PREFIXED:
+        return bare if custom and bare else "deepseek-v4.1-flash"
+    return m or "deepseek-v4.1-flash"
+
+
+def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
     from meshpool_harness.cli import ping
     if header:
         _p()
@@ -112,7 +143,6 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
         _p(f"  No key yet? Get one at {st.blue(KEY_URL)} and run every model 20% cheaper.")
         _p(st.dim("  Press Enter with nothing typed to open it."))
         _p()
-    old = os.environ.get("MESHPOOL_API_KEY")
     reset = {}
     saved_base = (C.read().get("MESHPOOL_BASE_URL") or "").rstrip("/")
     if not custom and saved_base not in ("", "https://llm.meshpool.ai/v1"):
@@ -138,7 +168,7 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
             continue
         os.environ["MESHPOOL_API_KEY"] = key
         _p(st.dim("    Checking your key..."))
-        r = ping()
+        r = ping(_check_model(custom))
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"])
@@ -157,12 +187,7 @@ def key_step(st, header: bool = False, n: int | None = None, custom: bool = Fals
         _p(st.amber(f"    Saved, but Meshpool could not reach the model: {msg[:200]}"))
         _p(st.dim("    Check your internet connection. `meshpool check --live` tests it again."))
         return True
-    for k, v in (("MESHPOOL_API_KEY", old), ("MESHPOOL_BASE_URL", old_base)):
-        if v:
-            os.environ[k] = v
-        else:
-            os.environ.pop(k, None)
-    return False
+    return False                                  # key_step puts the old endpoint, model and key back
 
 
 def _use(which: str) -> None:

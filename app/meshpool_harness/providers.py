@@ -56,12 +56,21 @@ def host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
+def _openai_pair() -> tuple[str, str]:
+    """(key, base URL) from OPENAI_API_KEY and OPENAI_BASE_URL, only when there is no Meshpool key and both are set:
+    an OpenAI key alone must never be sent to the Meshpool endpoint."""
+    if _cfg("MESHPOOL_API_KEY"):
+        return "", ""
+    k, b = os.environ.get("OPENAI_API_KEY", "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
+    return (k, b) if k and b else ("", "")
+
+
 def key_base() -> str:
-    return (_cfg("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
+    return (_openai_pair()[1] or _cfg("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
 
 
 def key() -> str:
-    return _cfg("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY", "").strip()
+    return _cfg("MESHPOOL_API_KEY") or _openai_pair()[0]
 
 
 def anthropic_key() -> str:

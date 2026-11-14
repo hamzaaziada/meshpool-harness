@@ -27,7 +27,7 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
-from .common import positive_axis_ids
+from .common import numbers as number_tokens, positive_axis_ids
 from .density import condense
 from .template import default_template, layout
 
@@ -379,8 +379,8 @@ class Ctx:
         ids = [p for p in (prov or []) if p]
         if not text or not ids:
             return
-        for m in NUM_RE.finditer(re.sub(r"\*\*|\^\w+", "", text)):
-            self.prov.setdefault(str(n), []).append({"text": m.group(0).strip(), "prov": ids[0]})
+        for raw, _, _ in number_tokens(re.sub(r"\*\*|\^\w+", "", text)):     # the extractor P13 reads with
+            self.prov.setdefault(str(n), []).append({"text": raw, "prov": ids[0]})
 
 
 def _header(ctx, s, sl, n, title_w=None):
@@ -450,90 +450,6 @@ def _footer(ctx, s, sl, n):
 
 
 # ------------------------------------------------------------------ charts
-PLOT = (0.09, 0.03, 0.88, 0.85)                        # manual inner plot area (fractions of the chart frame)
-
-
-def _manual_plot(chart):
-    pa = chart._chartSpace.find(".//" + qn("c:plotArea"))
-    lay = pa.find(qn("c:layout"))
-    if lay is None:
-        lay = pa.makeelement(qn("c:layout"), {})
-        pa.insert(0, lay)
-    for c in list(lay):
-        lay.remove(c)
-    ml = lay.makeelement(qn("c:manualLayout"), {})
-    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", PLOT[0]),
-                     ("c:y", PLOT[1]), ("c:w", PLOT[2]), ("c:h", PLOT[3])):
-        ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
-    lay.append(ml)
-
-
-def _bubble(ctx, sl, n, c, x, y, w, h):
-    """Bubble chart with think-cell style labels: the plot area is fixed, so every label is a real text box placed
-    next to its bubble (or at a leader-line offset), never an auto-placed chart label that can collide."""
-    cd = BubbleChartData()
-    pts = c["points"]
-    se = cd.add_series(c.get("series_name", "items"))
-    for p in pts:
-        se.add_data_point(p["x"], p["y"], p.get("size", 1))
-    gf = sl.shapes.add_chart(XL_CHART_TYPE.BUBBLE, Inches(x), Inches(y), Inches(w), Inches(h), cd)
-    positive_axis_ids(gf.chart)
-    gf.name = "Chart"
-    ch = gf.chart
-    ch.has_legend = False
-    ch.has_title = False
-    ch.font.size = Pt(T["label"])
-    ch.font.color.theme_color = TC.TEXT_1
-    plot = ch.plots[0]
-    scale = c.get("bubble_scale", 45)
-    plot.bubble_scale = scale
-    s = plot.series[0]
-    for i, p in enumerate(pts):
-        pt = s.points[i]
-        pt.format.fill.solid()
-        pt.format.fill.fore_color.theme_color = TC.ACCENT_3 if p.get("focus") else (TC.ACCENT_5 if p.get("muted") else TC.TEXT_2)
-        pt.format.line.color.theme_color = TC.BACKGROUND_1
-    from pptx.enum.chart import XL_TICK_LABEL_POSITION
-    for ax, key in ((ch.value_axis, "y"), (ch.category_axis, "x")):
-        ax.has_major_gridlines = False
-        ax.tick_labels.font.size = Pt(T["label"])
-        ax.format.line.color.theme_color = TC.TEXT_1
-        ax.tick_label_position = XL_TICK_LABEL_POSITION.LOW
-        lo, hi = c[f"{key}_range"]
-        ax.minimum_scale, ax.maximum_scale = lo, hi
-        if c.get(f"{key}_major"):
-            ax.major_unit = c[f"{key}_major"]
-    if c.get("x_cross") is not None:
-        ch.category_axis.crosses_at = c["x_cross"]
-    if c.get("y_cross") is not None:
-        ch.value_axis.crosses_at = c["y_cross"]
-    _manual_plot(ch)
-    _alt(gf, c.get("alt") or "Bubble chart")
-    # data -> slide coordinates
-    (x0, x1), (y0, y1) = c["x_range"], c["y_range"]
-    px0, py0, pw, ph = x + PLOT[0] * w, y + PLOT[1] * h, PLOT[2] * w, PLOT[3] * h
-    to_xy = lambda xv, yv: (px0 + (xv - x0) / (x1 - x0) * pw, py0 + (y1 - yv) / (y1 - y0) * ph)
-    for i, p in enumerate(pts):
-        if not p.get("label"):
-            continue
-        focus = bool(p.get("focus"))
-        pos = p.get("label_pos") or ("left" if p["x"] > x0 + 0.62 * (x1 - x0) else "right")
-        dl = s.points[i].data_label
-        dl.has_text_frame = True
-        dl.text_frame.text = ""
-        _rich(dl.text_frame.paragraphs[0], p["label"], T["label"] - 1,
-              TC.ACCENT_3 if focus else (TC.BACKGROUND_1 if pos == "center" else TC.TEXT_1), focus, numbers=False)
-        dl.position = {"right": XL_LABEL_POSITION.RIGHT, "left": XL_LABEL_POSITION.LEFT, "above": XL_LABEL_POSITION.ABOVE,
-                       "below": XL_LABEL_POSITION.BELOW, "center": XL_LABEL_POSITION.CENTER}[pos]
-    for a in c.get("annotations") or []:
-        ax_, ay_ = to_xy(a["x"], a["y"])
-        _write(_box(sl, ax_ + 0.05, ay_, 1.2, 0.25, "ov_Annot"), [{"text": a["text"], "size": T["label"], "numbers": False}])
-    if c.get("x_title"):
-        _write(_box(sl, x + w - 3.2, y + h - 0.02, 3.2, 0.26, "ov_XTitle"),
-               [{"text": c["x_title"], "size": T["label"], "numbers": False, "align": PP_ALIGN.RIGHT}])
-    return gf
-
-
 def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
     """Native bubble chart (editable data, axes crossing at reference values) with think-cell style labels: a
     collision-free solver picks each label's spot (never over another label, a bubble or the tick labels), and the
@@ -582,8 +498,9 @@ def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
         ax.format.line.width = Pt(0.75)
         ax.tick_label_position = XL_TICK_LABEL_POSITION.LOW
         ax.minimum_scale, ax.maximum_scale, ax.major_unit = lo, hi, major
-    ch.category_axis.crosses_at = yc                         # the x axis crosses the y axis at y = y_cross
-    ch.value_axis.crosses_at = xc
+    # python-pptx's crosses_at is "the value on THIS axis where the other axis crosses" (written on the other axis)
+    ch.value_axis.crosses_at = yc                            # the x axis crosses the y axis at y = y_cross
+    ch.category_axis.crosses_at = xc
     pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
     lay = pa.find(qn("c:layout"))
     if lay is None:
@@ -933,6 +850,39 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
     return gf
 
 
+def _decimals(vals) -> int:
+    """Decimals the data needs (0, 1 or 2): 12 -> 0, 12.5 -> 1, 0.25 -> 2."""
+    for d in (0, 1):
+        if all(abs(v - round(v, d)) < 1e-9 for v in vals):
+            return d
+    return 2
+
+
+def _waterfall_style(plot, vals, spans, dec, usfx):
+    """Totals grey, increases and decreases in their own colours; each bar labelled once with its signed value."""
+    base, above, below = plot.series
+    base.format.fill.background()
+    base.format.line.fill.background()
+    last = len(vals) - 1
+    for j, v in enumerate(vals):
+        total = j in (0, last)
+        colr = TC.TEXT_2 if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_2)
+        lo, hi = spans[j]
+        for se in (above, below):
+            f = se.points[j].format
+            f.fill.solid()
+            f.fill.fore_color.theme_color = colr
+        num = f"{abs(v):,.{dec}f}{usfx}"
+        txt = ("-" + num if v < 0 else num) if total else ("+" if v >= 0 else "-") + num
+        lab_se = above if hi > 0 or lo == hi else below
+        dl = lab_se.points[j].data_label
+        dl.has_text_frame = True
+        dl.text_frame.text = txt
+        dl.position = XL_LABEL_POSITION.CENTER
+        dl.font.size = Pt(T["label"])
+        dl.font.color.theme_color = TC.BACKGROUND_1
+
+
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     if c.get("kind") == "range":
         return _range_chart(ctx, sl, n, c, x, y, w, h)
@@ -948,22 +898,38 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     x, y, w, h = _chart_box(kind, len(cats), len(series), x, y, w, h)
     cd = CategoryChartData()
     cd.categories = cats
-    fmt = "#,##0" if not c.get("decimals") else "#,##0." + "0" * int(c["decimals"])
-    if str(c.get("unit", "")).strip().lower() in ("%", "pp", "x"):          # the unit rides on the label: 38%
-        u = str(c["unit"]).strip()
-        fmt = f'{fmt}"{u if u != "pp" else " pp"}";-{fmt}"{u if u != "pp" else " pp"}"'
+    allv = [float(v) for se in series for v in se["values"] if isinstance(v, (int, float))]
+    dec = c.get("decimals")
+    dec = int(dec) if dec is not None else _decimals(allv)
+    fmt = "#,##0" + ("." + "0" * dec if dec else "")
+    u = str(c.get("unit", "")).strip()
+    usfx = {"%": "%", "x": "x", "pp": " pp"}.get(u.lower(), "")
+    if usfx:                                                   # the unit rides on the label: 38%
+        fmt = f'{fmt}"{usfx}";-{fmt}"{usfx}"'
     if kind == "waterfall":
+        # stacked columns: an invisible base, then the visible part above zero and the part below zero. Each bar
+        # spans the running total before and after its step (start and end totals span from zero), so steps that
+        # take the running total below zero draw where they belong; labels are the signed step values.
         vals = [float(v or 0) for v in series[0]["values"]]
-        base, run = [], 0.0
+        spans, run = [], 0.0
         for i, v in enumerate(vals):
             if i == 0 or i == len(vals) - 1:
-                base.append(0.0)
+                spans.append((min(0.0, v), max(0.0, v)))
                 run = v if i == 0 else run
             else:
-                base.append(run if v >= 0 else run + v)
+                spans.append((min(run, run + v), max(run, run + v)))
                 run += v
+        base, above, below = [], [], []
+        for lo, hi in spans:
+            if lo >= 0:
+                base.append(lo), above.append(hi - lo), below.append(None)
+            elif hi <= 0:
+                base.append(hi), above.append(None), below.append(lo - hi)
+            else:                                              # crosses zero: one piece each side
+                base.append(None), above.append(hi), below.append(lo)
         cd.add_series("base", base)
-        cd.add_series(series[0]["name"], [abs(v) for v in vals], fmt)
+        cd.add_series(series[0]["name"], above, fmt)
+        cd.add_series(series[0]["name"] + " (below zero)", below, fmt)
     else:
         for se in series:
             cd.add_series(se["name"], [None if v is None else float(v) for v in se["values"]], fmt)
@@ -992,15 +958,21 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         if kind in ("bar", "stacked_bar"):
             ca.reverse_order = True
         ca.tick_label_position = XL_TICK_LABEL_POSITION.LOW     # labels stay clear of negative bars
+        if kind in ("bar", "column", "stacked_bar", "stacked_column") and allv:
+            if min(allv) >= 0:                                 # the axis is hidden: bars must start at zero, or
+                va.minimum_scale = 0                           # auto-scaling exaggerates the differences
+            elif max(allv) <= 0:
+                va.maximum_scale = 0
     except Exception:
         pass
     hl = {str(v) for v in c.get("highlight_categories") or []}
     palette = [TC.TEXT_2, TC.ACCENT_4, TC.ACCENT_3, TC.ACCENT_5]
+    if kind == "waterfall":
+        _waterfall_style(plot, vals, spans, dec, usfx)
+        _alt(gf, c.get("alt") or f"waterfall chart of {series[0]['name']} ({c.get('unit', '')})")
+        return gf
     for i, s in enumerate(plot.series):
-        if kind == "waterfall" and i == 0:
-            s.format.fill.background()
-            continue
-        k = i - (1 if kind == "waterfall" else 0)
+        k = i
         if kind == "line":
             s.format.line.color.theme_color = palette[k % 4]
             s.format.line.width = Pt(2)
@@ -1408,28 +1380,37 @@ def stat_stack(c: dict, text: str = "") -> dict:
     """Unrelated headline numbers as big emphasised figures with labels (the consulting way). Each figure keeps its
     unit and precision, taken from how the slide's own text writes it when it does: $48.42/sh, $83.0bn, 35%."""
     items = []
-    cunit = str(c.get("unit", ""))
+    cunit = str(c.get("unit", "") or "").strip()
     dec = c.get("decimals")
+    # the chart's own unit: a ratio/percentage suffix, or a currency with an optional magnitude ($m, €bn, £)
+    usfx = {"%": "", "x": "x", "pp": " pp"}.get(cunit.lower())
+    cm = re.fullmatch(r"([$€£¥])?\s*(bn|mm|m|k|tn)?(\s*/\s*sh)?", cunit, re.I) if usfx is None else None
+    other = " " + cunit if cunit and usfx is None and not cm else ""     # a plain unit: 450 stores
     for se in c.get("series") or []:
         for cat, v in zip(c.get("categories") or [], se.get("values") or []):
             if not isinstance(v, (int, float)):
                 continue
+            cat = str(cat)                                  # categories may be numbers (years)
             ctx_ = f"{cat} {se.get('name', '')}"
-            pct = bool(re.search(r"%|share of|percent|premium|margin|growth", ctx_, re.I)) and abs(v) <= 100
-            cur = "$" if re.search(r"\$|dollar|price|value|cost|revenue|debt|capex", ctx_ + " " + cunit, re.I) and not pct else ""
-            per_share = bool(re.search(r"/\s*sh|per share|price", ctx_, re.I))
-            mag = ("" if per_share or pct else "bn" if re.search(r"\$?bn|billion", ctx_ + " " + cunit, re.I)
-                   else "m" if re.search(r"\$m\b|million", ctx_ + " " + cunit, re.I) else "")
+            pct = cunit == "%" or (usfx is None and not other and abs(v) <= 100
+                                   and bool(re.search(r"%|share of|percent|premium|margin|growth", ctx_, re.I)))
+            per_share = bool(re.search(r"/\s*sh|per share|price", ctx_, re.I) or (cm and cm.group(3)))
+            cur = (cm.group(1) if cm and cm.group(1) else
+                   "$" if not (pct or usfx or other) and re.search(r"\$|dollar|price|value|cost|revenue|debt|capex",
+                                                                   ctx_ + " " + cunit, re.I) else "")
+            mag = ("" if per_share or pct or usfx or other else (cm.group(2) or "").lower() if cm and cm.group(2)
+                   else "bn" if re.search(r"\$?bn|billion", ctx_, re.I)
+                   else "m" if re.search(r"\$m\b|million", ctx_, re.I) else "")
             d = dec if isinstance(dec, int) else (2 if per_share and v != int(v) else (1 if v != int(v) else 0))
             if per_share:
                 d = 2
-            num = f"{v:,.{d}f}"
-            tail = "/sh" if per_share else ""
+            num = ("-" if v < 0 else "") + cur + f"{abs(v):,.{d}f}"          # -$4.2m, not $-4.2m
+            tail = ("/sh" if per_share else "") + (usfx or "") + other
             lab = re.sub(r"^\s*\d+[.)]\s*", "", re.sub(r"\s*\([^)]*\)", "", cat)).strip()
             if len(c.get("series") or []) > 1:
                 lab = f"{lab}: {se.get('name', '')}"
             written = _as_written(v, text)
-            items.append({"value": written or f"{cur}{num}{mag}{'%' if pct else ''}{tail}", "label": lab})
+            items.append({"value": written or f"{num}{mag}{'%' if pct else ''}{tail}", "label": lab})
     if len(items) > 6:                                  # keep the first and the last (start and end of a story)
         items = items[:5] + items[-1:]
     return {"kind": "stats", "items": items}
@@ -1480,6 +1461,12 @@ def schema_errors(s: dict) -> list[str]:
             cells = r.get("cells") or []
             if len(cells) != 2 or not all(c.get("lead") for c in cells if isinstance(c, dict)):
                 errs.append(f"row {i}: needs exactly 2 cells, each with a 'lead' sentence and 1-3 bullets")
+    if a == "benchmark" and isinstance(s.get("benchmark"), dict):
+        k = len(s["benchmark"].get("companies") or [])
+        for p in s["benchmark"].get("panels") or []:
+            if isinstance(p, dict) and len(p.get("values") or []) != k:
+                errs.append(f"benchmark panel '{p.get('title', '')}' needs one value per company ({k}), "
+                            f"got {len(p.get('values') or [])}")
     if a == "exhibit_argument" and not s.get("title_right"):
         errs.append("'title_right' is missing: the right half's title continues the left title's thought")
     c = s.get("chart") or {}
@@ -1844,30 +1831,25 @@ def _table_as_chart(t: dict):
     if t.get("total_row") and rows:                    # a total is not a category: it would dwarf the bars
         rows = rows[:-1]
     cols = t.get("columns") or []
-    if not 2 <= len(rows) <= 6 or len(cols) < 2:
+    if not 2 <= len(rows) <= 6 or not 2 <= len(cols) <= 4:    # at most 3 value columns: nothing is left out
         return None
-    units, series = None, []
+    units, series = set(), []
     for ci in range(1, len(cols)):
         parsed = []
         for r in rows:
             m = _NUMCELL.match(_plain(r[ci]).replace("−", "-")) if ci < len(r) else None
             if not m:
-                parsed = None
-                break
+                return None                            # a text or blank cell: the table says more than a chart
             sign, cur, num, unit = m.groups()
-            parsed.append(((-1 if sign in ("-", "−") else 1) * float(num.replace(",", "")), (cur or "") + (unit or "").lower()))
-        if not parsed or len({u for _, u in parsed}) != 1:
-            continue
-        u = parsed[0][1]
-        if units is None:
-            units = u
-        if u == units and len(series) < 3:
-            series.append({"name": _plain(cols[ci]), "values": [v for v, _ in parsed]})
-    if not series:
+            parsed.append((-1 if sign in ("-", "−") else 1) * float(num.replace(",", "")))
+            units.add((cur or "") + (unit or "").lower())
+        series.append({"name": _plain(cols[ci]), "values": parsed})
+    if len(units) != 1:                                # one chart, one unit; otherwise keep the table
         return None
+    units = units.pop()
     cats = [_plain(r[0]) for r in rows]
     kind = "bar" if max(len(c) for c in cats) > 14 else "column"
-    decimals = 1 if any(abs(v - round(v)) > 1e-9 for se in series for v in se["values"]) else 0
+    decimals = _decimals([v for se in series for v in se["values"]])
     hl = [cats[i] for i in t.get("highlight_rows") or [] if i < len(cats)] if len(series) == 1 else []
     return {"kind": kind, "categories": cats, "series": series, "unit": units, "decimals": decimals,
             "highlight_categories": hl, "alt": f"{kind} chart: " + "; ".join(se["name"] for se in series)}
@@ -2121,6 +2103,8 @@ def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
     Median bar at the foot, a dashed median line across the peers and dotted 25th / 75th percentile lines. Values
     that are not meaningful show NM, not a bar. Returns the bar centres (y) for the shared label column."""
     vals = [None if v is None else float(v) for v in c["values"]]
+    if len(vals) != rows_n - 1:
+        raise ValueError(f"panel '{c.get('title', '')}' has {len(vals)} values for {rows_n - 1} companies")
     med = c.get("median")
     pts = [v for v in vals if v is not None] + ([float(med)] if med is not None else [])
     unit, dec = c.get("unit", "x"), c.get("decimals", 1)
@@ -2130,8 +2114,8 @@ def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
     amax = _nice_bounds(lo, hi)[1]
     PL = (0.02, 0.78)                                      # plot x and width (fractions of the frame)
     px = lambda v: x + w * (PL[0] + PL[1] * (v - lo) / (amax - lo))  # noqa: E731
-    band = h / len(shown)
-    centres = [y + band * (j + 0.5) for j in range(len(shown))]
+    band = h / rows_n                                      # one slot per label row (the Median row even without one)
+    centres = [y + band * (j + 0.5) for j in range(rows_n)]
     peers_bottom = y + band * len(vals)
     for key, dash, wt, colr in (("p25", 3, 0.75, TC.TEXT_2), ("p75", 3, 0.75, TC.TEXT_2), ("median", 4, 1.5, TC.TEXT_1)):
         v = c.get(key)                                     # drawn first: the bars and their labels sit on top
@@ -2144,9 +2128,9 @@ def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
         ln.line.width = Pt(wt)
         ln.line.dash_style = dash
     cd = CategoryChartData()
-    cd.categories = [str(i + 1) for i in range(len(shown))]
+    cd.categories = [str(i + 1) for i in range(rows_n)]
     fmt = f'0.{"0" * dec}"{unit}";-0.{"0" * dec}"{unit}"' if unit in ("x", "%") else f"0.{'0' * dec}"
-    cd.add_series(c.get("title", "Value"), shown, fmt)
+    cd.add_series(c.get("title", "Value"), shown + [None] * (rows_n - len(shown)), fmt)
     gf = sl.shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(x), Inches(y), Inches(w), Inches(h), cd)
     positive_axis_ids(gf.chart)
     gf.name = f"ov_{name}"
@@ -2420,7 +2404,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
                 _footer(ctx, s, sl, n)
-        except (KeyError, TypeError, IndexError, ValueError, AttributeError) as e:
+        except (KeyError, TypeError, IndexError, ValueError, AttributeError, ZeroDivisionError) as e:
             errors.append(f"slide {n} ({arch}): missing or malformed field: {type(e).__name__}: {e}")
             for shp in list(sl.shapes):                     # never leave a half-drawn slide: redraw it simply
                 if not shp.is_placeholder:

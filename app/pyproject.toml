@@ -14,7 +14,6 @@ dependencies = ["pandas>=2.0", "openpyxl>=3.1", "python-pptx>=0.6.23", "python-d
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
-code-intel = ["ruff>=0.5", "jedi>=0.19"]   # MH_LINT_EDIT and MH_NAV (both MIT); optional, with fallbacks
 dev = ["pytest>=8.0", "ruff"]
 
 [project.scripts]

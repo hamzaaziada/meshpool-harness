@@ -16,6 +16,7 @@ import sys
 import threading
 import uuid
 
+from meshpool_harness import __version__
 from meshpool_harness import config as C
 
 KINDS = {"read_file": "read", "grep": "search", "glob": "search", "web_search": "search", "web_research": "search", "fetch_url": "fetch", "edit": "edit",
@@ -55,7 +56,7 @@ class Server:
 
     # ---------- methods --------------------------------------------------------------------------------------
     def initialize(self, p):
-        return {"protocolVersion": 1, "agentInfo": {"name": "meshpool", "title": "Meshpool", "version": "2.2.0"},
+        return {"protocolVersion": 1, "agentInfo": {"name": "meshpool", "title": "Meshpool", "version": __version__},
                 "agentCapabilities": {"loadSession": False, "promptCapabilities": {"embeddedContext": True},
                                       "mcpCapabilities": {"http": True, "sse": False}},
                 "authMethods": []}

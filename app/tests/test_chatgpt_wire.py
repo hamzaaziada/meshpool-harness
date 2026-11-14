@@ -227,7 +227,9 @@ def test_meshpool_code_agent_streams_on_the_sign_in(mock, tmp_path, monkeypatch)
     monkeypatch.setenv("MESHPOOL_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
+    from meshpool_harness.agent import core
     from meshpool_harness.agent.core import Agent
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")   # fixed at import: keep the session in tmp
     ev = []
     a = Agent(str(tmp_path), emit=ev.append, mode="auto")
     a.send("say hello")

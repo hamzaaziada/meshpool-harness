@@ -255,3 +255,73 @@ def test_chatgpt_signup_makes_a_chatgpt_model_the_default(home):
     assert C.read()["MH_MODEL"].startswith("chatgpt:")
     HR.use_provider("meshpool")
     assert C.read()["MH_MODEL"] == ""
+
+
+def test_hermes_keeps_its_own_environment_when_the_thread_has_a_model(home, monkeypatch):
+    C.write({"MESHPOOL_API_KEY": "mk-123456789"})
+    HR.use_provider("meshpool")
+    env = {"PYTHONPATH": "/vendor/hermes", "HERMES_HOME": "/mh/hermes"}
+    monkeypatch.setattr(HR, "_bundled_hermes", lambda: {
+        "id": "hermes", "name": "Hermes", "mode": "cowork", "type": "acp", "prepare": "hermes", "models": "meshpool",
+        "command": sys.executable, "args": ["-m", "acp_adapter"], "env": dict(env)})
+    for model in (None, "deepseek-v4.1-flash"):
+        h = HR.get("hermes", model)
+        assert h["env"]["PYTHONPATH"] == "/vendor/hermes" and h["env"]["HERMES_HOME"] == "/mh/hermes"
+        assert h["prepare"] == "hermes"
+
+
+def test_an_openai_key_alone_never_goes_to_the_meshpool_endpoint(home, monkeypatch):
+    from meshpool_harness import providers as PV
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-123")
+    assert PV.key() == "" and PV.key_base() == "https://llm.meshpool.ai/v1"
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1/")
+    assert PV.key() == "sk-openai-123" and PV.key_base() == "https://api.openai.com/v1"   # used as a pair
+    C.write({"MESHPOOL_API_KEY": "mk-123456789"})
+    assert PV.key() == "mk-123456789" and PV.key_base() == "https://llm.meshpool.ai/v1"
+
+
+def test_codex_gets_the_key_in_its_own_environment_only(home, monkeypatch):
+    import os
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-123")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    HR.use_provider("custom")
+    HR.prepare_codex()
+    assert "MESHPOOL_API_KEY" not in os.environ                  # no process-wide change
+    assert 'base_url = "https://api.openai.com/v1"' in (HR.codex_home() / "config.toml").read_text()
+    cx = HR.get("codex", "gpt-x")
+    assert cx["env"]["MESHPOOL_API_KEY"] == "sk-openai-123" and cx["prepare"] == "codex"
+
+
+def test_hermes_config_and_its_backup_are_private_from_the_start(home):
+    import os
+    import stat
+    pytest.importorskip("yaml")
+    C.write({"MESHPOOL_API_KEY": "mk-123456789"})
+    HR.hermes_home().mkdir(parents=True)
+    old = HR.hermes_home() / "config.yaml"
+    old.write_text("model: {}\n")
+    os.chmod(old, 0o644)
+    HR.prepare_hermes("deepseek-v4.1-flash")
+    backups = list((HR.hermes_home() / "backups" / "config").glob("config.yaml.good.*"))
+    assert backups and "mk-123456789" in old.read_text()
+    for f in [old, *backups]:
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
+
+
+def test_claude_keychain_lookup_is_cached(home, monkeypatch):
+    import subprocess
+    runs = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: runs.append(a) or subprocess.CompletedProcess(a, 0))
+    monkeypatch.setattr(HR.sys, "platform", "darwin")
+    HR._KEYCHAIN.clear()
+    try:
+        assert HR.signed_in("claude") and HR.signed_in("claude")
+    finally:
+        HR._KEYCHAIN.clear()
+    assert len(runs) == 1
+
+
+def test_one_table_of_sign_in_only_providers():
+    from meshpool_harness import providers as PV
+    assert HR.PROVIDER_AGENT is PV.SIGNIN_ONLY

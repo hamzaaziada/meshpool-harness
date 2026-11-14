@@ -11,7 +11,6 @@ with OAuth go through Connectors instead (mcp_apps): either a built-in connector
 """
 from __future__ import annotations
 
-import json
 import os
 
 from meshpool_harness import config as C
@@ -277,16 +276,18 @@ def add(eid: str) -> dict:
 
 def _set_disabled(name: str, off: bool):
     from meshpool_harness.agent import mcp as M
-    p = M.config_file()
-    cfg = json.loads(p.read_text(encoding="utf-8"))
-    srv = cfg.get("mcpServers" if "mcpServers" in cfg else "servers", {}).get(name)
-    if not isinstance(srv, dict):
+
+    def change(servers):
+        srv = servers.get(name)
+        if not isinstance(srv, dict):
+            raise ValueError(f"{name} is not in your MCP servers. Add it first.")
+        if off:
+            srv["disabled"] = True
+        else:
+            srv.pop("disabled", None)
+    if not M.config_file().exists():
         raise ValueError(f"{name} is not in your MCP servers. Add it first.")
-    if off:
-        srv["disabled"] = True
-    else:
-        srv.pop("disabled", None)
-    p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    M.edit_config(change, create=False)
 
 
 def configure(eid: str, values: dict, enable: bool = True) -> dict:
@@ -314,15 +315,12 @@ def remove(eid: str):
     """Take a library server out of mcp.json (only one the library added). Saved settings stay."""
     e = get(eid)
     from meshpool_harness.agent import mcp as M
-    p = M.config_file()
-    if not p.exists():
-        return
-    cfg = json.loads(p.read_text(encoding="utf-8"))
-    servers = cfg.get("mcpServers" if "mcpServers" in cfg else "servers", {})
-    s = servers.get(e["id"])
-    if isinstance(s, dict) and str(s.get("description", "")).startswith(MARK):
-        del servers[e["id"]]
-        p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+    def drop(servers):
+        s = servers.get(e["id"])
+        if isinstance(s, dict) and str(s.get("description", "")).startswith(MARK):
+            del servers[e["id"]]
+    M.edit_config(drop, create=False)
 
 
 # ---------- app API (Settings, MCP servers, Library) ------------------------------------------------------------------

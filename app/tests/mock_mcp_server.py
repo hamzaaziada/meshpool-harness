@@ -8,6 +8,7 @@
   /noreg/mcp     the same, but the authorization server has no registration endpoint (bring your own client)
   /lhost/mcp     registration accepts only http://localhost:<port> redirect addresses
   /legacy/sse    the 2024-11-05 HTTP+SSE transport (a POST to it is refused, so clients fall back)
+  /session/mcp   streamable HTTP with sessions: 404 for a session it does not know (S.sessions.clear() expires them)
 
 The authorize endpoint approves at once and redirects with a code; tests read the Location header.
 """
@@ -36,6 +37,7 @@ class State:
         self.sse: dict[str, queue.Queue] = {}
         self.token_calls: list[dict] = []
         self.registrations: list[dict] = []
+        self.sessions: set[str] = set()
 
 
 S = State()
@@ -154,6 +156,20 @@ class H(BaseHTTPRequestHandler):
             if not tok or S.tokens.get(tok, 0) < time.time():
                 rm = f'{self.base}/.well-known/oauth-protected-resource/{kind}/mcp'
                 return self._json(401, {"error": "unauthorized"}, {"WWW-Authenticate": f'Bearer resource_metadata="{rm}"'})
+        if kind == "session":
+            msg = json.loads(raw)
+            if msg.get("method") == "initialize":
+                sid = "s-" + secrets.token_hex(4)
+                S.sessions.add(sid)
+                return self._json(200, _rpc(msg), {"Mcp-Session-Id": sid})
+            if self.headers.get("Mcp-Session-Id") not in S.sessions:
+                return self._json(404, {"error": "session not found"})
+            reply = _rpc(msg)
+            if reply is None:
+                self.send_response(202)
+                self.end_headers()
+                return
+            return self._json(200, reply)
         if kind not in ("open", "token", "key", "oauth", "secret", "noreg", "lhost"):
             return self._json(404, {"error": "not found"})
         reply = _rpc(json.loads(raw))

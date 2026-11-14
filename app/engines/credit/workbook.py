@@ -98,7 +98,8 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
          f"N({ref('pretax_income', c)})+{A_('interest_expense', c)})+{A_('da', c)}", total=True)
     line("margin", "EBITDA margin (%)", lambda c, p: f'=IF(N({ref("revenue", c)})=0,"NM",{c}{m["ebitda"]}/{ref("revenue", c)})',
          "pct")
-    line("tax", f"Less: cash taxes, as income tax expense ({u})", lambda c, p: f"={A_('income_tax', c)}")
+    line("tax", f"Less: cash taxes, as income tax expense; a benefit counts as zero ({u})",
+         lambda c, p: f"=MAX(0,-N({ref('income_tax', c)}))")
     line("capex", f"Less: unfinanced capex ({u})", lambda c, p: f"={A_('capex', c)}*(1-financed_capex)")
     line("dist", f"Less: distributions ({u})", lambda c, p: f"={A_('dividends', c)}+{A_('buybacks', c)}*count_buybacks")
     line("cads", f"Cash available for debt service ({u})",
@@ -114,7 +115,7 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
          f'({c}{m["ds"]}+{c}{m["rent"]}))', "x")
     line("debt", f"Funded debt ({u})", lambda c, p: f"=N({ref('short_debt', c)})+N({ref('current_debt', c)})+"
          f"N({ref('long_debt', c)})")
-    line("lev", "Funded debt / EBITDA (x)", lambda c, p: f'=IF({c}{m["ebitda"]}=0,"NM",{c}{m["debt"]}/{c}{m["ebitda"]})', "x")
+    line("lev", "Funded debt / EBITDA (x)", lambda c, p: f'=IF({c}{m["ebitda"]}<=0,"NM",{c}{m["debt"]}/{c}{m["ebitda"]})', "x")
     line("tnw", f"Tangible net worth ({u})", lambda c, p: f"=N({ref('total_equity', c)})-N({ref('goodwill', c)})-"
          f"N({ref('intangibles', c)})")
     line("dtnw", "Total liabilities / TNW (x)", lambda c, p: f'=IF({c}{m["tnw"]}<=0,"NM",N({ref("total_liabilities", c)})/'
@@ -158,7 +159,7 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
     one("pf_fccr", "Pro forma FCCR (x)", f'=IF({n["pf_ds"]}+{cf("rent")}=0,"NM",({cf("cads")}+{cf("rent")})/'
         f'({n["pf_ds"]}+{cf("rent")}))', "x")
     one("pf_debt", f"Pro forma funded debt ({u})", f"={n['exist_debt']}+loan_amount")
-    one("pf_lev", "Pro forma funded debt / EBITDA (x)", f'=IF({cf("ebitda")}=0,"NM",{n["pf_debt"]}/{cf("ebitda")})', "x")
+    one("pf_lev", "Pro forma funded debt / EBITDA (x)", f'=IF({cf("ebitda")}<=0,"NM",{n["pf_debt"]}/{cf("ebitda")})', "x")
     r += 1
     B.section(K, r, "Debt capacity", 3)
     r += 1
@@ -176,9 +177,9 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
     r += 1
     cov_first = r
     covs = [("Minimum DSCR", n["pf_dscr"], "min_dscr", "min",
-             f"=IF({cf('ebitda')}=0,\"NM\",({cf('cads')}-min_dscr*{n['pf_ds']})/{cf('ebitda')})"),
+             f"=IF({cf('ebitda')}<=0,\"NM\",({cf('cads')}-min_dscr*{n['pf_ds']})/{cf('ebitda')})"),
             ("Minimum FCCR", n["pf_fccr"], "min_fccr", "min",
-             f"=IF({cf('ebitda')}=0,\"NM\",({cf('cads')}+{cf('rent')}-min_fccr*({n['pf_ds']}+{cf('rent')}))/{cf('ebitda')})"),
+             f"=IF({cf('ebitda')}<=0,\"NM\",({cf('cads')}+{cf('rent')}-min_fccr*({n['pf_ds']}+{cf('rent')}))/{cf('ebitda')})"),
             ("Maximum funded debt / EBITDA", n["pf_lev"], "max_leverage", "max",
              f"=IF({cf('ebitda')}<=0,\"NM\",1-{n['pf_debt']}/max_leverage/{cf('ebitda')})"),
             ("Maximum total liabilities / TNW", cf("dtnw"), "max_debt_tnw", "max", None),
@@ -200,8 +201,9 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
     r += 1
     for i in range(1, len(pol.ebitda_stress) + 1):
         K.cell(row=r, column=1, value=f"EBITDA stress case {i}")
-        B._f(K, f"B{r}", f"={cf('ebitda')}*(1-ebitda_stress_{i})", "num")
-        B._f(K, f"C{r}", f'=IF({n["pf_ds"]}=0,"NM",({cf("cads")}-{cf("ebitda")}*ebitda_stress_{i})/{n["pf_ds"]})', "x")
+        B._f(K, f"B{r}", f"={cf('ebitda')}-ABS({cf('ebitda')})*ebitda_stress_{i}", "num")   # a loss gets worse
+        B._f(K, f"C{r}", f'=IF({n["pf_ds"]}=0,"NM",({cf("cads")}-ABS({cf("ebitda")})*ebitda_stress_{i})/{n["pf_ds"]})',
+             "x")
         B._f(K, f"D{r}", f'=IF(B{r}<=0,"NM",{n["pf_debt"]}/B{r})', "x")
         r += 1
     K.cell(row=r, column=1, value="Rate stress on the new loan")

@@ -302,13 +302,12 @@ def import_instructions_as_skill(name: str, text: str, description: str = "") ->
 
 
 def _write_skill(name: str, desc: str, body: str) -> str:
+    """Write (or, on a second import, rewrite) a skill; returns its id."""
     from meshpool_harness import skills as SK
-    slug = re.sub(r"[^a-z0-9-]+", "-", (name or "imported").lower()).strip("-")[:60] or "imported"
-    d = SK.folder() / slug
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"---\nname: {slug}\ndescription: {desc.replace(chr(10), ' ')[:300]}\n---\n\n{body}\n",
-                                encoding="utf-8")
-    return slug
+    sid = SK.slug(name or "imported")
+    desc = re.sub(r"\s+", " ", desc or "").strip()[:300] or sid
+    SK.create(sid, desc, body, overwrite=True)
+    return sid
 
 
 def _export_kind(z) -> str:

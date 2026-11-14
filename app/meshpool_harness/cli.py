@@ -284,10 +284,10 @@ def main(argv=None):
     return 0 if res["ok"] else 1
 
 
-def ping() -> dict:
-    """One tiny model call with the current settings. Returns {ok, detail, model, seconds}."""
+def ping(model: str | None = None) -> dict:
+    """One tiny model call with the current settings (or `model`). Returns {ok, detail, model, seconds}."""
     from meshpool_harness.core.wire import SimpleLedger
-    model = os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     t0 = time.time()
     try:
         led = SimpleLedger("check")
@@ -305,11 +305,19 @@ def ping() -> dict:
 
 
 def _check(live: bool) -> int:
+    from meshpool_harness import harnesses as HR
+    from meshpool_harness import providers as PV
     key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    # A subscription (ChatGPT, Claude) or an Anthropic / Gemini key is enough on its own: report what is ready
+    # rather than calling the setup broken when there is no Meshpool key.
+    ready = {p: _safe(lambda p=p: PV.ready(p)) for p in ("key", "chatgpt", "anthropic", "gemini", "claude", "google")}
+    usable = _safe(HR.ready)
     print(f"Settings file : {_config.config_path()}")
     print(f"Endpoint      : {os.environ.get('MESHPOOL_BASE_URL', 'https://llm.meshpool.ai/v1')}")
     print(f"Model         : {os.environ.get('MH_MODEL', 'deepseek-v4.1-flash')}")
-    print(f"API key       : {'set (ends ' + key[-4:] + ')' if key else 'MISSING'}")
+    print(f"API key       : {'set (ends ' + key[-4:] + ')' if key else 'not set'}")
+    names = [_safe(lambda p=p: PV.name(p), p) for p, ok in ready.items() if ok]
+    print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()
     for row in _config.system_check():
         print(f"  [{'ok' if row['ok'] else '--'}] {row['name']:<15} {row['detail']}")
@@ -317,13 +325,20 @@ def _check(live: bool) -> int:
             print(f"       {row['fix']}")
     if live:
         print()
-        if not key:
-            print("Live test skipped: no API key.")
+        if not usable:
+            print("Live test skipped: no API key or signed-in subscription.")
             return 1
         r = ping()
         print(("Live test OK: " if r["ok"] else "Live test FAILED: ") + r["detail"] + f" ({r['seconds']} s)")
         return 0 if r["ok"] else 1
-    return 0 if key else 1
+    return 0 if usable else 1
+
+
+def _safe(fn, default=False):
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001  (a check must report, not crash)
+        return default
 
 
 if __name__ == "__main__":

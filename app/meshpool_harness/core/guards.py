@@ -15,6 +15,10 @@ TEST_PATH = re.compile(r"(^|/)(tests?|spec|__tests__)/|(^|/)test_[^/]*\.py$|_tes
 ERR_LINE = re.compile(r"(Error|Exception|error:|FAILED|FAIL:|AssertionError|Traceback|panic:|fatal:|E   )")
 
 
+class Abort(RuntimeError):
+    """A guard ends the run (the loop stops; any other tool exception is reported to the model)."""
+
+
 def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
     """Append one row to the failure catalog. Logging must never stop a run: in an app the package folder can be
     read-only, so any file error is ignored. MH_FAILURES_LOG moves the file; MH_FAILURES_LOG=off disables it."""
@@ -171,7 +175,7 @@ class Guards:
             return ("GUARD repeat_failure: this exact command has failed 3 times with the same error. Do not run it "
                     "again unchanged. State a different hypothesis, inspect different code, or change approach.")
         if n >= 5:
-            raise RuntimeError(f"aborted: command failed {n} times identically: {cmd[:120]}")
+            raise Abort(f"aborted: command failed {n} times identically: {cmd[:120]}")
         return None
 
     # error_not_quoted: the turn after a failure must reference the key error line

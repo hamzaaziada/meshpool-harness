@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess as _sp
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,21 +53,12 @@ add new tests. When the task is done and checked, call finish with a short answe
 # feature flag -> (v1 default, minimal default)
 FEATURES = {"MH_TESTCMD": ("1", "1"), "MH_CODE_HINTS": ("1", "0"), "MH_ISSUE_REPRO": ("1", "0"),
             "MH_NEAREST_TEST": ("1", "0"), "MH_REGRESSION_GATE": ("1", "0"), "MH_SCOPE_GATE": ("1", "0"),
-            "MH_RELATED_SITES": ("1", "0"), "MH_MEMORY": ("1", "0"), "MH_ESCALATE": ("1", "0")}
+            "MH_RELATED_SITES": ("1", "0"), "MH_ESCALATE": ("1", "0")}
 
 
 def feature(name: str) -> bool:
     v1, mini = FEATURES[name]
     return os.environ.get(name, mini if os.environ.get("MH_HARNESS_PROFILE") == "minimal" else v1) == "1"
-
-
-def f2p_evidence(ws) -> bool:
-    """Proof that a fix works, from the agent's own log: a check that failed before the first edit passes after the
-    last edit (the same command). Costs nothing to compute."""
-    cmds = getattr(ws, "commands", [])
-    failed_before = {c["cmd"] for c in cmds if c.get("code") not in (0, None) and c.get("after_edit") == 0}
-    return any(c["cmd"] in failed_before and c.get("code") == 0 and c.get("after_edit") == ws.edits and ws.edits
-               for c in cmds)
 
 
 def checks_green(ws) -> bool:
@@ -73,6 +67,84 @@ def checks_green(ws) -> bool:
         return False
     after = [c for c in ws.commands if c.get("kind") == "check" and c.get("after_edit") == ws.edits]
     return bool(after) and after[-1].get("code") == 0
+
+
+# ---- exact snapshot / restore of the user's working tree (escalation resets between attempts)
+_EXCLUDE = (":!.run", ":!.junie")      # harness folders: never snapshotted, never reset
+
+
+def _git(workdir: str, *args: str, env: dict | None = None, stdin: bytes | None = None):
+    return _sp.run(["git", *args], cwd=workdir, capture_output=True, env=env, input=stdin)
+
+
+def _worktree_tree(workdir: str) -> str | None:
+    """The working tree as a git tree id: tracked and untracked files that are not ignored, binary-safe, with modes.
+    Built in a throwaway index (seeded from the real one for its stat cache): no ref, file or index entry changes."""
+    fd, tmp = tempfile.mkstemp(prefix="mh-index-")
+    os.close(fd)
+    try:
+        real = _git(workdir, "rev-parse", "--git-path", "index").stdout.decode().strip()
+        real_p = Path(workdir, real) if real else None
+        if real_p and real_p.is_file():
+            shutil.copyfile(real_p, tmp)
+        else:
+            os.remove(tmp)
+        env = dict(os.environ, GIT_INDEX_FILE=tmp)
+        if _git(workdir, "add", "-A", "--", ".", *_EXCLUDE, env=env).returncode:
+            return None
+        r = _git(workdir, "write-tree", env=env)
+        return r.stdout.decode().strip() if r.returncode == 0 else None
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def snapshot(workdir: str) -> tuple[str, str] | None:
+    """(working-tree tree id, index tree id), or None when the state cannot be captured (e.g. a merge in progress)."""
+    idx = _git(workdir, "write-tree")
+    tree = _worktree_tree(workdir)
+    if idx.returncode or not tree:
+        return None
+    return tree, idx.stdout.decode().strip()
+
+
+def restore(workdir: str, snap: tuple[str, str]) -> bool:
+    """Put the working tree and index back to `snap` exactly. Only paths that differ from it are touched: files
+    changed or deleted since are rewritten from the snapshot, files created since are removed; ignored files and
+    the harness folders are left alone. True when the tree afterwards matches the snapshot."""
+    tree, index_tree = snap
+    cur = _worktree_tree(workdir)
+    if cur is None:
+        return False
+    if cur != tree:
+        r = _git(workdir, "diff", "--name-status", "--no-renames", "--relative", "-z", tree, cur)
+        if r.returncode:
+            return False
+        f = r.stdout.decode("utf-8", "surrogateescape").split("\0")
+        changes = list(zip(f[0::2], f[1::2]))
+        back = [p for st, p in changes if not st.startswith("A")]
+        if back:
+            fd, tmp = tempfile.mkstemp(prefix="mh-index-")
+            os.close(fd)
+            os.remove(tmp)
+            try:
+                env = dict(os.environ, GIT_INDEX_FILE=tmp)
+                if _git(workdir, "read-tree", tree, env=env).returncode:
+                    return False
+                stdin = b"\0".join(p.encode("utf-8", "surrogateescape") for p in back) + b"\0"
+                if _git(workdir, "checkout-index", "-f", "-z", "--stdin", env=env, stdin=stdin).returncode:
+                    return False
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+        for st, p in changes:
+            if st.startswith("A"):
+                fp = Path(workdir, p)
+                if fp.is_symlink() or fp.is_file():
+                    fp.unlink()
+    if _git(workdir, "read-tree", index_tree).returncode:
+        return False
+    return _worktree_tree(workdir) == tree
 
 
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: str = "deepseek-v4.1-flash",
@@ -111,11 +183,6 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
         h = hints(m.group(1) if m else task, workdir)
         if h:
             task = task + "\n\n<repo_hints>\n" + h + "\n</repo_hints>"
-            if os.environ.get("MH_FASTPATH") == "1":          # single-request first draft (opt-in)
-                from .fastpath import draft
-                note = draft(m.group(1) if m else task, h, workdir, client or LiveClient(phase), model, task_id)
-                if note:
-                    task += "\n\n" + note
     finish_check = None
     if cont and mounted:
         from . import gates
@@ -131,9 +198,6 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
                 task += "\n\n<existing_test_style>\n" + nt + "\n</existing_test_style>"
         if feature("MH_REGRESSION_GATE"):
             fired = {"n": 0, "scope": 0}
-
-            reviewer = os.environ.get("MH_REVIEWER")       # e.g. glm-5.3 / kimi-k3: E5 cross-family review
-            reviewed = {"done": False}
 
             def finish_check(answer, artifacts, ws_):
                 if fired["scope"] < 1 and m2 and feature("MH_SCOPE_GATE"):
@@ -151,17 +215,10 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
                     if msg:
                         fired["n"] += 1
                         return msg
-                if reviewer and not reviewed["done"] and m2:
-                    reviewed["done"] = True  # one review per task: bounded cost
-                    return gates.cross_review(m2.group(1), workdir, client, reviewer, task_id + "-review")
                 return None
-    if feature("MH_MEMORY"):
-        from meshpool_harness.memory import block as _lessons
-        task += _lessons("code", task[:4000])
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     import time as _time
-    import subprocess as _sp
     t0 = _time.time()
     if os.environ.get("MH_ENV_SNAPSHOT") == "1":            # v3: saves the first exploration turns (Meta-Harness, Droid)
         try:
@@ -198,6 +255,11 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
         system += ("\nFor any task with more than one step, first call todo with the task's concrete requirements "
                    "(files, paths, names, formats, outputs, behaviours) and your steps. Update it as you go. finish is "
                    "refused while items are not done, so list only what the task really needs.")
+    # The escalation below resets the repo between attempts. Snapshot the user's state first (uncommitted edits,
+    # untracked files, binaries, the index) so a reset goes back to exactly that, never to HEAD.
+    can_escalate = feature("MH_ESCALATE") and (cont is None or mounted) and \
+        _sp.run(["git", "rev-parse", "--git-dir"], cwd=workdir, capture_output=True).returncode == 0
+    before = snapshot(workdir) if can_escalate else None
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=system,
             caps=Caps(max_turns=max_turns), temperature=temperature, finish_check=finish_check)
     usage = dict(r.usage)
@@ -206,72 +268,37 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: 
     # Reset the repo and run ONE fresh attempt inside the same wall-clock budget. Clean finishes cost nothing extra.
     limit = int(os.environ.get("MH_MAX_SECONDS", "0") or 0)
     remaining = (limit - (_time.time() - t0)) if limit else 1800
-    is_git = _sp.run(["git", "rev-parse", "--git-dir"], cwd=workdir, capture_output=True).returncode == 0
-    if (not r.ok and feature("MH_ESCALATE") and (cont is None or mounted) and is_git
-            and remaining > 600 and r.reason != "need_context" and not str(r.reason).startswith("task budget")
-            and not checks_green(ws)):
-        ex = [":!.run", ":!.junie"]
-        _sp.run(["git", "add", "-A", "--", ".", *ex], cwd=workdir, capture_output=True)
-        first = _sp.run(["git", "diff", "--cached", "--", ".", *ex], cwd=workdir, capture_output=True, text=True).stdout
-        _sp.run(["git", "reset", "-q"], cwd=workdir, capture_output=True)
-        Path(workdir, ".run", "attempt1.patch").write_text(first)
-        _sp.run(["git", "checkout", "--", "."], cwd=workdir, capture_output=True)
-        _sp.run(["git", "clean", "-fdq", "-e", ".run", "-e", ".junie"], cwd=workdir, capture_output=True)
-        ws2 = Workspace(workdir, os.path.join(workdir, ".run"), container=cont, container_dir=cdir, mounted=mounted)
-        task2 = task + ("\n\n<note>A previous attempt at this task ran out of budget without a verified fix. Start "
-                        "fresh. Make the smallest change at the root cause early, run the relevant tests, and finish "
-                        "as soon as they pass.</note>")
-        ctx2 = dict(ctx, task_id=task_id + "-esc")
-        r2 = run(task2, client=client, model=model, profile=None, ws=ws2, ctx=ctx2, system_text=system,
-                 caps=Caps(max_turns=min(max_turns, int(os.environ.get("MH_ESC_TURNS", "25"))),
-                           max_seconds=int(remaining)), temperature=0.6,
-                 finish_check=finish_check)
-        attempts = 2
-        for k in ("prompt_tokens", "completion_tokens"):
-            usage[k] = usage.get(k, 0) + r2.usage.get(k, 0)
-        turns += r2.turns
-        _sp.run(["git", "add", "-A", "--", ".", *ex], cwd=workdir, capture_output=True)
-        second = _sp.run(["git", "diff", "--cached", "--", ".", *ex], cwd=workdir, capture_output=True, text=True).stdout
-        _sp.run(["git", "reset", "-q"], cwd=workdir, capture_output=True)
-        if not r2.ok and not second.strip() and first.strip():     # fresh attempt produced nothing: restore first
-            _sp.run(["git", "apply", "--whitespace=nowarn", str(Path(workdir, ".run", "attempt1.patch"))],
-                    cwd=workdir, capture_output=True)
-        else:
-            r, ws = r2, ws2
-    # v3 evidence-driven second attempt (MH_EVIDENCE_RETRY=1): attempt 1 finished but its log has no
-    # failing-then-passing check. Spend only the turns it left unused (total stays within the cap) on a second attempt
-    # that must reproduce first; keep it only if it shows that proof, otherwise restore attempt 1 unchanged.
-    turns_left = max_turns - turns
-    remaining = (limit - (_time.time() - t0)) if limit else 1800
-    if (os.environ.get("MH_EVIDENCE_RETRY") == "1" and r.ok and attempts == 1 and (cont is None or mounted) and is_git
-            and turns_left >= 15 and remaining > 300 and not f2p_evidence(ws)):
-        ex = [":!.run", ":!.junie"]
-        _sp.run(["git", "add", "-A", "--", ".", *ex], cwd=workdir, capture_output=True)
-        first = _sp.run(["git", "diff", "--cached", "--binary", "--", ".", *ex], cwd=workdir, capture_output=True,
-                        text=True).stdout
-        _sp.run(["git", "reset", "-q"], cwd=workdir, capture_output=True)
-        Path(workdir, ".run", "attempt1.patch").write_text(first)
-        _sp.run(["git", "checkout", "--", "."], cwd=workdir, capture_output=True)
-        _sp.run(["git", "clean", "-fdq", "-e", ".run", "-e", ".junie"], cwd=workdir, capture_output=True)
-        ws2 = Workspace(workdir, os.path.join(workdir, ".run"), container=cont, container_dir=cdir, mounted=mounted)
-        task2 = task + ("\n\n<note>Before changing any code, reproduce the problem: write or run a test or script "
-                        "that FAILS on the current code because of the issue. Then fix the root cause and rerun the "
-                        "same command until it passes. Finish only after that same command passes.</note>")
-        r2 = run(task2, client=client, model=model, profile=None, ws=ws2, ctx=dict(ctx, task_id=task_id + "-ev"),
-                 system_text=system, caps=Caps(max_turns=turns_left, max_seconds=int(remaining)),
-                 temperature=temperature, finish_check=finish_check)
-        attempts = 2
-        for k in ("prompt_tokens", "completion_tokens", "cached_tokens"):
-            usage[k] = usage.get(k, 0) + r2.usage.get(k, 0)
-        turns += r2.turns
-        if r2.ok and f2p_evidence(ws2):
-            r, ws = r2, ws2
-        else:                                              # no proof: put attempt 1 back exactly
-            _sp.run(["git", "checkout", "--", "."], cwd=workdir, capture_output=True)
-            _sp.run(["git", "clean", "-fdq", "-e", ".run", "-e", ".junie"], cwd=workdir, capture_output=True)
-            if first.strip():
-                _sp.run(["git", "apply", "--whitespace=nowarn", str(Path(workdir, ".run", "attempt1.patch"))],
-                        cwd=workdir, capture_output=True)
+    if (not r.ok and before and remaining > 600 and r.reason != "need_context"
+            and not str(r.reason).startswith("task budget") and not checks_green(ws)):
+        first = snapshot(workdir)
+        if first and first[0] != before[0]:
+            diff = _sp.run(["git", "diff", "--binary", before[0], first[0]], cwd=workdir, capture_output=True).stdout
+            Path(workdir, ".run").mkdir(parents=True, exist_ok=True)
+            Path(workdir, ".run", "attempt1.patch").write_bytes(diff)
+        if first and restore(workdir, before):
+            ws2 = Workspace(workdir, os.path.join(workdir, ".run"), container=cont, container_dir=cdir, mounted=mounted)
+            task2 = task + ("\n\n<note>A previous attempt at this task ran out of budget without a verified fix. "
+                            "Start fresh. Make the smallest change at the root cause early, run the relevant tests, "
+                            "and finish as soon as they pass.</note>")
+            ctx2 = dict(ctx, task_id=task_id + "-esc")
+            r2 = run(task2, client=client, model=model, profile=None, ws=ws2, ctx=ctx2, system_text=system,
+                     caps=Caps(max_turns=min(max_turns, int(os.environ.get("MH_ESC_TURNS", "25"))),
+                               max_seconds=int(remaining)), temperature=0.6,
+                     finish_check=finish_check)
+            attempts = 2
+            for k in ("prompt_tokens", "completion_tokens"):
+                usage[k] = usage.get(k, 0) + r2.usage.get(k, 0)
+            turns += r2.turns
+            second = snapshot(workdir)
+            if not r2.ok and second and second[0] == before[0] and first[0] != before[0]:
+                # the fresh attempt produced nothing: put attempt 1 back exactly
+                if not restore(workdir, first):
+                    r2.reason = f"{r2.reason}; could not restore attempt 1 (saved in .run/attempt1.patch)"
+                    r, ws = r2, ws2
+            else:
+                r, ws = r2, ws2
+        elif first:                                         # reset failed: keep attempt 1's files where they are
+            restore(workdir, first)
     return {"ok": r.ok, "answer": r.answer, "evidence": r.evidence, "turns": turns, "reason": r.reason,
             "usage": usage, "prefix_sha": r.prefix_sha, "commands": len(ws.commands), "edits": ws.edits,
             "attempts": attempts}

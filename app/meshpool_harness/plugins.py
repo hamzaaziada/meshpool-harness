@@ -428,8 +428,8 @@ def _set_front(text: str, **kv) -> str:
         if old and str(v).strip() in (">", "|", ">-", "|-", ">+", "|+"):
             kv[k] = " ".join(x.strip() for x in old[1:]) or k
     keep = [ln for key, lines in blocks if key not in kv for ln in lines]
-    lines = [f"{k}: {v}" for k, v in kv.items() if v] + keep
-    return "---\n" + "\n".join(lines) + "\n---\n\n" + body
+    head = SK.front_matter(**kv)                         # YAML-quoted where needed
+    return head[:-4] + "".join(ln + "\n" for ln in keep) + "---\n\n" + body
 
 
 def _owned(sid: str, plugin: str) -> bool:
@@ -447,6 +447,7 @@ def _claim(sid: str, plugin: str, notes: list) -> Path | None:
         return None
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
+    (d / MARK).write_text(plugin, encoding="utf-8")       # owned from the start, so a failed install can clean up
     return d
 
 
@@ -470,7 +471,7 @@ def _add_text_skill(plugin: str, name: str, description: str, body: str, notes: 
     if d is None:
         return None
     desc = re.sub(r"\s+", " ", description).strip()[:300] or sid
-    (d / "SKILL.md").write_text(f"---\nname: {sid}\ndescription: {desc}\n---\n\n{body.strip()}\n", encoding="utf-8")
+    (d / "SKILL.md").write_text(SK.front_matter(name=sid, description=desc) + f"\n{body.strip()}\n", encoding="utf-8")
     (d / MARK).write_text(plugin, encoding="utf-8")
     return sid
 
@@ -478,8 +479,9 @@ def _add_text_skill(plugin: str, name: str, description: str, body: str, notes: 
 def _add_command(path: Path, base: Path, plugin: str, notes: list) -> str | None:
     """A slash command (commands/*.md) becomes a skill; $ARGUMENTS stays for the agent to fill from the request."""
     meta, body = SK.parse(path.read_text(encoding="utf-8", errors="replace"))
-    rel = path.relative_to(base).with_suffix("") if path.is_relative_to(base) else Path(path.stem)
-    name = "-".join(rel.parts)
+    # plugin.json may list a command file itself ("commands": ["./cmd/deploy.md"]): then base is that file
+    rel = path.relative_to(base) if path != base and path.is_relative_to(base) else Path(path.name)
+    name = "-".join(rel.with_suffix("").parts) or path.stem
     first = next((ln.strip("# ").strip() for ln in body.splitlines() if ln.strip()), name)
     desc = meta.get("description") or first
     if meta.get("argument-hint"):
@@ -515,10 +517,43 @@ def _install_root(root: Path, source: str, entry: dict | None = None) -> dict:
         remove_plugin(name)                               # reinstall: take away the old version first
     pdir = plugins_dir() / name
     shutil.rmtree(pdir, ignore_errors=True)
-    _copy_tree(root, pdir)
+    skills: list[str] = []
+    servers: list[str] = []
+    try:
+        _copy_tree(root, pdir)
+        rec = _install_parts(pdir, m, name, source, skills, servers)
+    except BaseException:
+        # all or nothing: a failed install leaves no folder, no half-added skills and no MCP servers behind
+        added = set(skills) | ({d.name for d in SK.folder().iterdir() if d.is_dir()} if SK.folder().is_dir() else set())
+        for sid in added:
+            if _owned(sid, name):                         # the old version was removed above, so these are new
+                SK.remove(sid)
+        if servers:
+            def drop(cfg):
+                for n in servers:
+                    if isinstance(cfg.get(n), dict) and f"the {name} plugin" in str(cfg[n].get("description", "")):
+                        del cfg[n]
+            try:
+                _edit_mcp(drop)
+            except (OSError, ValueError):
+                pass
+        shutil.rmtree(pdir, ignore_errors=True)
+        raise
+    d = _load()
+    d["plugins"][name] = rec
+    _save(d)
+    return rec
+
+
+def _install_parts(pdir: Path, m: dict, name: str, source: str, skills: list, servers: list) -> dict:
+    """Add the copied plugin's skills, commands, instructions and MCP servers; skills and servers fill in as they are
+    added, so the caller can take them away again if a later step fails."""
     notes: list[str] = []
     SK.folder().mkdir(parents=True, exist_ok=True)
-    skills = [s for s in (_add_skill(d, name, notes) for d in _skill_dirs(pdir, m)) if s]
+    for d in _skill_dirs(pdir, m):
+        sid = _add_skill(d, name, notes)
+        if sid:
+            skills.append(sid)
     cbases = _paths(pdir, m.get("commands"), "commands")
     for f in _command_files(pdir, m):
         base = next((b for b in cbases if _inside(f, b)), f.parent)
@@ -532,16 +567,16 @@ def _install_root(root: Path, source: str, entry: dict | None = None) -> dict:
                                   + (m.get("description") or "its conventions and rules."), text, notes)
             skills += [sid] if sid else []
             break
-    servers = [s for s in (_add_server(name, k, v, pdir, notes) for k, v in _mcp_specs(pdir, m).items()) if s]
+    for k, v in _mcp_specs(pdir, m).items():
+        sname = _add_server(name, k, v, pdir, notes)
+        if sname:
+            servers.append(sname)
     for skipped in ("hooks", "agents"):
         if (pdir / skipped).exists() or m.get(skipped):
             notes.append(f"Skipped {skipped}: Meshpool does not run plugin {skipped}.")
     rec = {"name": name, "version": str(m.get("version") or ""), "description": str(m.get("description") or ""),
            "source": source, "installed": time.strftime("%Y-%m-%d %H:%M"), "dir": str(pdir), "skills": skills,
            "servers": servers, "notes": notes}
-    d = _load()
-    d["plugins"][name] = rec
-    _save(d)
     return rec
 
 

@@ -1,3 +1,5 @@
+<img src="app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Contributing
 
 Plain rules, learned from building this harness:

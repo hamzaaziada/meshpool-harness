@@ -1,3 +1,5 @@
+<img src="../app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Releasing an update
 
 1. **Change the code** in `app/`. Then run the unit tests:

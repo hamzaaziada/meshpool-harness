@@ -91,46 +91,50 @@ def _upgrade_mcp(path: Path) -> None:
     built-in ones and drop the other Node-only entries the user never turned on."""
     import json
     try:
-        cfg = json.loads(path.read_text(encoding="utf-8"))
         new = json.loads((APP / "defaults" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     except (OSError, ValueError, KeyError):
         return
-    servers = cfg.get("mcpServers")
-    if not isinstance(servers, dict):
-        return
-    changed = False
-    for name in ("browser", "computer-use"):
-        cur = servers.get(name)
-        if not isinstance(cur, dict) or cur.get("command") in ("npx", "npx.cmd"):
-            servers[name] = new[name]
-            changed = True
-    for name in ("meshpool-web", "meshpool-assistant"):        # 2.4: shared web and assistant tools
-        if name not in servers and name in new:
-            servers[name] = new[name]
-            changed = True
-    if not cfg.get("_upgraded_24"):                          # 2.4: computer use is opt-in; research uses web tools
-        cu = servers.get("computer-use")
-        if isinstance(cu, dict) and not cu.get("disabled"):
-            cu["disabled"] = True
+
+    def upgrade(servers: dict, cfg: dict) -> None:
+        changed = False
         for name in ("browser", "computer-use"):
-            if isinstance(servers.get(name), dict) and name in new:
-                servers[name]["description"] = new[name]["description"]
-        cfg["_upgraded_24"] = True
-        changed = True
-    gh = servers.get("github")
-    if isinstance(gh, dict) and gh.get("disabled") and gh.get("url") == "https://api.githubcopilot.com/mcp/":
-        del servers["github"]                      # GitHub is a connector now (Settings, Connectors)
-        changed = True
-    for name in ("memory", "sequential-thinking", "filesystem", "fetch"):
-        cur = servers.get(name)
-        if isinstance(cur, dict) and cur.get("disabled") and cur.get("command") in ("npx", "uvx"):
-            del servers[name]
+            cur = servers.get(name)
+            if not isinstance(cur, dict) or cur.get("command") in ("npx", "npx.cmd"):
+                servers[name] = new[name]
+                changed = True
+        for name in ("meshpool-web", "meshpool-assistant"):        # 2.4: shared web and assistant tools
+            if name not in servers and name in new:
+                servers[name] = new[name]
+                changed = True
+        if not cfg.get("_upgraded_24"):                          # 2.4: computer use is opt-in; research uses web tools
+            cu = servers.get("computer-use")
+            if isinstance(cu, dict) and not cu.get("disabled"):
+                cu["disabled"] = True
+            for name in ("browser", "computer-use"):
+                if isinstance(servers.get(name), dict) and name in new:
+                    servers[name]["description"] = new[name]["description"]
+            cfg["_upgraded_24"] = True
             changed = True
-    if changed:
-        order = {k: servers[k] for k in new if k in servers}
-        order.update({k: v for k, v in servers.items() if k not in order})
-        cfg["mcpServers"] = order
-        path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        gh = servers.get("github")
+        if isinstance(gh, dict) and gh.get("disabled") and gh.get("url") == "https://api.githubcopilot.com/mcp/":
+            del servers["github"]                      # GitHub is a connector now (Settings, Connectors)
+            changed = True
+        for name in ("memory", "sequential-thinking", "filesystem", "fetch"):
+            cur = servers.get(name)
+            if isinstance(cur, dict) and cur.get("disabled") and cur.get("command") in ("npx", "uvx"):
+                del servers[name]
+                changed = True
+        if changed:                                    # the default servers first, in their order
+            order = {k: servers[k] for k in new if k in servers}
+            order.update({k: v for k, v in servers.items() if k not in order})
+            servers.clear()
+            servers.update(order)
+
+    from meshpool_harness.agent import mcp as M
+    try:
+        M.edit_config(upgrade, path=path, create=False, whole=True)
+    except (OSError, ValueError):
+        return
 
 
 def config_path() -> Path:

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.providers import SIGNIN_ONLY as PROVIDER_AGENT   # a provider only one harness can use
 
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
@@ -64,6 +65,7 @@ LEGACY = {"claude-subscription": "claude-code", "chatgpt-subscription": "codex"}
 MODES = ("code", "cowork")
 RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-code", "codex", "gemini-cli",
             *LEGACY}
+ID_RE = r"[A-Za-z0-9_.-]{1,60}"
 HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
 
@@ -107,22 +109,32 @@ def user_codex_home() -> Path:
 
 
 def prepare_codex(model: str | None = None) -> None:
-    """Point Codex at the API key endpoint and model (its own config.toml in the Meshpool data folder). The key is
-    read from MESHPOOL_API_KEY in the environment, never written to the file."""
+    """Point Codex at the API key endpoint and model (its own config.toml in the Meshpool data folder). Codex reads
+    the key from MESHPOOL_API_KEY in its own environment (set by _launch), never from the file."""
     from meshpool_harness import providers as PV
     home = codex_home()
     home.mkdir(parents=True, exist_ok=True)
     base = PV.key_base()
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     model = bare if prov == "key" and bare else "deepseek-v4.1-flash"
-    if not os.environ.get("MESHPOOL_API_KEY") and os.environ.get("OPENAI_API_KEY"):
-        os.environ["MESHPOOL_API_KEY"] = os.environ["OPENAI_API_KEY"]
     q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
     (home / "config.toml").write_text(
         f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
         "\n"
         f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
         "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
+
+
+def write_private(p: Path, text: str) -> None:
+    """Write a file only the user can read (it holds a key or tokens): created 0600, never readable by others first."""
+    try:
+        if p.exists():
+            os.chmod(p, 0o600)               # narrow an older file before the new secret goes in
+    except OSError:
+        pass
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def prepare_hermes(model: str | None = None) -> None:
@@ -167,11 +179,7 @@ def prepare_hermes(model: str | None = None) -> None:
     except Exception:
         pass
     text = yaml.safe_dump(cfg, sort_keys=False)
-    p.write_text(text, encoding="utf-8")
-    try:
-        os.chmod(p, 0o600)
-    except OSError:
-        pass
+    write_private(p, text)
     # Hermes keeps a "last known good" copy of config.yaml and skips the copy when the newest one matches.
     # Writing it here keeps Hermes off shutil.copy2 at startup (CopyFile2 is missing on some Windows
     # compatibility layers) and keeps the backup folder from filling with one copy per launch.
@@ -182,7 +190,7 @@ def prepare_hermes(model: str | None = None) -> None:
         if not olds or olds[0].read_text(encoding="utf-8", errors="replace") != text:
             import time
             dst = b / f"config.yaml.good.{time.strftime('%Y%m%d-%H%M%S')}"
-            dst.write_text(text, encoding="utf-8")
+            write_private(dst, text)
             for stale in [dst, *olds][5:]:
                 stale.unlink(missing_ok=True)
     except OSError:
@@ -209,9 +217,9 @@ def _validate(d: dict) -> dict:
     if not isinstance(d, dict):
         raise ValueError("A harness file must be a JSON object.")
     for k in ("id", "name", "command"):
-        if not str(d.get(k, "")).strip():
-            raise ValueError(f"The harness file needs \"{k}\".")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", d["id"]):
+        if not isinstance(d.get(k), str) or not d[k].strip():
+            raise ValueError(f"The harness file needs \"{k}\" (text).")
+    if not re.fullmatch(ID_RE, d["id"]):
         raise ValueError("\"id\" may only use letters, numbers, dots, dashes and underscores.")
     if d["id"] in RESERVED:
         raise ValueError(f"\"{d['id']}\" is a built-in harness id. Pick another.")
@@ -251,7 +259,7 @@ def load_all() -> list[dict]:
             try:
                 d = _validate(json.loads(p.read_text(encoding="utf-8")))
                 out.append(dict(d, available=_available(d), builtin=False, file=str(p)))
-            except (ValueError, OSError) as e:
+            except (ValueError, TypeError, OSError) as e:
                 out.append({"id": p.stem, "name": p.stem, "mode": "cowork", "type": "acp", "available": False,
                             "builtin": False, "error": str(e), "file": str(p)})
     return out
@@ -266,9 +274,23 @@ def examples() -> list[dict]:
                 d = _validate(json.loads(p.read_text(encoding="utf-8")))
                 if not (folder() / p.name).exists():
                     rows.append(dict(d, available=_available(d), file=str(p)))
-            except (ValueError, OSError):
+            except (ValueError, TypeError, OSError):
                 continue
     return rows
+
+
+_KEYCHAIN: dict = {}          # {"t": time, "ok": bool}: the macOS keychain lookup, which load_all runs often
+
+
+def _claude_keychain() -> bool:
+    import subprocess
+    import time
+    if _KEYCHAIN and time.time() - _KEYCHAIN["t"] < 30:
+        return _KEYCHAIN["ok"]
+    r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials"],
+                       capture_output=True, timeout=5)
+    _KEYCHAIN.update(t=time.time(), ok=r.returncode == 0)
+    return _KEYCHAIN["ok"]
 
 
 def signed_in(which: str) -> bool:
@@ -283,10 +305,7 @@ def signed_in(which: str) -> bool:
             if (cfg / ".credentials.json").is_file():
                 return True
             if sys.platform == "darwin":
-                import subprocess
-                r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials"],
-                                   capture_output=True, timeout=5)
-                return r.returncode == 0
+                return _claude_keychain()
     except Exception:  # noqa: BLE001
         return False
     return False
@@ -294,6 +313,16 @@ def signed_in(which: str) -> bool:
 
 def npx() -> str:
     return shutil.which("npx") or "npx"
+
+
+def win_terminal_cmdline(title: str, line: str) -> str:
+    """The cmd.exe command line that runs `line` in a new console window titled `title` and keeps it open. Built as
+    one string because cmd.exe does not read the \\" escaping subprocess.list2cmdline would give an argument with
+    quotes in it. cmd /k strips the first and last quote of its command when it holds more than two, so the
+    executable keeps its own quotes (and a path with spaces or & in it stays one word)."""
+    if any(c in title for c in '"&|<>^%'):
+        raise ValueError("unsafe window title")
+    return f'cmd /k "title {title} & {line}"'
 
 
 def login(which: str) -> dict:
@@ -314,7 +343,8 @@ def login(which: str) -> dict:
             subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
                               "-e", 'tell application "Terminal" to activate'])
         elif os.name == "nt":
-            subprocess.Popen(["cmd", "/c", "start", f"{which.title()} sign-in", "cmd", "/k", line])
+            subprocess.Popen(win_terminal_cmdline(f"{which.title()} sign-in", line),
+                             creationflags=0x00000010)       # CREATE_NEW_CONSOLE: its own terminal window
         else:
             for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
                 if shutil.which(term):
@@ -339,9 +369,22 @@ def get(hid: str, model: str | None = None) -> dict:
                 raise ValueError(f"{d['name']}: {d['error']}")
             if model and d.get("providers"):
                 d = {k: v for k, v in d.items() if k not in ("env", "env_unset", "prepare", "auth", "plan", "setup")}
-                d.update(credentials(hid, model))
+                cred = credentials(hid, model)
+                # The harness's own environment (bundled Hermes: PYTHONPATH, HERMES_HOME ...) plus the provider's.
+                env = {**(_manifest_env(hid)), **(cred.get("env") or {})}
+                d.update(cred)
+                if env:
+                    d["env"] = env
             return d
     raise KeyError(hid)
+
+
+def _manifest_env(hid: str) -> dict:
+    """The environment a built-in harness itself needs, apart from any provider's credentials."""
+    if hid == "hermes":
+        return dict((_bundled_hermes() or {}).get("env") or {})
+    h = next((h for h in (*BUILTIN, PI, AUTO, CODEX, CLAUDE_CODE, GEMINI) if h["id"] == hid), None)
+    return dict((h or {}).get("env") or {})
 
 
 def default_for(mode: str) -> str:
@@ -374,7 +417,14 @@ def add(text: str) -> dict:
     return dict(d, available=_available(d), builtin=False, file=str(p))
 
 
+def _check_id(hid: str) -> str:
+    if not isinstance(hid, str) or not re.fullmatch(ID_RE, hid):
+        raise KeyError(hid)
+    return hid
+
+
 def add_example(hid: str) -> dict:
+    _check_id(hid)
     p = folder() / "examples" / f"{hid}.json"
     if not p.exists():
         raise KeyError(hid)
@@ -384,6 +434,7 @@ def add_example(hid: str) -> dict:
 def remove(hid: str) -> None:
     if hid in RESERVED:
         raise ValueError("Built-in harnesses cannot be removed.")
+    _check_id(hid)
     p = folder() / f"{hid}.json"
     if not p.exists():
         raise KeyError(hid)
@@ -400,7 +451,6 @@ PROVIDER_NAMES = {"meshpool": "Meshpool API key", "custom": "Another API key",
                   "chatgpt": "ChatGPT subscription", "claude": "Claude subscription, runs Claude Code"}
 LOGINS = {"claude": "claude", "chatgpt": "codex", "google": "gemini"}   # provider -> the official sign-in it uses
 SIGNIN_PROVIDERS = tuple(LOGINS)
-PROVIDER_AGENT = {"claude": "claude-code", "google": "gemini-cli"}     # a provider that only one harness can use
 
 
 def provider() -> str:
@@ -428,7 +478,8 @@ def _launch(hid: str, prov: str | None) -> dict:
     from meshpool_harness import providers as PV
     if hid == "codex":
         if prov == "key":
-            return {"prepare": "codex", "models": "meshpool", "env": {"CODEX_HOME": str(codex_home())},
+            return {"prepare": "codex", "models": "meshpool",
+                    "env": {"CODEX_HOME": str(codex_home()), "MESHPOOL_API_KEY": PV.key()},
                     "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
         return {"models": "harness", "env": {"CODEX_HOME": str(user_codex_home())},
                 "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}

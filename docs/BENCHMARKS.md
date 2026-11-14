@@ -1,3 +1,5 @@
+<img src="../app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Benchmarks
 
 Meshpool Auto uses the results on this page to choose a harness for each task (see [ROUTING.md](ROUTING.md)).
@@ -101,14 +103,14 @@ Cost is billed cost per solved task. Time is total wall time divided by the numb
 
 ## Harness v3 against v2
 
-v2 was the engine in Meshpool 2.5 and earlier. It ran beside v3 at the same hours until it was dropped for budget.
+v2 was the engine in the pre-release builds before 0.1.0. It ran beside v3 at the same hours until it was dropped for budget.
 
 | Benchmark | v3 | v2 |
 |---|---|---|
 | SWE-bench Verified (7 tasks) | 6/7, $0.041 per solved | 6/7, $0.049 per solved |
 | Terminal-Bench 2.0 (9 tasks) | 6/9, $0.096 per solved | 3/9, $0.140 per solved |
 
-v3 solves as many or more tasks for less, so it replaces v2 in Meshpool 2.6.
+v3 solves as many or more tasks for less, so it replaces v2.
 
 ## What v3 adds
 
@@ -118,7 +120,7 @@ v3 solves as many or more tasks for less, so it replaces v2 in Meshpool 2.6.
 - **Step budget note:** 15 steps before the limit, a reminder to make the deliverable exist first.
 - **Environment snapshot:** the project's files and installed tools in the first request.
 
-Meshpool 2.6 also takes these transport fixes from v4:
+Meshpool also takes these transport fixes from v4:
 
 - a backoff of 3, 6, 12 seconds after a rate limit with no reset time;
 - a session header, so a conversation stays on one cached backend;

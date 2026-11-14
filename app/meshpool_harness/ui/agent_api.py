@@ -87,9 +87,19 @@ def _meta_path(sid: str) -> Path:
     return SESSIONS / sid / "meta.json"
 
 
+_METAS: dict = {}                   # meta.json path -> (mtime, size, meta): the sidebar lists every chat every few s
+
+
 def read_meta(sid: str) -> dict:
+    p = _meta_path(sid)
     try:
-        return json.loads(_meta_path(sid).read_text(encoding="utf-8"))
+        st = p.stat()
+        hit = _METAS.get(sid)
+        if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+            return dict(hit[2])
+        m = json.loads(p.read_text(encoding="utf-8"))
+        _METAS[sid] = (st.st_mtime_ns, st.st_size, m)
+        return dict(m)
     except (OSError, ValueError):
         return {}
 
@@ -101,7 +111,10 @@ def write_meta(sid: str, **kw) -> dict:
     m = read_meta(sid)
     m.update({k: v for k, v in kw.items() if v is not None})
     _meta_path(sid).parent.mkdir(parents=True, exist_ok=True)
-    _meta_path(sid).write_text(json.dumps(m), encoding="utf-8")
+    tmp = _meta_path(sid).with_suffix(f".{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(m), encoding="utf-8")
+    os.replace(tmp, _meta_path(sid))
+    _METAS.pop(sid, None)
     return m
 
 
@@ -129,7 +142,7 @@ _FILLER = re.compile(r"^(?:please|pls|can you|could you|would you|i want you to|
 def nice_title(text: str) -> str:
     """A short thread title from the first message: the first sentence, without greetings, skill names, links,
     or the hidden notes Meshpool adds, capitalised and cut at a word under 48 characters."""
-    t = str(text or "").split("\u200b")[0].strip()
+    t = str(text or "").split("\n\n\u200b")[0].replace("\u200b", "").strip()   # notes start with this separator
     if not t or t in ("New thread", "New chat", "Session"):
         return "New chat" if t in ("", "New thread") else t
     t = t.splitlines()[0]
@@ -154,7 +167,7 @@ class Session:
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
         self.events: list[dict] = []
-        self.epoch = 0
+        self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
         self.cp = None
         self.lock = threading.Lock()
@@ -162,7 +175,7 @@ class Session:
         self.queue: list = []                       # messages sent while a harness without mid-turn input works
         self.ctx_pending = not resume_id             # instructions and memory go with the first message
         self.scheduled: dict | None = None           # the scheduled task that started this thread
-        self.pending: dict | None = None
+        self.pendings: dict = {}                     # open approvals by id: harnesses may ask several at once
         self.mcp = None
         self.agent = None
         self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
@@ -173,6 +186,8 @@ class Session:
             data = _saved(resume_id)
             if not data:
                 raise KeyError(resume_id)
+            if data.get("workdir") and not Path(data["workdir"]).is_dir():
+                raise ProjectMissing(data["workdir"])
             self.harness = HR.get(data.get("harness") or "meshpool-code", read_meta(resume_id).get("model") or None)
             self.kind = data.get("kind") or self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
@@ -287,12 +302,27 @@ class Session:
             self._turn_open = True                   # a turn is running until its turn_end arrives
         elif ev.get("type") == "turn_end":
             self._turn_open = False
-        if ev.get("type") in _KEEP:
-            self._persist()
+        if ev.get("type") in ("user", "turn_end", "interrupted", "error", "approval"):
+            self._persist()                          # moments a restart must not lose: write now
+        elif ev.get("type") in _KEEP:
+            self._persist_soon()
+
+    def _persist_soon(self):
+        """Steps arrive many per second: write the transcript at most once a second instead of on every step."""
+        with self.lock:
+            if getattr(self, "_flush", None):
+                return
+            self._flush = threading.Timer(1.0, self._persist)
+            self._flush.daemon = True
+            self._flush.start()
 
     def _persist(self, running: bool | None = None):
         """Save what the thread shows (steps, stop notes, approvals), so it looks the same after a restart, and
         whether a turn is still running, so a turn cut off by a restart can say so."""
+        with self.lock:
+            t, self._flush = getattr(self, "_flush", None), None
+        if t:
+            t.cancel()
         sid = getattr(self, "id", None)
         if not sid or sid in DELETED or getattr(self.agent, "deleted", False):
             return
@@ -314,7 +344,7 @@ class Session:
             self._n += 1
             p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
                  "decision": "no", "note": "", "options": options}
-            self.pending = p
+            self.pendings[p["id"]] = p
         self.state = "waiting"
         self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
                    "options": options})
@@ -323,15 +353,17 @@ class Session:
         while not p["ev"].wait(0.3):
             if self.agent._stop:
                 break
-        self.pending = None
-        self.state = "working"
+        with self.lock:
+            self.pendings.pop(p["id"], None)
+            if not self.pendings:
+                self.state = "working"
         shown = p["decision"] if p.get("answered") else "stopped"
         self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
         return p["decision"], p["note"]
 
     def answer(self, aid: int, decision: str, note: str = ""):
-        p = self.pending
-        if not p or p["id"] != aid:
+        p = self.pendings.get(aid)
+        if not p:
             raise ValueError("That approval is no longer waiting.")
         allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
@@ -347,7 +379,7 @@ class Session:
             if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
                 qs = ev.get("questions") or [{}]
                 _notify(f"{self.agent.title or 'A task'} has a question for you", str(qs[0].get("question", ""))[:200])
-        elif t == "question_done" and self.state == "waiting" and not self.pending:
+        elif t == "question_done" and self.state == "waiting" and not self.pendings:
             self.state = "working"
 
     def reply(self, question_id: str, answers) -> None:
@@ -497,7 +529,8 @@ class Session:
         model = (model or "").strip()
         from meshpool_harness import providers as PV
         sup = self.harness.get("providers") or []
-        prov = PV.split(model)[0] if model else None
+        own = {m.get("id") for m in (getattr(self.agent, "available_models", None) or []) if isinstance(m, dict)}
+        prov = PV.split(model)[0] if model and model not in own else None   # the agent's own model ids carry no prefix
         if prov and sup and prov not in sup:
             raise ValueError(f"{self.harness['name']} cannot run {PV.name(prov)} models. Start a new chat with an "
                              "agent that can.")
@@ -563,8 +596,8 @@ class Session:
             self.emit({"type": "queued", "text": "", "n": 0})
         if self.agent:
             self.agent.stop()
-        if self.pending:
-            self.pending["ev"].set()
+        for p in list(self.pendings.values()):
+            p["ev"].set()
 
     def set_mode(self, mode: str):
         self.agent.mode = self.mode = mode if mode in MODES else "ask"
@@ -577,9 +610,9 @@ class Session:
     def view(self, since: int) -> dict:
         self.touched = time.time()
         with self.lock:
+            n = len(self.events)
             evs = self.events[since:]
         a = self.agent
-        acp = self.harness["type"] in ("acp", "pi")
         meta = read_meta(self.id)
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
@@ -592,7 +625,7 @@ class Session:
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
-                "events": evs, "total": since + len(evs),
+                "events": evs, "total": since + len(evs) if since <= n else n,
                 "mcp": self.mcp.status() if self.mcp else None}
 
     def close(self):
@@ -650,7 +683,7 @@ def _reap_once(idle_s: float) -> list:
     now, closed = time.time(), []
     with LOCK:
         idle = [(sid, s) for sid, s in LIVE.items()
-                if s.state not in ("working", "waiting", "starting") and not s.pending and not s.queue
+                if s.state not in ("working", "waiting", "starting") and not s.pendings and not s.queue
                 and now - getattr(s, "touched", now) > idle_s]
         for sid, _ in idle:
             LIVE.pop(sid, None)
@@ -678,6 +711,10 @@ def _start_reaper():
     th.start()
 
 
+class ProjectMissing(ValueError):
+    """The chat's project folder was moved or deleted: its history can be read but not continued."""
+
+
 def get(sid: str) -> Session:
     if sid in DELETED:
         raise KeyError(sid)
@@ -687,8 +724,27 @@ def get(sid: str) -> Session:
         return s
     s = Session(resume_id=sid)                   # reopen a saved session
     with LOCK:
-        LIVE[sid] = s
-    return s
+        live = LIVE.setdefault(sid, s)           # two polls may reopen the same chat at once: keep one
+    if live is not s:
+        s.close()
+    return live
+
+
+def view(sid: str, since: int) -> dict:
+    """A chat for the page. A chat whose project folder is gone still shows its history, read-only."""
+    try:
+        return get(sid).view(since)
+    except ProjectMissing as e:
+        tr = _transcript(sid) or {}
+        evs = tr.get("events") or events_from_messages(((_saved(sid) or {}).get("messages") or [])[1:])
+        evs = [dict(x, i=i) for i, x in enumerate(evs)]
+        evs.append({"type": "error", "i": len(evs), "text": f"This chat's project folder ({e}) was moved or deleted, "
+                    "so it can't continue here. Its history is below; start a new chat to keep working."})
+        meta = read_meta(sid)
+        return {"id": sid, "workdir": str(e), "state": "idle", "readonly": True, "mode": "ask", "kind":
+                meta.get("kind") or "code", "title": meta.get("title") or "Chat", "pinned": bool(meta.get("pinned")),
+                "usage": {}, "harness": {}, "model": meta.get("model"), "plan": False, "epoch": 0, "turns": [],
+                "checkpoints_note": "", "events": evs[since:], "total": len(evs), "mcp": None}
 
 
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
@@ -917,7 +973,8 @@ def _saved(sid: str) -> dict | None:
 
 def harness_info() -> dict:
     HR.ensure_defaults()
-    return {"harnesses": [{k: v for k, v in h.items() if k not in ("env",)} for h in HR.load_all()],
+    secret = ("env", "auth", "env_unset")         # launch details: they can hold API keys, and the page needs none
+    return {"harnesses": [{k: v for k, v in h.items() if k not in secret} for h in HR.load_all()],
             "examples": HR.examples(), "folder": str(HR.folder()),
             "defaults": {m: HR.default_for(m) for m in HR.MODES}}
 

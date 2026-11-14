@@ -174,3 +174,28 @@ def test_folded_description_and_nested_plugin_folder(home, tmp_path):
     (tmp_path / "download" / "other").mkdir()
     [rec] = P.install_plugin(str(tmp_path / "download"))
     assert rec["name"] == "folded" and SK.get("folded-long")["description"] == "Spread over two lines."
+
+
+def test_command_listed_as_a_file_and_failed_install_leaves_nothing(home, tmp_path, monkeypatch):
+    from meshpool_harness import plugins as P, skills as SK
+    root = tmp_path / "cmdfile"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps(
+        {"name": "cmdfile", "commands": ["./extra/deploy.md"], "mcpServers": {"s": {"command": "node"}}}))
+    (root / "extra").mkdir()
+    (root / "extra" / "deploy.md").write_text("---\ndescription: 'Deploy: the app # now'\n---\n\nDeploy $ARGUMENTS.\n")
+    [rec] = P.install_plugin(str(root))
+    assert "cmdfile-deploy" in rec["skills"]
+    assert SK.get("cmdfile-deploy")["description"] == "Deploy: the app # now"
+    import yaml
+    text = Path(SK.get("cmdfile-deploy")["path"]).read_text()
+    assert yaml.safe_load(text.split("---")[1])["description"] == "Deploy: the app # now"
+    P.remove_plugin("cmdfile")
+
+    def boom(*a, **k):
+        raise RuntimeError("server step failed")
+    monkeypatch.setattr(P, "_add_server", boom)
+    with pytest.raises(RuntimeError):
+        P.install_plugin(str(root))
+    assert not (home / "plugins" / "cmdfile").exists() and SK.get("cmdfile-deploy") is None
+    assert "cmdfile" not in json.loads((home / "plugins.json").read_text())["plugins"]

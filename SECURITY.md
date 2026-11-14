@@ -1,3 +1,5 @@
+<img src="app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Security
 
 - Never put API keys in code, issues or pull requests. Use `.env` locally and repository secrets in CI.

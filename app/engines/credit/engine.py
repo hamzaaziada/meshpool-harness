@@ -21,7 +21,28 @@ sys.path.insert(0, str(ROOT))
 
 from engines.credit import analysis as A  # noqa: E402
 
-AMOUNT = re.compile(r"(?:\$|usd\s?)\s?(\d+(?:\.\d+)?)\s?(k|m|mm|mn|million|bn|b|billion)?\b", re.I)
+AMOUNT = re.compile(r"(?:\$|usd\s?)\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?"
+                    r"(k|m|mm|mn|million|bn|b|billion)?\b", re.I)
+PCT = re.compile(r"(\d+(?:\.\d+)?)\s?%")
+# a percentage is the interest rate only when rate words sit next to it ("7% interest", "at 6.5%", "rate of 8%"),
+# never when it is a loan-to-value, an advance rate or a share ("80% LTV", "100% of debt")
+RATE_AFTER = re.compile(r"\s*(?:per\s+(?:year|annum)\s+|p\.?a\.?\s+|annual\s+|all[- ]in\s+)?"
+                        r"(?:interest|rate\b|coupon|fixed|floating|sofr|apr\b|per\s+annum|p\.?a\.?(?:\s|$|[.,;]))")
+RATE_BEFORE = re.compile(r"(?:interest(?:\s+rate)?|rate|coupon|pricing|priced|apr|\bat)\s*(?:of|at|:|=|is)?\s*(?:a\s+)?"
+                         r"(?:fixed\s+|floating\s+)?$")
+NOT_RATE = re.compile(r"\s*(?:ltv|loan[- ]to[- ]value|ltc|loan[- ]to[- ]cost|of\b|advance|equity|down|owner|"
+                      r"stake|ownership|margin|growth|share)")
+YEARS = r"(\d+(?:\.\d+)?)[- ]?(?:year|yr)s?\b"
+
+
+def _rate(t: str) -> float | None:
+    for m in PCT.finditer(t):
+        after, before = t[m.end():m.end() + 30], t[max(0, m.start() - 30):m.start()]
+        if NOT_RATE.match(after):
+            continue
+        if RATE_AFTER.match(after) or RATE_BEFORE.search(before):
+            return float(m.group(1)) / 100
+    return None
 
 
 def parse_request(text: str) -> dict:
@@ -30,15 +51,27 @@ def parse_request(text: str) -> dict:
     t = text.lower()
     m = AMOUNT.search(text)
     if m:
-        v, sc = float(m.group(1)), (m.group(2) or "").lower()
+        v, sc = float(m.group(1).replace(",", "")), (m.group(2) or "").lower()
         out["amount"] = v * {"k": 1e-3, "m": 1, "mm": 1, "mn": 1, "million": 1, "bn": 1e3, "b": 1e3,
                              "billion": 1e3}.get(sc, 1e-6)
-    r = re.search(r"(\d+(?:\.\d+)?)\s?%\s?(?:interest|rate|coupon|fixed|floating|sofr)?", t)
-    if r:
-        out["rate"] = float(r.group(1)) / 100
-    a = re.search(r"(\d+(?:\.\d+)?)[- ]?(?:year|yr)s?\b", t)
-    if a:
-        out["amort_years"] = float(a.group(1))
+    r = _rate(t)
+    if r is not None:
+        out["rate"] = r
+    # amortisation is stated on its own ("20-year amortization", "amortizing over 15 years"); a term is the maturity
+    am = re.search(YEARS + r"\s*(?:amorti[sz]ation|amorti[sz]ing|amort\b)", t) or \
+        re.search(r"amorti[sz](?:ation|ed|ing)\s*(?:schedule\s*)?(?:of|over|period of|:)?\s*" + YEARS, t)
+    term = re.search(YEARS + r"\s*(?:term|maturity|tenor|loan term)\b", t) or \
+        re.search(r"(?:term|maturity|tenor)\s*(?:of|:)?\s*" + YEARS, t)
+    if am:
+        out["amort_years"] = float(am.group(1))
+        if term:
+            out["term_years"] = float(term.group(1))        # maturity before the end of amortisation: a balloon
+    elif term:
+        out["amort_years"] = float(term.group(1))           # no separate amortisation: fully amortising over the term
+    else:
+        a = re.search(YEARS, t)
+        if a:
+            out["amort_years"] = float(a.group(1))
     if re.search(r"\brefinanc", t):
         out["refinance_existing"] = True
     if re.search(r"\bfixed[- ]rate\b|\bfixed\b", t):
@@ -116,7 +149,8 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
                 "reason": "Attach the borrower's financial statements (xlsx or csv: line items down, years across) "
                           "or give a public company's ticker, e.g. 'ticker: ACME'."}
     loan = A.Loan(amount=float(req.get("amount") or 0), rate=float(req.get("rate") or 0.07),
-                  amort_years=float(req.get("amort_years") or 7), floating=req.get("floating", True),
+                  amort_years=float(req.get("amort_years") or 7), term_years=req.get("term_years"),
+                  floating=req.get("floating", True),
                   refinance_existing=bool(req.get("refinance_existing")), purpose=req.get("purpose") or "")
     pol = A.Policy()
     res = A.analyse(fin, loan, pol)

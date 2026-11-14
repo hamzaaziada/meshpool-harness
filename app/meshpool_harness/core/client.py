@@ -43,6 +43,54 @@ def _withhold_latest_output(messages, limit=6) -> bool:
     return True
 
 
+_CONTEXT_RX = None
+
+
+def classify_error(msg: str) -> str:
+    """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
+    'auth' (key refused), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
+    context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
+    connection lost, timeout) or 'fatal'."""
+    global _CONTEXT_RX
+    import re
+    if _CONTEXT_RX is None:
+        _CONTEXT_RX = (re.compile(r"context[ _-]?(?:length|window)|maximum context|too many tokens|prompt is too long|"
+                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum)|"
+                                  r"token limit", re.I),
+                       re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
+    m = msg or ""
+    if "HTTP 401" in m or "HTTP 403" in m:
+        return "auth"
+    if "HTTP 429" in m:
+        return "rate_limit"
+    if "rejected as invalid" in m:
+        return "gateway_reject"
+    if "HTTP 400" in m:
+        if _CONTEXT_RX[0].search(m):
+            return "context"
+        if _CONTEXT_RX[1].search(m):
+            return "vision"
+        return "bad_request"
+    if any(code in m for code in ("HTTP 5", "HTTP 0", "upstream", "timed out")):
+        return "transient"
+    return "fatal"
+
+
+def rate_limit_wait(msg: str, n429: int, backoff: bool = True) -> float:
+    """Seconds to wait after the n-th 429 in a row: the reset time when the message gives one, else 3, 6, 12 ... 60 s
+    (backoff; "please slow down" 429s clear in seconds) or 65 s (a token window)."""
+    import calendar
+    import re
+    import time
+    wait = min(60, 3 * 2 ** (max(1, n429) - 1)) if backoff else 65
+    mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg or "")
+    if mt:
+        reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
+        wait = max(5, min(120, reset - time.time() + 3))
+    return wait
+
+
 class LiveClient:
     def __init__(self, phase: str = "phase_2_build"):
         try:
@@ -78,36 +126,27 @@ class LiveClient:
             except RuntimeError as e:
                 last = e
                 msg = str(e)
-                if "HTTP 400" in msg and attempt == 0:      # invalid request: clean every message once, retry
-                    from meshpool_harness.core.tools import clean
+                kind = classify_error(msg)
+                if kind in ("bad_request", "context", "vision", "gateway_reject") and attempt == 0:
+                    from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
                         if isinstance(m.get("content"), str):
                             m["content"] = clean(m["content"])
                     continue
-                if "rejected as invalid" in msg and attempt < 4:   # gateway rejects valid requests at random
+                if kind == "gateway_reject" and attempt < 4:      # gateway rejects valid requests at random
                     time.sleep(2 * attempt)                        # (GATEWAY_ISSUES #10): retry the same request
                     continue
-                if ("rejected as invalid" in msg and os.environ.get("MH_400_WITHHOLD") == "1"
+                if (kind == "gateway_reject" and os.environ.get("MH_400_WITHHOLD") == "1"
                         and _withhold_latest_output(messages)):
                     # The rejection is tied to content (e.g. hex or byte strings in a command's output; GATEWAY_ISSUES
                     # #12), so retrying the same request cannot pass. Withhold the newest tool output and tell the
                     # model, instead of crashing the whole run.
                     continue
-                if "HTTP 429" in msg:                       # meshpool team token limit: wait for the window to reset
-                    import re as _re
-                    wait = 65
-                    if os.environ.get("MH_429_BACKOFF") == "1":   # v4: "please slow down" 429s carry no reset time
-                        n429 = getattr(self, "_n429", 0) + 1
-                        self._n429 = n429                         # and clear in seconds: back off 3, 6, 12 ... 60 s
-                        wait = min(60, 3 * 2 ** (n429 - 1))
-                    mt = _re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg)
-                    if mt:
-                        import calendar
-                        reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
-                        wait = max(5, min(120, reset - time.time() + 3))
-                    time.sleep(wait)
+                if kind == "rate_limit":                    # meshpool team token limit: wait for the window to reset
+                    self._n429 = getattr(self, "_n429", 0) + 1
+                    time.sleep(rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1"))
                     continue
-                if not any(code in msg for code in ("HTTP 5", "HTTP 0", "upstream", "timed out")):
+                if kind != "transient":
                     raise
                 time.sleep(min(30, 2 ** (attempt + 1)))
         raise last

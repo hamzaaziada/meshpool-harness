@@ -15,13 +15,14 @@ class FileSource(Connector):
     """file:path/to/task.md (first line is the title) or file:- for stdin. Results go to <path>.result.json."""
 
     def fetch(self, ref: str) -> Task:
-        text = sys.stdin.read() if ref == "-" else Path(ref).read_text()
+        text = sys.stdin.read() if ref == "-" else Path(ref).read_text(encoding="utf-8")
         title, _, body = text.partition("\n")
         return Task("file", ref, title.strip("# ").strip(), body.strip())
 
     def report(self, task: Task, result: dict) -> None:
         if task.ref != "-":
-            Path(task.ref + ".result.json").write_text(json.dumps(result, indent=1, default=str))
+            Path(task.ref + ".result.json").write_text(json.dumps(result, indent=1, default=str),
+                                                         encoding="utf-8")
 
 
 @register("http")

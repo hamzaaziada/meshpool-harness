@@ -27,7 +27,10 @@
   --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace;
-  --ease:cubic-bezier(.2,.7,.2,1);
+  --ease:cubic-bezier(.16,1,.3,1);       /* slow out: quick start, gentle landing (things arriving) */
+  --ease-in:cubic-bezier(.5,0,.75,0);    /* slow in: things leaving accelerate away */
+  --spring:cubic-bezier(.34,1.56,.64,1); /* follow-through: a small overshoot that settles */
+  --t-press:70ms; --t-fast:120ms; --t-med:180ms; --t-slow:260ms;   /* all under the 400 ms Doherty threshold */
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -82,7 +85,8 @@ code,pre,kbd{font-family:var(--mono)}
 .brandrow{display:flex;align-items:center;gap:8px;padding:4px 4px 8px}
 .brandrow img{height:20px;width:auto;display:block}
 .brandrow .sp{flex:1}
-.beta{font-size:var(--fs-xs);font-weight:500;color:var(--ink-3);line-height:16px}
+.beta{font-size:var(--fs-xs);font-weight:500;color:var(--pool-text);line-height:16px;border:1px solid color-mix(in srgb,var(--pool) 35%,transparent);background:var(--pool-soft);border-radius:999px;padding:2px 8px;cursor:pointer}
+.beta:hover{border-color:var(--pool)}
 .newbtn{display:flex;align-items:center;gap:8px;width:100%;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-m);padding:7px 10px;font-weight:500;color:var(--ink);box-shadow:var(--shadow-s)}
 .newbtn:hover{background:var(--hover)}
 .newbtn svg{color:var(--ink-2)}
@@ -574,24 +578,47 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 @container main (max-width:520px){#hPill .lbl{display:none}}
 
 /* ---------- motion: short, calm, never moves the layout (opacity and transform only) ---------- */
-@keyframes mp-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes mp-pop{from{opacity:0;transform:scale(.97) translateY(-2px)}to{opacity:1;transform:none}}
+@keyframes mp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes mp-pop{0%{opacity:0;transform:scale(.94) translateY(-4px)}70%{opacity:1;transform:scale(1.01)}100%{transform:none}}
 @keyframes mp-fade{from{opacity:0}to{opacity:1}}
-@keyframes mp-rise{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
-@keyframes mp-toast{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes mp-rise{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes mp-toast{0%{opacity:0;transform:translate(14px,10px) rotate(1.5deg)}60%{opacity:1;transform:translate(-2px,-1px) rotate(-.3deg)}100%{transform:none}}
+@keyframes mp-out{to{opacity:0;transform:translateY(6px) scale(.97)}}
 @keyframes mp-breathe{0%,100%{opacity:.25}50%{opacity:1}}
 @keyframes mp-lightup{0%{opacity:0;transform:scale(.4)}60%{opacity:1;transform:scale(1.25)}100%{transform:scale(1)}}
+@keyframes mp-launch{0%{transform:scale(1.1,.86)}45%{transform:translateY(-3px) scale(.94,1.08)}100%{transform:none}}
+@keyframes mp-stage{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--warn) 50%,transparent)}100%{box-shadow:0 0 0 12px transparent}}
 @keyframes pulse{50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
-.col>.enter{animation:mp-in .18s var(--ease) both}
-.pop{animation:mp-pop .12s var(--ease) both;transform-origin:top left}
+/* Motion: used only where it explains what happened.
+   Anticipation: a press dips before it acts. Squash and stretch: the send button squashes on press and stretches as
+   it lets go. Follow-through and slow in/slow out: arrivals land on --ease or --spring, exits leave on --ease-in.
+   Arcs: toasts travel on a slight curve. Staging: a new approval card pulses once to draw the eye, then rests.
+   Secondary action: the status dot breathes while the agent works. Solid drawing: cards lift with a layered shadow.
+   Snappy timing: 70-260 ms. Reduced-motion users get none of it (rule above). */
+.col>.enter{animation:mp-in var(--t-med) var(--ease) both}
+.col>.msg-user.enter{animation:mp-rise var(--t-slow) var(--spring) both}
+.pop{animation:mp-pop var(--t-med) var(--spring) both;transform-origin:top left}
 .scrim{animation:mp-fade .14s ease-out both}
-.scrim>.modal,.scrim>.dlg{animation:mp-rise .18s var(--ease) both}
-.toast{animation:mp-toast .18s var(--ease) both}
+.scrim>.modal,.scrim>.dlg{animation:mp-rise var(--t-med) var(--ease) both}
+.toast{animation:mp-toast var(--t-slow) var(--ease) both}
+.toast.out{animation:mp-out var(--t-fast) var(--ease-in) forwards}
 .panel:not([hidden])>*{animation:mp-fade .16s ease-out both}
 .onb-card{animation:mp-in .22s var(--ease) both}
-.th,.tbtn,.pill,.btn,.iconbtn,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.ptabs button,.mnav button{transition:background-color .12s ease,color .12s ease,border-color .12s ease,box-shadow .12s ease}
-.btn:active,.bigbtn:active,.pill:active,.newbtn:active{transform:scale(.98)}
+.appr:not(.done){animation:mp-stage .9s var(--ease) both}
+.th,.tbtn,.pill,.btn,.bigbtn,.iconbtn,.send,.side-foot button,.newbtn,.scopeopt,.updbar,.chip,.search,.starters button,.opt,.qopt,.ptabs button,.mnav button{transition:background-color var(--t-fast) ease,color var(--t-fast) ease,border-color var(--t-fast) ease,box-shadow var(--t-med) var(--ease),transform var(--t-med) var(--spring),filter var(--t-fast) ease}
+.btn:active,.bigbtn:active,.pill:active,.newbtn:active,.iconbtn:active,.opt:active,.qopt:active,.starters button:active,.chip:active{transform:scale(.96);transition-duration:var(--t-press)}
+.send:active{transform:scale(1.1,.86);transition-duration:var(--t-press)}
+.send.go{animation:mp-launch var(--t-slow) var(--spring)}
+.starters button:hover,.newbtn:hover,.qopt:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+/* Fitts's law: nothing clickable is a tiny target. Small icon buttons keep their look but get a 32 px hit area. */
+.iconbtn{position:relative;min-width:28px;min-height:28px}
+.iconbtn::after{content:"";position:absolute;inset:-4px}
+.send{width:36px;height:36px}
+.th{min-height:34px}
+.opt{min-height:36px}
+.pill,.btn{min-height:30px}
+.switch{cursor:pointer}
 .modesw [data-mode]{transition:background-color .15s ease,color .15s ease,box-shadow .15s ease}
 
 /* ---------- scrollbars: the same thin, steady scrollbars on Windows and Mac ----------

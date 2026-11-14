@@ -1,3 +1,5 @@
+<img src="../app/meshpool_harness/ui/brand/mark.png" alt="Meshpool" width="44">
+
 # Building Meshpool
 
 The repository holds Meshpool's own code. The installers also bundle third-party runtimes, which are kept out of git. Put them in a `deps` folder at the repo root, or point `MESHPOOL_DEPS` at another folder.

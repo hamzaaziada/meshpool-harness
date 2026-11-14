@@ -10,8 +10,12 @@ Files in the Meshpool data folder:
 """
 from __future__ import annotations
 
+import contextlib
+import difflib
 import json
+import os
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -42,10 +46,57 @@ def _read(p: Path) -> str:
 
 
 def _write(p: Path, text: str):
+    """Write atomically through a temp file with a unique name, so two writers never share one temp file."""
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(p)
+    fd, tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, p)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+@contextlib.contextmanager
+def _locked(lock: Path):
+    """Hold a lock across threads and processes (the app's scheduler, other app windows and the assistant MCP server
+    all change these files) for one read-modify-write."""
+    with _LOCK:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock, "a+b") as fh:
+            if os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:                  # LK_LOCK gives up after about 10 s: keep waiting
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    import msvcrt
+                    with contextlib.suppress(OSError):
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _memory_lock():
+    return _locked(_dir() / ".memory.lock")
+
+
+def _tasks_lock():
+    return _locked(C.home() / "schedules.lock")
 
 
 def settings() -> dict:
@@ -86,11 +137,11 @@ def remember(fact: str) -> str:
         raise ValueError("Keep it under 400 characters: one fact per call.")
     if BAD.search(fact):
         raise ValueError("Memory does not store secrets or instructions about the system.")
-    with _LOCK:
+    with _memory_lock():
         cur = memory()
         lines = [x for x in cur.splitlines() if x.strip()]
-        low = fact.lower()
-        if any(low in x.lower() for x in lines):
+        key = _norm_fact(fact)
+        if any(_norm_fact(x) == key for x in lines):    # whole lines: "likes tea" is not "Dislikes tea"
             return "Already in memory."
         lines.append(f"- {fact}")
         text = "\n".join(lines)
@@ -101,17 +152,31 @@ def remember(fact: str) -> str:
     return "Saved to memory."
 
 
+def _norm_fact(line: str) -> str:
+    return re.sub(r"\s+", " ", line).strip().lstrip("-•* ").strip().rstrip(".").strip().lower()
+
+
 def forget(text: str) -> str:
-    text = (text or "").strip().lower()
-    if not text:
+    """Remove the memory lines that say exactly this; if none does, the one line that matches it best."""
+    key = _norm_fact(text or "")
+    if not key:
         raise ValueError("Say what to forget.")
-    with _LOCK:
+    with _memory_lock():
         lines = memory().splitlines()
-        keep = [x for x in lines if text not in x.lower()]
-        if len(keep) == len(lines):
+        facts = [(i, _norm_fact(x)) for i, x in enumerate(lines) if _norm_fact(x)]
+        drop = {i for i, f in facts if f == key}
+        if not drop:
+            near = [(difflib.SequenceMatcher(None, key, f).ratio(), i) for i, f in facts if key in f]
+            if not near:
+                near = [(r, i) for r, i in ((difflib.SequenceMatcher(None, key, f).ratio(), i) for i, f in facts)
+                        if r >= 0.6]
+            if near:
+                drop = {max(near)[1]}
+        if not drop:
             return "Nothing in memory matched that."
-        set_memory("\n".join(keep))
-    return f"Removed {len(lines) - len(keep)} line(s) from memory."
+        removed = [lines[i].strip() for i in sorted(drop)]
+        set_memory("\n".join(x for i, x in enumerate(lines) if i not in drop))
+    return f"Removed {len(removed)} line(s) from memory:\n" + "\n".join(removed)
 
 
 def context_block() -> str:
@@ -197,28 +262,42 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
     return None
 
 
-def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
-             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork") -> dict:
+def _check_task(t: dict) -> dict:
+    """Validate and normalise a task's schedule fields in place (shared by add_task and update_task)."""
+    when = t.get("when")
     if when not in WHEN:
         raise ValueError("when must be one of: " + ", ".join(WHEN))
-    if not (prompt or "").strip():
+    if not str(t.get("prompt") or "").strip():
         raise ValueError("Write what the task should do.")
+    t["prompt"] = str(t["prompt"]).strip()
     if when == "once":
         try:
-            datetime.fromisoformat(at)
+            datetime.fromisoformat(str(t.get("at") or ""))
         except ValueError:
             raise ValueError("For a one-time task give `at` as a local date and time, like 2026-11-20T09:00.")
     if when in ("daily", "weekdays", "weekly"):
-        h, mi = _hm(time_)
-        time_ = f"{h:02d}:{mi:02d}"
-    if when == "weekly" and (day or "")[:3].lower() not in DAYS:
+        h, mi = _hm(t.get("time") or "09:00")
+        t["time"] = f"{h:02d}:{mi:02d}"
+    t["day"] = (t.get("day") or "mon")[:3].lower()
+    if when == "weekly" and t["day"] not in DAYS:
         raise ValueError("day must be mon, tue, wed, thu, fri, sat or sun.")
-    t = {"id": uuid.uuid4().hex[:8], "name": (name or prompt.strip().splitlines()[0])[:80], "prompt": prompt.strip(),
-         "when": when, "time": time_, "day": (day or "mon")[:3].lower(), "at": at, "minutes": max(15, int(minutes or 60)),
-         "folder": folder, "harness": harness, "kind": kind if kind in ("cowork", "code") else "cowork",
-         "enabled": True, "created": time.time(), "last_run": None, "last_thread": None}
+    try:
+        t["minutes"] = max(15, int(t.get("minutes") or 60))
+    except (TypeError, ValueError):
+        raise ValueError("minutes must be a whole number.")
+    if t.get("kind") not in ("cowork", "code"):
+        t["kind"] = "cowork"
+    t["name"] = str(t.get("name") or t["prompt"].splitlines()[0])[:80]
+    return t
+
+
+def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
+             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork") -> dict:
+    t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
+                     "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
+                     "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
-    with _LOCK:
+    with _tasks_lock():
         rows = tasks()
         rows.append(t)
         _save_tasks(rows)
@@ -226,21 +305,26 @@ def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str =
 
 
 def update_task(tid: str, **kw) -> dict:
-    with _LOCK:
+    with _tasks_lock():
         rows = tasks()
-        for t in rows:
+        for n, t in enumerate(rows):
             if t["id"] == tid:
+                new = dict(t)
                 for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled"):
                     if k in kw and kw[k] is not None:
-                        t[k] = kw[k]
-                t["next_run"] = next_run(t) if t.get("enabled") else None
+                        new[k] = kw[k]
+                _check_task(new)                                     # same rules as add_task; nothing saved on error
+                if new.get("when") != t.get("when") or new.get("at") != t.get("at"):
+                    new["last_run"] = None                           # a new time: a fired one-time task runs again
+                new["next_run"] = next_run(new) if new.get("enabled") else None
+                rows[n] = new
                 _save_tasks(rows)
-                return t
+                return new
     raise KeyError(tid)
 
 
 def delete_task(tid: str) -> bool:
-    with _LOCK:
+    with _tasks_lock():
         rows = tasks()
         keep = [t for t in rows if t["id"] != tid and t.get("name", "").lower() != tid.lower()]
         _save_tasks(keep)
@@ -248,10 +332,11 @@ def delete_task(tid: str) -> bool:
 
 
 def due() -> list[dict]:
-    """Tasks whose time has come; marks them as run and works out their next time."""
+    """Tasks whose time has come; marks them as run and works out their next time. The claim (re-read, check, mark,
+    save) happens under the cross-process lock, so two app instances never both run the same task."""
     now = time.time()
     out = []
-    with _LOCK:
+    with _tasks_lock():
         rows = tasks()
         changed = False
         for t in rows:
@@ -286,7 +371,7 @@ def describe(t: dict) -> str:
 
 
 def set_thread(tid: str, sid: str):
-    with _LOCK:
+    with _tasks_lock():
         rows = tasks()
         for t in rows:
             if t["id"] == tid:

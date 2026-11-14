@@ -170,8 +170,20 @@ def _report(st, cid: str) -> bool:
 
 
 def connect(target: str, name: str = "", token: str = "", st=None) -> tuple[bool, str]:
-    """Connect a catalog app by id or name, or add a server by URL. Returns (ok, connector id)."""
+    """Connect a catalog app by id or name, or add a server by URL. Returns (ok, connector id). A network or server
+    error is shown, never raised: in a terminal session it must not end the session."""
     st = st or _style()
+    try:
+        return _connect(target, name, token, st)
+    except KeyboardInterrupt:
+        _p()
+        return False, ""
+    except Exception as e:  # noqa: BLE001
+        _p(st.red(f"  Couldn't connect: {e}"))
+        return False, ""
+
+
+def _connect(target: str, name: str, token: str, st) -> tuple[bool, str]:
     target = target.strip()
     if re.match(r"https?://", target):
         _p(st.dim("  Checking the server..."))

@@ -9,12 +9,14 @@ the best sources in parallel and returns the passages that answer the question, 
 from __future__ import annotations
 
 import base64
-import gzip
 import html
+import http.client
+import ipaddress
 import json
 import os
 from concurrent.futures import TimeoutError as _FutTimeout
 import re
+import socket
 import tempfile
 import threading
 import time
@@ -41,24 +43,79 @@ class WebError(Exception):
 
 # ---------- HTTP ---------------------------------------------------------------------------------------------------
 
-def _get(url: str, data: bytes | None = None, headers: dict | None = None, timeout: float = 20,
-         limit: int = 8_000_000) -> tuple[int, dict, bytes, str]:
-    req = urllib.request.Request(url, data=data, headers={**HEAD, **(headers or {})})
+def _private_allowed() -> bool:
+    return os.environ.get("MH_ALLOW_PRIVATE_FETCH", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def check_public(url: str) -> None:
+    """Refuse URLs whose host resolves to this computer or a private network (loopback, RFC 1918, link-local such
+    as the 169.254.169.254 cloud metadata address, reserved ranges). Agents call fetch() without asking, so a page
+    or a prompt must not be able to make them read local services. MH_ALLOW_PRIVATE_FETCH=1 turns the check off."""
+    if _private_allowed():
+        return
+    u = urllib.parse.urlparse(url)
+    if u.scheme.lower() not in ("http", "https"):
+        raise WebError(f"refused {url}: only http and https links can be read")
+    host = u.hostname
+    if not host:
+        raise WebError(f"refused {url}: no host name")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        port = u.port or (443 if u.scheme.lower() == "https" else 80)
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError, OSError) as e:
+        raise WebError(f"could not reach {host}: {e}")
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            raise WebError(f"refused {url}: unexpected address for {host}")
+        if ip.version == 6 and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise WebError(f"refused {url}: {host} is a local or private network address ({ip}). Only public web "
+                           "pages can be read (set MH_ALLOW_PRIVATE_FETCH=1 to allow local addresses).")
+
+
+class _PublicRedirects(urllib.request.HTTPRedirectHandler):
+    """Check every redirect hop too: a public page must not bounce the request to a local address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_public(urllib.parse.urljoin(req.full_url, newurl))
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _inflate(body: bytes, wbits: int, limit: int) -> bytes:
+    """Decompress at most limit bytes (a small gzip bomb must not fill memory); a cut-off stream gives what it has."""
+    d = zlib.decompressobj(wbits)
+    return d.decompress(body, limit)
+
+
+def _get(url: str, data: bytes | None = None, headers: dict | None = None, timeout: float = 20,
+         limit: int = 8_000_000, public_only: bool = False) -> tuple[int, dict, bytes, str]:
+    req = urllib.request.Request(url, data=data, headers={**HEAD, **(headers or {})})
+    open_ = urllib.request.urlopen
+    if public_only:
+        check_public(url)
+        open_ = urllib.request.build_opener(_PublicRedirects).open
+    try:
+        with open_(req, timeout=timeout) as r:
             body, hdr, final = r.read(limit), {k.lower(): v for k, v in r.headers.items()}, r.geturl()
             status = r.status
     except urllib.error.HTTPError as e:
-        body, hdr, final, status = e.read(200_000) if e.fp else b"", {k.lower(): v for k, v in (e.headers or {}).items()}, url, e.code
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        try:
+            body = e.read(200_000) if e.fp else b""
+        except (OSError, http.client.HTTPException):
+            body = b""
+        hdr, final, status = {k.lower(): v for k, v in (e.headers or {}).items()}, url, e.code
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as e:
         raise WebError(f"could not reach {urllib.parse.urlparse(url).netloc or url}: {getattr(e, 'reason', e)}")
     enc = hdr.get("content-encoding", "")
     try:
         if "gzip" in enc:
-            body = gzip.decompress(body)
+            body = _inflate(body, 16 + zlib.MAX_WBITS, limit)
         elif "deflate" in enc:
-            body = zlib.decompress(body, -zlib.MAX_WBITS) if body[:1] != b"\x78" else zlib.decompress(body)
-    except (OSError, zlib.error):
+            body = _inflate(body, -zlib.MAX_WBITS if body[:1] != b"\x78" else zlib.MAX_WBITS, limit)
+    except (OSError, zlib.error, EOFError):
         pass
     return status, hdr, body, final
 
@@ -73,8 +130,18 @@ def _decode(body: bytes, ctype: str) -> str:
         return body.decode("utf-8", "replace")
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _untag(s: str, repl: str = " ") -> str:
+    """Remove tags in linear time. A bare `<[^>]+>` rescans to the end of the text from every '<' that has no '>'
+    after it, which takes minutes on a hostile page; text after the last '>' cannot hold a tag, so leave it out."""
+    end = s.rfind(">") + 1
+    return _TAG.sub(repl, s[:end]) + s[end:]
+
+
 def _strip(s: str) -> str:
-    s = re.sub(r"(?s)<[^>]+>", " ", s)
+    s = _untag(s)
     return re.sub(r"\s+", " ", html.unescape(s)).strip()
 
 
@@ -312,12 +379,33 @@ def format_results(rows: list[dict]) -> str:
 
 # ---------- reading pages -------------------------------------------------------------------------------------------
 
-def _meta(page: str, *names: str) -> str:
+_META_TAG = re.compile(r"<meta\b[^>]{0,2000}>", re.I)
+_ATTR = re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
+META_SCAN = 500_000                                  # meta tags live in <head>: never scan a huge page for them
+
+
+def _metas(page: str) -> dict:
+    """{name: content} for the page's <meta> tags (property, name or itemprop; first one wins). Each tag is matched
+    once with a bounded pattern, so a hostile page cannot make this slow."""
+    out: dict[str, str] = {}
+    for m in _META_TAG.finditer(page, 0, min(len(page), META_SCAN)):
+        attrs = {}
+        for a in _ATTR.finditer(m.group(0), 5):
+            attrs.setdefault(a.group(1).lower(), next((g for g in a.groups()[1:] if g is not None), ""))
+        content = attrs.get("content")
+        if not content:
+            continue
+        for k in ("property", "name", "itemprop"):
+            if attrs.get(k):
+                out.setdefault(attrs[k].strip().lower(), html.unescape(content).strip())
+    return out
+
+
+def _meta(page: str | dict, *names: str) -> str:
+    tags = page if isinstance(page, dict) else _metas(page)
     for nm in names:
-        m = re.search(r'<meta[^>]+(?:property|name|itemprop)=["\']%s["\'][^>]+content=["\']([^"\']+)' % re.escape(nm), page, re.I) \
-            or re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name|itemprop)=["\']%s["\']' % re.escape(nm), page, re.I)
-        if m:
-            return html.unescape(m.group(1)).strip()
+        if tags.get(nm.lower()):
+            return tags[nm.lower()]
     return ""
 
 
@@ -411,12 +499,13 @@ def _lxml_text(page: str, base: str, links: bool) -> tuple[str, list] | None:
 
 def html_to_text(page: str, base: str = "", links: bool = False) -> dict:
     """Readable text of an HTML page: the main content as light Markdown, plus title, date and description."""
-    title = _meta(page, "og:title") or _strip((re.search(r"(?is)<title[^>]*>(.*?)</title>", page) or [None, ""])[1])
-    date = _meta(page, "article:published_time", "datePublished", "pubdate", "date", "og:updated_time", "dc.date")
+    tags = _metas(page)
+    title = _meta(tags, "og:title") or _strip((re.search(r"(?is)<title[^>]*>(.*?)</title>", page) or [None, ""])[1])
+    date = _meta(tags, "article:published_time", "datePublished", "pubdate", "date", "og:updated_time", "dc.date")
     if not date:
         m = re.search(r'"datePublished"\s*:\s*"([^"]+)"', page)
         date = m.group(1) if m else ""
-    desc = _meta(page, "og:description", "description")
+    desc = _meta(tags, "og:description", "description")
     lx = _lxml_text(page, base, links)
     if lx and len(lx[0]) > 200:
         return {"title": title, "date": date, "description": desc, "text": lx[0], "links": lx[1]}
@@ -444,13 +533,30 @@ def html_to_text(page: str, base: str = "", links: bool = False) -> dict:
     b = re.sub(r"(?is)<(tr)[^>]*>", "\n", b)
     b = re.sub(r"(?is)</t[dh]>", " | ", b)
     b = re.sub(r"(?is)<br\s*/?>|</(p|div|li|tr|section|article|blockquote|pre|table|ul|ol|dd|dt)>", "\n", b)
-    b = re.sub(r"(?s)<[^>]+>", " ", b)
+    b = _untag(b)
     b = html.unescape(b)
     b = re.sub(r"[ \t\r\f\v ]+", " ", b)
     b = "\n".join(x.strip() for x in b.split("\n"))
     b = re.sub(r"\n\s*\n+", "\n\n", b).strip()
     b = re.sub(r"(?m)^- \s*$\n?", "", b)
     return {"title": title, "date": date, "description": desc, "text": b, "links": found}
+
+
+# content types of the documents docread reads, most specific first
+CTYPE_EXT = (("wordprocessingml", ".docx"), ("spreadsheetml", ".xlsx"), ("presentationml", ".pptx"),
+             ("ms-excel.sheet.macroenabled", ".xlsm"), ("ms-excel", ".xls"), ("text/csv", ".csv"),
+             ("text/tab-separated-values", ".tsv"), ("msword", ".doc"), ("ms-powerpoint", ".ppt"))
+
+
+def _doc_ext(ctype: str, body: bytes, path: str) -> str:
+    """The file extension docread needs: PDF by type or magic bytes, then a document extension in the link, then the
+    content type (download links often have no extension), else .bin."""
+    if "pdf" in ctype or body[:5] == b"%PDF-":
+        return ".pdf"
+    ext = os.path.splitext(path)[1]
+    if ext in DOC_EXT:
+        return ext
+    return next((e for key, e in CTYPE_EXT if key in ctype), ext or ".bin")
 
 
 def fetch(url: str, refresh: bool = False) -> dict:
@@ -464,14 +570,14 @@ def fetch(url: str, refresh: bool = False) -> dict:
         hit = _CACHE.get(url)
     if hit and not refresh and time.time() - hit[0] < 900:
         return hit[1]
-    st, hdr, body, final = _get(url, timeout=30)
+    st, hdr, body, final = _get(url, timeout=30, public_only=True)
     ctype = hdr.get("content-type", "").lower()
     if st >= 400:
         raise WebError(f"HTTP {st} from {url}" + (" (the site blocks automated reading; try another source)" if st in (401, 403, 429) else ""))
     path = urllib.parse.urlparse(final).path.lower()
     res = {"url": final, "status": st, "type": ctype.split(";")[0], "title": "", "date": "", "description": "", "links": []}
     if "pdf" in ctype or body[:5] == b"%PDF-" or path.endswith(DOC_EXT) or "officedocument" in ctype or "ms-excel" in ctype:
-        ext = ".pdf" if ("pdf" in ctype or body[:5] == b"%PDF-") else (os.path.splitext(path)[1] or ".bin")
+        ext = _doc_ext(ctype, body, path)
         with tempfile.TemporaryDirectory() as td:
             fp = os.path.join(td, "doc" + ext)
             with open(fp, "wb") as fh:
@@ -624,5 +730,6 @@ def research(question: str, queries: list | None = None, max_sources: int = 6, r
     rest = [r for r in ranked if r["url"] not in pages or not pages[r["url"]].get("text")][:6]
     tail = ("\n\nOther results (not opened):\n" + format_results(rest)) if rest else ""
     head = (f"Research on: {question}\nQueries: " + "; ".join(qs) + f"\nRead {n} sources. Cite them by number and "
-            "link. Use web_fetch on a source to read all of it.\n\n")
+            "link. Read a source in full with your page-reading tool (fetch_url, or web_fetch where that is the "
+            "tool's name).\n\n")
     return head + ("\n\n".join(out) if out else "None of the top pages could be read.") + tail

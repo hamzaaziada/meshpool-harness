@@ -26,6 +26,7 @@ from collections import Counter
 from pathlib import Path
 
 from .common import load_rules, soffice_convert, summarize
+from .common import SCALE as _SCALE, candidates as _candidates, numbers as _numbers  # noqa: F401  (one extractor)
 from .common import failure as F
 from .ooxml_check import check as ooxml_check
 from .measure_pptx import measure, public
@@ -69,42 +70,6 @@ def _has_verb(title: str) -> bool:
                  "drew", "sank", "shrank", "swung", "stood", "began", "became", "outgrew", "overtook", "underwent",
                  "saw", "found", "got", "ran", "spun", "slid", "bore"}
     return any(w in irregular for w in re.findall(r"[a-z]+", title.lower()))
-
-
-_NUM = re.compile(r"(?<![\w.])[-+]?\$?\(?\d[\d,]*(?:\.\d+)?\)?\s?(?:%|pp|x|bn|b|m|mm|k|million|billion|thousand)?(?![\w])", re.I)
-
-
-def _numbers(text: str, ignore: re.Pattern) -> list[tuple[str, float, str]]:
-    """(raw, value, unit) for every number in text; years and small ordinals filtered by `ignore`."""
-    out = []
-    for m in _NUM.finditer(text):
-        raw = m.group(0).strip()
-        core = re.sub(r"[^\d.]", "", raw.split()[0] if " " in raw else raw)
-        if not core or core == ".":
-            continue
-        if ignore.match(core) and not re.search(r"%|\$|bn|b$|m$|k$|x$|million|billion|thousand", raw, re.I):
-            continue
-        try:
-            v = float(core)
-        except ValueError:
-            continue
-        if raw.startswith("-") or raw.startswith("("):
-            v = -v
-        unit = (re.search(r"(%|pp|x|bn|b|mm|m|k|million|billion|thousand)\s*$", raw, re.I) or [None])[0]
-        unit = unit.lower() if unit else ""
-        out.append((raw, v, unit))
-    return out
-
-
-_SCALE = {"": 1, "k": 1e3, "thousand": 1e3, "m": 1e6, "mm": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9}
-
-
-def _candidates(v: float, unit: str) -> list[float]:
-    """A quoted number may be stated in the chart's own units or scaled: compare against all plausible readings."""
-    if unit in ("%", "pp"):
-        return [v, v / 100]
-    s = _SCALE.get(unit, 1)
-    return sorted({v, v * s, v * s / 1e3, v * s / 1e6, v * s / 1e9})
 
 
 def _close(a: float, b: float, tol: float) -> bool:
