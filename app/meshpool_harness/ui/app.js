@@ -1432,7 +1432,7 @@ function panelPreview(body) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["import", "Import chats and context"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
 function openSettings(sec = "general") {
   closePop();
@@ -1536,8 +1536,8 @@ async function renderSection(sec) {
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
-      <div id="paContext" style="margin-top:22px"></div>`;
-    contextPanel($("#paContext", b));   // import what ChatGPT, Claude or Gemini already knows, any time
+      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Claude, Claude Code or Codex? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
+    $("#paImport").onclick = () => renderSection("import");
     $("#paSave").onclick = async () => {
       try {
         await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
@@ -1546,6 +1546,9 @@ async function renderSection(sec) {
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New threads use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
+  } else if (sec === "import") {
+    b.innerHTML = `${close}<div id="impBox"></div>`;
+    await contextPanel($("#impBox", b));
   } else if (sec === "scheduled") {
     const draw = a => {
       const proj = S.projects.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join("");
@@ -1909,37 +1912,62 @@ function showOnboarding() {
    custom GPT / project instructions as skills. */
 async function contextPanel(box) {
   if (!box) return;
-  let prompt = "";
+  let prompt = "", local = {};
   try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
-  box.innerHTML = `<h3 class="onb-h">Bring your context</h3>
-    <p class="muted">So Meshpool knows how you work from day one. Pick either way; both take a minute.</p>
+  try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
+  const srcs = Object.entries(local).filter(([, v]) => v.found);
+  const n = x => Number(x || 0).toLocaleString();
+  box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
+    <p class="muted">Your old chats come over as threads you can search and continue here. What your assistant knows about you becomes instructions and memory. Nothing leaves this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
+      <li><b>Your ChatGPT or Claude chats.</b> Ask for your data export, then drop the .zip here as it arrives (do not unzip it).
+        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link within minutes to a day.</small>
+        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
+        <small class="muted">Every chat becomes a thread, with its original date. Claude projects become skills, and lasting facts about you become memory.</small></li>
+      ${srcs.length ? `<li><b>Sessions on this computer.</b> ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)}: ${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}
+        <small class="muted">Each session opens in its project folder, so you can carry on with any agent.</small></li>` : ""}
+      <li><b>Or ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
         <div><button class="btn" id="ctxCopy">Copy the prompt</button></div>
         <textarea id="ctxText" rows="4" placeholder="Paste the answer here"></textarea>
         <div><button class="btn" id="ctxGo">Import the answer</button></div></li>
-      <li><b>Or upload your data export.</b> ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data.
-        Both email you a .zip. Meshpool keeps your projects' instructions as skills and lasting facts as memory; it does not copy your chats.
-        <div><input type="file" id="ctxZip" accept=".zip"></div></li>
       <li><b>Have a custom GPT or a Claude project you rely on?</b> Paste its instructions to make it a skill.
         <input id="ctxName" placeholder="Name, e.g. board-memo-writer">
         <textarea id="ctxIns" rows="3" placeholder="Paste the instructions"></textarea>
         <div><button class="btn" id="ctxSkill">Save as a skill</button></div></li>
     </ol><div class="res" id="ctxRes"></div>`;
-  const res = (t, bad) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ""); r.textContent = t; };
+  const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
+  const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
   $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
   $("#ctxGo", box).onclick = async () => {
     const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
-    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : "")); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : ""), false, true); } catch (e) { res(e.message, true); }
   };
-  $("#ctxZip", box).onchange = async ev => {
-    const f = ev.target.files[0]; if (!f) return; res("Reading your export…");
-    const data = await new Promise(ok => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.readAsDataURL(f); });
-    try { const r = await post("/api/import-context", {file: {name: f.name, data}}); res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${r.skills.length} project skills, ${r.memory} facts into memory, ${r.instructions} instructions (from ${r.conversations_seen} conversations; chats not copied).`); } catch (e) { res(e.message, true); }
+  const upload = async f => {
+    if (!f) return;
+    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or Claude, without unzipping it.", true);
+    res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
+    try {
+      const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
+      await refresh();
+      res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported as threads${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+    } catch (e) { res(e.message, true); }
   };
+  const dz = $("#ctxDrop", box);
+  dz.onclick = () => $("#ctxZip", box).click(); dz.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#ctxZip", box).click(); } };
+  $("#ctxZip", box).onchange = ev => upload(ev.target.files[0]);
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("over"); upload(e.dataTransfer.files[0]); };
+  $$("[data-local]", box).forEach(x => x.onclick = async () => {
+    x.disabled = true; res(`Importing ${local[x.dataset.local].name} sessions…`);
+    try {
+      const r = await post("/api/import-chats", {sources: [x.dataset.local]}); await refresh();
+      res(`Imported ${n(r.imported)} ${local[x.dataset.local].name} session${r.imported === 1 ? "" : "s"} as threads${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.`, false, true);
+      x.textContent = "Imported";
+    } catch (e) { x.disabled = false; res(e.message, true); }
+  });
   $("#ctxSkill", box).onclick = async () => {
     const instructions = $("#ctxIns", box).value.trim(); if (!instructions) return res("Paste the instructions first.", true);
-    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`, false, true); } catch (e) { res(e.message, true); }
   };
 }
 

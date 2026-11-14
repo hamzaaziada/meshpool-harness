@@ -389,22 +389,37 @@ def _paste(st) -> str | None:
 
 
 def context_step(st, header: bool = True) -> bool:
-    """Bring what ChatGPT, Claude or Gemini already knows about you: paste its answer to a prompt, or import a data
-    export (.zip). Preferences become instructions, lasting facts become memory; chats are not copied."""
+    """Bring your chats and context: a ChatGPT or Claude export (every chat becomes a thread; projects become skills;
+    lasting facts become memory), the Claude Code and Codex sessions on this computer, or an assistant's answer to
+    a prompt (instructions and memory)."""
+    from meshpool_harness import chat_import as CI
     from meshpool_harness import importer
     if header:
         _p()
-        _p(f"  {st.bold('Bring your context')}")
-        _p(f"  {st.dim('So Meshpool knows how you work from day one. Your chats are not copied.')}")
+        _p(f"  {st.bold('Bring your chats and context')}")
+        _p(f"  {st.dim('Old chats become threads you can search and continue. Nothing leaves this computer.')}")
         _p()
-    c = _choose(st, [("Paste from ChatGPT, Claude or Gemini", "copy a prompt there, paste its answer here"),
-                     ("Import a data export (.zip)", "ChatGPT or Claude: Settings, Data or Privacy, Export data"),
-                     ("Skip", "do it later with /import")], 1)
+    local = {k: v for k, v in CI.scan_local().items() if v["found"] > v["imported"]}
+    opts = [("zip", "Import a ChatGPT or Claude export (.zip)", "your chats, projects and what it knows about you")]
+    if local:
+        opts.append(("local", "Import sessions from this computer",
+                     ", ".join(f"{v['name']}: {v['found'] - v['imported']} new" for v in local.values())))
+    opts += [("paste", "Paste from ChatGPT, Claude or Gemini", "copy a prompt there, paste its answer here"),
+             ("skip", "Skip", "do it later with /import or meshpool import")]
+    c = _choose(st, [(o[1], o[2]) for o in opts], 1)
     if c is None:
         return False
-    if c == 3:
+    pick = opts[c - 1][0]
+    if pick == "skip":
         return True
-    if c == 1:
+    if pick == "local":
+        _p(st.dim("    Importing..."))
+        r = CI.import_local(list(local))
+        _p(f"    {st.green('✓')} Imported {r['imported']} sessions as threads"
+           + (st.dim(f" ({r['skipped']} were already here)") if r["skipped"] else "") + ". They open in their project "
+           "folders.")
+        return True
+    if pick == "paste":
         prompt = importer.context_prompt()
         copied = _copy(prompt)
         _p()
@@ -422,6 +437,8 @@ def context_step(st, header: bool = True) -> bool:
         _p(f"    {st.green('✓')} Imported {r['instructions']} instructions and {r['memory']} facts into memory."
            + (st.dim(f" Skipped {len(r['skipped'])} (secrets or system instructions).") if r["skipped"] else ""))
         return True
+    _p(st.dim("  ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data."))
+    _p(st.dim("  Both email you a .zip. Keep it zipped."))
     while True:
         v = _ask(st, "Path to the .zip " + st.dim("(you can drag the file into this window)"))
         if not v:
@@ -430,14 +447,16 @@ def context_step(st, header: bool = True) -> bool:
         if path.is_file():
             break
         _p(st.amber(f"    No file at {path}."))
-    _p(st.dim("    Reading your export..."))
+    _p(st.dim("    Importing your export..."))
     try:
-        r = importer.import_export(str(path))
+        r = CI.import_export(str(path))
     except Exception as e:  # noqa: BLE001
         _p(st.red(f"    Could not import it: {e}"))
         return True
-    _p(f"    {st.green('✓')} {'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {len(r['skills'])} project "
+    _p(f"    {st.green('✓')} {'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats as "
+       f"threads" + (f" ({r['skipped']} were already here)" if r["skipped"] else "") + f", {len(r['skills'])} project "
        f"skills, {r['memory']} facts into memory, {r['instructions']} instructions.")
+    _p(st.dim("    Find them in the app (meshpool ui), or ask the agent about an old chat."))
     return True
 
 
@@ -450,7 +469,7 @@ def tour(st) -> None:
     rows = [("Just type what you want", 'e.g. "summarize the PDFs here" or "fix the failing test"'),
             ("Enter", "sends it. End a line with \\ to keep typing"),
             ("Ctrl+C", "stops the current step. Twice quits"),
-            ("/help", "all commands. /model switches models, /import brings your context"),
+            ("/help", "all commands. /model switches models, /import brings your old chats"),
             ("meshpool", "starts it again later, in any folder"),
             ("meshpool ui", "the full app in your browser")]
     w = max(len(a) for a, _ in rows)
