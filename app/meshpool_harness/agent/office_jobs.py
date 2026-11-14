@@ -2,7 +2,7 @@
 Meshpool Office MCP server (agent/office_mcp_server.py): where the files go, how the engine process runs, and the
 report the agent reads.
 
-A job runs `python -m meshpool_harness run <request> --engine <engine> --out <folder>` in its own process and
+A job runs `python -P -m meshpool_harness run <request> --engine <engine> --out <folder>` in its own process and
 prints its result as JSON on stdout. Files land in "<project>/Meshpool outputs/<stamp>-<engine>".
 """
 from __future__ import annotations
@@ -34,12 +34,21 @@ def resolve_files(root: Path, files: list | None) -> tuple[list[str], str]:
     return paths, ""
 
 
+def _python_m() -> list[str]:
+    """`python -m meshpool_harness` that keeps its working folder off sys.path: the engine runs in an output folder
+    inside the user's project, where a json.py would shadow Python's own (-P on 3.11+, a bootstrap on 3.10; the same
+    command the updater relaunches with, minus this process's arguments)."""
+    from meshpool_harness import updater
+    cmd = updater._relaunch_cmd()
+    return cmd[:len(cmd) - (len(sys.argv) - 1)] if len(sys.argv) > 1 else cmd
+
+
 def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
     """Register a job (its output folder, command and build number) and return its id; run() runs it."""
     jid = uuid.uuid4().hex[:8]
     out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}"
     out.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, "-m", "meshpool_harness", "run", request, "--engine", engine, "--out", str(out)]
+    cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
     if paths:
         cmd += ["--files", *paths]
     now = time.time()

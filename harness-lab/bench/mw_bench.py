@@ -190,12 +190,11 @@ def one(arm, task, seed, hport, timeout):
 
 
 def _call(bport, cmd, *args):
-    """Thread-safe call to one browser daemon (no module globals; urllib skips the proxy for 127.0.0.1)."""
-    import urllib.request
-    req = urllib.request.Request(f"http://127.0.0.1:{bport}", data=json.dumps({"cmd": cmd, "args": list(args)}).encode(),
-                                 method="POST", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read())
+    """One browser daemon by its port (the daemon needs its per-run token, which ctl.call reads)."""
+    if str(APP) not in sys.path:
+        sys.path.insert(0, str(APP))
+    from engines.browser import ctl
+    return ctl.call(cmd, *args, port=bport)
 
 
 def main():

@@ -275,16 +275,50 @@ ICON_MEANINGS = {"safety": "shield-check", "congestion": "traffic-cone", "traffi
                  "integration": "puzzle", "region": "globe", "regions": "globe", "industry": "factory"}
 
 
+ICON_ALIASES = {"money": "banknote", "revenue": "banknote", "cost": "receipt", "growth": "trending-up",
+                "decline": "trending-down", "customer": "users", "customers": "users", "people": "users",
+                "team": "users", "risk": "shield-alert", "time": "clock", "calendar": "calendar", "market": "store",
+                "retail": "shopping-cart", "data": "database", "analysis": "chart-column", "chart": "chart-column",
+                "target": "target", "goal": "target", "idea": "lightbulb", "strategy": "compass",
+                "partner": "handshake", "partners": "handshake", "law": "scale", "legal": "scale",
+                "location": "map-pin", "map": "map", "country": "globe", "global": "globe", "process": "workflow",
+                "build": "hammer", "factory": "factory", "product": "package", "delivery": "truck",
+                "logistics": "truck", "service": "headset", "support": "headset", "energy": "zap",
+                "heat": "thermometer-sun", "price": "tag", "check": "circle-check", "question": "circle-help",
+                "warning": "triangle-alert", "security": "shield-check", "search": "search",
+                "digital": "monitor-smartphone", "phone": "smartphone", "governance": "landmark",
+                "finance": "landmark", "investment": "piggy-bank", "phase": "milestone", "launch": "rocket",
+                "plan": "list-checks"}
+
+
+@lru_cache(maxsize=1)
+def _icon_names() -> tuple:
+    return tuple(sorted(p.stem for p in ICONS.glob("*.svg")))
+
+
+def icon_name(key: str | None) -> str:
+    """The Lucide icon for a meaning or name: deck meanings first, then aliases, then the closest icon name."""
+    k = (key or "").strip().lower().replace("_", "-").replace(" ", "-")
+    for w in re.split(r"[-\s]+", k):
+        if w in ICON_MEANINGS and (ICONS / f"{ICON_MEANINGS[w]}.svg").exists():
+            return ICON_MEANINGS[w]
+    names = _icon_names()
+    if k in names:
+        return k
+    if k in ICON_ALIASES:
+        return ICON_ALIASES[k]
+    for w in re.split(r"[-\s]+", k):
+        if w in ICON_ALIASES:
+            return ICON_ALIASES[w]
+        hits = [n for n in names if n == w or n.startswith(w + "-")]
+        if hits:
+            return min(hits, key=len)
+    return "circle-dot"
+
+
 @lru_cache(maxsize=256)
 def _icon_png(name: str, hexcolor: str) -> str | None:
     import cairosvg
-    from engines.slides.archetypes import icon_name as _base_icon_name
-
-    def icon_name(k):
-        for w in re.split(r"[-\s_]+", (k or "").lower()):
-            if w in ICON_MEANINGS and (ICONS / f"{ICON_MEANINGS[w]}.svg").exists():
-                return ICON_MEANINGS[w]
-        return _base_icon_name(k)
     nm = icon_name(name)
     src = ICONS / f"{nm}.svg"
     if not src.exists():

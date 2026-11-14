@@ -591,15 +591,9 @@ def _mcp_servers() -> dict:
 
 
 def _edit_mcp(fn):
-    """Load mcp.json, let fn change the servers dict, write it back."""
+    """Load mcp.json, let fn change the servers dict, write it back (nothing happens if there is no mcp.json)."""
     from meshpool_harness.agent import mcp as M
-    p = M.config_file()
-    if not p.exists():
-        return
-    cfg = json.loads(p.read_text(encoding="utf-8"))
-    key = "mcpServers" if "mcpServers" in cfg else "servers"
-    fn(cfg.setdefault(key, {}))
-    p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    M.edit_config(fn, create=False)
 
 
 def _set_servers_disabled(names: list):

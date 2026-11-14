@@ -883,18 +883,19 @@ def mcp_save(body: dict) -> dict:
             json.loads(body["text"])
         except ValueError as e:
             raise ValueError(f"Not valid JSON: {e}")
-        path.write_text(body["text"].rstrip() + "\n", encoding="utf-8")
+        M.write_text_atomic(path, body["text"].rstrip() + "\n")
     elif "name" in body:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        key = "mcpServers" if "mcpServers" in data else "servers"
-        srv = data.get(key, {}).get(body["name"])
-        if srv is None:
+        def toggle(servers):
+            srv = servers.get(body["name"])
+            if not isinstance(srv, dict):
+                raise ValueError(f"No server named {body['name']}")
+            if body.get("enabled"):
+                srv.pop("disabled", None)
+            else:
+                srv["disabled"] = True
+        if not path.exists():
             raise ValueError(f"No server named {body['name']}")
-        if body.get("enabled"):
-            srv.pop("disabled", None)
-        else:
-            srv["disabled"] = True
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        M.edit_config(toggle, create=False)
     return mcp_info()
 
 

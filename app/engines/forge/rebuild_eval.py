@@ -6,7 +6,7 @@
    - level "content": the text of every page, in order, without layout (the hardest thing we would ever get);
    - level "idea" (default, the real test): one model call condenses that text into the context, the governing
      idea and a fact list. No slide titles, no page structure, no images reach the builder.
-2. Build. The deck engine gets the brief and the reference's content-page count, and builds once.
+2. Build. The forge deck engine gets the brief and the reference's content-page count, and builds once.
 3. Score, the same way for both decks:
    - forge validators (P1-P18) on the rebuilt .pptx;
    - measure_pdf on the reference AND on the rebuilt deck's LibreOffice render (apples to apples);
@@ -135,7 +135,8 @@ def score(ref_pdf: str, ref_pages: str | None, rebuild_pptx: str, out_dir: Path,
 
 def run(ref_pdf: str, out_dir: str, pages: str | None = None, level: str = "idea", slides: int | None = None,
         client=None) -> dict:
-    from engines.slides.pipeline import build_deck
+    import shutil
+    from engines.forge.build import build
     from meshpool_harness.core.client import LiveClient
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -145,9 +146,14 @@ def run(ref_pdf: str, out_dir: str, pages: str | None = None, level: str = "idea
         slides = min(15, measure_pdf(ref_pdf, pages)["summary"]["content_pages"])
     brief = make_brief(ref_pdf, pages, level, client, tid)
     (out / "brief.md").write_text(brief)
-    request = (f"Build a {slides}-slide consulting deck for the client described in brief.md. Argue the governing "
+    request = (f"Build a {slides}-slide consulting deck for the client described below. Argue the governing "
                "idea with action titles, charts for the numbers, and a source line on every data slide.")
-    res = build_deck(request, [str(out / "brief.md")], str(out / "rebuild.pptx"), client, tid)
+    try:                                                   # the forge engine, as `--engine slides` builds decks
+        res = build(f"{request}\n\n--- brief.md ---\n{brief}", str(out / "build"), slides, client=client, task_id=tid)
+        shutil.copy(res["pptx"], out / "rebuild.pptx")
+        res = {"ok": True, "calls": res.get("calls"), "slides": slides, "reason": None}
+    except Exception as e:                                 # noqa: BLE001 - the report records a failed build
+        res = {"ok": False, "reason": f"{type(e).__name__}: {e}"}
     rep = {"reference": ref_pdf, "pages": pages, "level": level, "requested_slides": slides,
            "build": {k: res.get(k) for k in ("ok", "calls", "slides", "reason")}}
     if (out / "rebuild.pptx").exists():

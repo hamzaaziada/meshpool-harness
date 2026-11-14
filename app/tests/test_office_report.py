@@ -123,3 +123,14 @@ def test_conversions_keep_the_words(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True: (seen.update(clarity=_clarity), ("ok", False))[1])
     (tmp_path / "a.md").write_text("# Title\n\nSome words.")
     assert O.convert_document("a.md", "docx") == ("ok", False) and seen["clarity"] is False
+
+
+def test_engine_process_keeps_the_project_folder_off_sys_path(tmp_path):
+    from meshpool_harness.agent import office_jobs as OJ
+    jid = OJ.new_job("data", "x", [], tmp_path)
+    try:
+        cmd = OJ.JOBS[jid]["cmd"]
+        assert cmd[0] == sys.executable and ("-P" in cmd[:3] if sys.version_info >= (3, 11) else cmd[1] == "-c")
+        assert cmd[cmd.index("run"):][:2] == ["run", "x"]
+    finally:
+        OJ.JOBS.pop(jid, None)
