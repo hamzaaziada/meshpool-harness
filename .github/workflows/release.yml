@@ -1,0 +1,246 @@
+# Builds the Mac apps and the Windows installer on GitHub's machines and publishes them as a release.
+# Publish a release on GitHub (tag vX.Y.Z matching app/meshpool_harness/__init__.py), or run this workflow by hand;
+# the builds attach Meshpool.dmg, Meshpool-Intel.dmg, Meshpool-Setup.exe and SHA256SUMS.txt to the release.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+  push:
+    branches: [claude/release-build]
+
+permissions:
+  contents: write
+
+# One build at a time: a newer push waits for the running one, then replaces its files
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  PI_VERSION: "1.5.2"
+  HERMES_COMMIT: b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a
+  RUNTIME_EXTRAS: "pywebview playwright"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Third-party runtimes
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+          softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
+          PBS=$(gh release view --repo astral-sh/python-build-standalone --json tagName -q .tagName)
+          for pair in "aarch64-apple-darwin rt-mac" "x86_64-apple-darwin rt-macx64"; do
+            set -- $pair
+            asset=$(gh release view "$PBS" --repo astral-sh/python-build-standalone --json assets -q '.assets[].name' \
+              | grep -E "^cpython-3\.12\.[0-9]+\+[0-9]+-$1-install_only\.tar\.gz$" | head -1)
+            gh release download "$PBS" --repo astral-sh/python-build-standalone -p "$asset"
+            mkdir -p "$2" && tar -xzf "$asset" -C "$2" && rm "$asset"
+          done
+          git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
+          (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
+          rt-mac/python/bin/python3 ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
+          rt-mac/python/bin/python3 -m pip install -q -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64
+          # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
+          sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
+          arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64
+          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
+          for a in arm64 x64; do
+            mkdir -p node-mac-$a
+            curl -fsSL "https://nodejs.org/dist/latest-v22.x/$NODE-darwin-$a.tar.gz" | tar -xz -C node-mac-$a --strip-components=1
+          done
+          mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
+      - name: Build the app trees
+        run: python3 packaging/build_all.py --only=mac-arm64,mac-x64
+      - name: Launchers, sign, disk images
+        env:
+          # Signing and notarization. Empty until the owner's Apple Developer account is set up; sign.sh then does
+          # nothing and the apps stay ad hoc-signed, so the build works either way.
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for a in arm64 x64; do
+            arch=$a; [ $a = x64 ] && arch=x86_64
+            # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
+            clang -O2 -arch $arch -mmacosx-version-min=11.0 -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+            # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
+            D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
+            if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
+            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app 11.0
+          done
+          bash packaging/mac/repack.sh "$PWD/dist-src"
+          ls -la dist-src/out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist-src/out/*.dmg
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Secrets cannot be read in an "if" condition, so the signing steps test this copy of the endpoint instead.
+      # Empty until the owner's Azure account is set up; the signing steps are then skipped and the build still works.
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Third-party runtimes
+        run: |
+          set -euo pipefail
+          mkdir -p deps && cd deps
+          PBS=$(gh release view --repo astral-sh/python-build-standalone --json tagName -q .tagName)
+          asset=$(gh release view "$PBS" --repo astral-sh/python-build-standalone --json assets -q '.assets[].name' \
+            | grep -E '^cpython-3\.12\.[0-9]+\+[0-9]+-x86_64-pc-windows-msvc-install_only\.tar\.gz$' | head -1)
+          gh release download "$PBS" --repo astral-sh/python-build-standalone -p "$asset"
+          mkdir -p rt-win && tar -xzf "$asset" -C rt-win && rm "$asset"
+          git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
+          (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
+          rt-win/python/python.exe ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
+          rt-win/python/python.exe -m pip install -q -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-win-x64\.zip' | head -1)
+          curl -fsSLo node.zip "https://nodejs.org/dist/latest-v22.x/$NODE"
+          python -m zipfile -e node.zip . && mv "${NODE%.zip}" node-win && rm node.zip
+          MG=$(gh release view --repo git-for-windows/git --json assets -q '.assets[].name' | grep -E '^MinGit-[0-9.]+-64-bit\.zip$' | head -1)
+          gh release download --repo git-for-windows/git -p "$MG"
+          python -m zipfile -e "$MG" git-win && rm "$MG"
+          mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
+          mkdir -p win/Meshpool
+          (cd ../packaging/win/launcher && GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o ../../../deps/win/Meshpool/Meshpool.exe .)
+      - name: Build the app tree
+        run: python packaging/build_all.py --only=win
+      - name: Sign the launcher and the app files
+        # Signs Meshpool.exe (the Go launcher) and everything else in the app tree that Windows checks, before the
+        # installer is built. Skipped when the Azure secrets are not set, so the build works before the account exists.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist-src\app-win
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Signing tools for the uninstaller
+        # The uninstaller is generated while makensis runs, so it cannot go through the action above; this puts
+        # signtool and the Artifact Signing dlib on the machine for !uninstfinalize to use.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: packaging/win/sign-setup.ps1
+      - name: Installer
+        shell: bash
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          command -v makensis >/dev/null || choco install nsis -y --no-progress
+          MAKENSIS="$(command -v makensis || echo '/c/Program Files (x86)/NSIS/makensis.exe')"
+          cd dist-src/app-win
+          # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
+          # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
+          if [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
+            "$MAKENSIS" -V2 -DMP_UNINSTALLER_OUT="$PWD/UninstallMeshpool.exe" uninstaller.nsi
+            # The generator writes the uninstaller when it runs, not when it is compiled.
+            ./Meshpool-Uninstaller-Generator.exe
+            [ -f UninstallMeshpool.exe ] || { echo "the uninstaller was not written"; exit 1; }
+            pwsh -NoProfile -NonInteractive -File "$GITHUB_WORKSPACE/packaging/win/sign-file.ps1" \
+              -File "$PWD/UninstallMeshpool.exe" -Description "Meshpool Uninstall"
+            "$MAKENSIS" -V2 -DMP_SIGNED_UNINSTALLER="$PWD/UninstallMeshpool.exe" installer.nsi
+          else
+            "$MAKENSIS" -V2 installer.nsi
+          fi
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
+      - name: Sign the installer
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERT_PROFILE }}
+          files: ${{ github.workspace }}\out\Meshpool-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check the signature
+        # Windows' own verdict. A build that fails here is not published.
+        if: env.AZURE_SIGNING_ENDPOINT != ''
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sig = Get-AuthenticodeSignature "out/Meshpool-Setup.exe"
+          $sig | Format-List Status, StatusMessage, SignerCertificate
+          if ($sig.Status -ne "Valid") { throw "Meshpool-Setup.exe is not validly signed ($($sig.Status))" }
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\x64\\" } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $st) { throw "signtool.exe was not found" }
+          & $st.FullName verify /pa /v "out/Meshpool-Setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signtool verify /pa failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/Meshpool-Setup.exe
+
+  publish:
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach to the release
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          TAG="v$VER"
+          cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe > SHA256SUMS.txt && cd ..
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
+          fi
+          gh release edit "$TAG" --notes-file packaging/release-notes.md
+          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" --draft=false --latest

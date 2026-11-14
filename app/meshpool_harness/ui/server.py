@@ -358,6 +358,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": "Not found."})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):
+            return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         return self._send(404, {"error": "not found"})
@@ -711,8 +713,13 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e).strip("'")})
+        except KeyError as e:
+            msg = str(e).strip("'")
+            return self._send(404, {"error": msg if msg and msg != "None" else "Not found."})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
+        except (BrokenPipeError, ConnectionResetError):
+            return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         return self._send(404, {"error": "not found"})

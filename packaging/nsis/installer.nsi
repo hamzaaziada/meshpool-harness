@@ -7,6 +7,7 @@ InstallDirRegKey HKCU "Software\Meshpool" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 SetCompressorDictSize 64
+
 ; The version placeholders are filled in by packaging/build_all.py from app/meshpool_harness/__init__.py.
 BrandingText "Meshpool @VERSION@@BETA@"
 VIProductVersion "@VERSION_NUM@.0"
@@ -21,7 +22,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 !define MUI_UNICON "Meshpool\Meshpool.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Install Meshpool"
-!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, three agents (Meshpool, Pi and Hermes), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
+!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, the Meshpool Code, Meshpool Work, Pi and Hermes agents (Codex and OpenCode download on first use), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Meshpool.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Meshpool now"
 !insertmacro MUI_PAGE_WELCOME
@@ -32,17 +33,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-; Run winsetup.ps1 with its inputs in environment variables. The script text goes through -Command, which a machine's
-; script execution policy (AllSigned, Restricted) does not block, unlike -File; nothing needs quoting, so folder names
-; with apostrophes are safe.
-!macro WinSetup STOP ADD REMOVE
-  System::Call 'Kernel32::SetEnvironmentVariable(t "MP_SCRIPT", t "$PLUGINSDIR\winsetup.ps1")'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "MP_STOP", t "${STOP}")'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "MP_ADDPATH", t "${ADD}")'
-  System::Call 'Kernel32::SetEnvironmentVariable(t "MP_REMOVEPATH", t "${REMOVE}")'
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($$env:MP_SCRIPT)))"'
-  Pop $0
-!macroend
+!include "winsetup.nsh"
 
 Section "Meshpool" SecMain
   InitPluginsDir
@@ -62,7 +53,14 @@ Section "Meshpool" SecMain
   ; older installs had the terminal command next to Meshpool.exe; it now lives in bin
   Delete "$INSTDIR\meshpool.cmd"
   File /r "Meshpool\*.*"
-  WriteUninstaller "$INSTDIR\Uninstall Meshpool.exe"
+  ; The uninstaller is written and signed on the build machine (packaging/nsis/uninstaller.nsi) and shipped here, so
+  ; it carries a signature. Without the Azure account the build falls back to WriteUninstaller, which writes it on the
+  ; user's machine and leaves it unsigned.
+  !ifdef MP_SIGNED_UNINSTALLER
+    File "/oname=Uninstall Meshpool.exe" "${MP_SIGNED_UNINSTALLER}"
+  !else
+    WriteUninstaller "$INSTDIR\Uninstall Meshpool.exe"
+  !endif
   CreateShortcut "$SMPROGRAMS\Meshpool.lnk" "$INSTDIR\Meshpool.exe" "" "$INSTDIR\Meshpool.ico"
   CreateShortcut "$DESKTOP\Meshpool.lnk" "$INSTDIR\Meshpool.exe" "" "$INSTDIR\Meshpool.ico"
   WriteRegStr HKCU "Software\Meshpool" "InstallDir" "$INSTDIR"

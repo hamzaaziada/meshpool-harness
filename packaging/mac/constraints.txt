@@ -1,0 +1,3 @@
+# Mac builds: the app runs on macOS 11 and later. Every pypdfium2 5.x library needs macOS 12 (whatever its wheel
+# tag says); 4.30.1 is the newest that runs on 11. packaging/mac/check_minos.py checks the real files.
+pypdfium2==4.30.1

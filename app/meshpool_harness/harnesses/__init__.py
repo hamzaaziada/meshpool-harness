@@ -195,6 +195,11 @@ def prepare_hermes(model: str | None = None) -> None:
     ap = cfg.get("approvals") if isinstance(cfg.get("approvals"), dict) else {}
     ap["mode"] = "manual"                       # every command comes to Meshpool, which applies the user's setting;
     cfg["approvals"] = ap                       # Hermes's own "smart" mode auto-approved deletes
+    db = cfg.get("database") if isinstance(cfg.get("database"), dict) else {}
+    # Each chat runs its own Hermes process on the same state.db. In WAL mode one process closing retired the
+    # write-ahead log the others still held, and Hermes then refused to open the database for every chat.
+    db["journal_mode"] = "delete"
+    cfg["database"] = db
     try:
         from meshpool_harness import skills as SK
         SK.sync_to(home / "skills" / "meshpool")           # the user's Meshpool skills, for Hermes too

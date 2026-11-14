@@ -55,7 +55,7 @@ Not testable in this Linux container, so checked by other means:
    ```
 
 2. Install Pi and Hermes as `docs/BUILDING.md` describes, then link them as `app/vendor/pi/node_modules` and
-   `app/vendor/hermes`. Install `packaging/requirements-cli.txt` plus Hermes' own dependencies into the Python that
+   `app/vendor/hermes`. Install `packaging/requirements-cli.txt` plus Hermes' own dependencies (`python packaging/hermes_requirements.py app/vendor/hermes > req.txt`, then `pip install -r req.txt`; Hermes itself refuses to install as a package) into the Python that
    runs the app.
 3. Make a fake home with one skill and one MCP server for each app the importer reads, at `$QA_DIR/fakehome`
    (`run_all.sh` sets it as `HOME`). `e2e_full.py` expects the skills `claude-skill` and `codex-skill` and the MCP

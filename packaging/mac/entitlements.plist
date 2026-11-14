@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the hardened runtime. Meshpool ships its own Python, Node and Git and loads code from all three,
+  so the hardened runtime needs the exceptions below. Nothing here weakens Gatekeeper: the app is still signed with a
+  Developer ID certificate and notarized, and these are the standard exceptions for a bundled interpreter.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Python and Node compile and run generated code at runtime (JIT). -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- CPython's own allocator and some wheels write to memory they then execute. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- pip wheels and Node add-ons are signed by their own authors, not by Meshpool; without this the hardened
+       runtime refuses to load them. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- Computer use drives other apps through Apple events. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

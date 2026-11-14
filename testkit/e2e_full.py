@@ -125,6 +125,7 @@ for task, cat in (("Fix the failing unit test in auth.py", "code"), ("Make a 10 
                   ("Find 30 leads and write cold emails", "gtm")):
     r = call("/api/route-harness", {"text": task, "kind": "cowork"})
     check(f"auto routes '{task[:28]}' as {cat}", r.get("category") == cat and r.get("harness"), r)
+call("/api/harnesses", {"default_mode": "cowork", "id": "meshpool-work"})   # later suites expect the shipped default
 
 # ---------------------------------------------------------------- threads in every harness
 for hid, kind in (("meshpool-code", "code"), ("meshpool-work", "cowork"), ("pi", "code"), ("hermes", "cowork")):
@@ -239,10 +240,11 @@ check("connector catalog", len(cn) >= 20, len(cn))
 r = call("/api/connectors", {"action": "custom", "name": "Test token server", "url": "https://example.com/mcp", "token": "abc123"})
 cid = r.get("id")
 check("custom connector with token", cid and any(x["id"] == cid and x["connected"] for x in r.get("connectors", [])), r)
-r = call("/api/connectors", {"action": "enable", "id": cid, "on": False})
-check("connector disable", any(x["id"] == cid and not x["enabled"] for x in r.get("connectors", [])), r)
-r = call("/api/connectors", {"action": "disconnect", "id": cid})
-check("custom connector removed", not any(x["id"] == cid for x in r.get("connectors", [])), r)
+if cid:
+    r = call("/api/connectors", {"action": "enable", "id": cid, "on": False})
+    check("connector disable", any(x["id"] == cid and not x["enabled"] for x in r.get("connectors", [])), r)
+    r = call("/api/connectors", {"action": "disconnect", "id": cid})
+    check("custom connector removed", not any(x["id"] == cid for x in r.get("connectors", [])), r)
 for c in ("notion", "apollo", "clickup"):
     r = call("/api/connectors", {"action": "connect", "id": c}, timeout=60)
     check(f"OAuth sign-in starts: {c}", str(r.get("url", "")).startswith("https://"), r)

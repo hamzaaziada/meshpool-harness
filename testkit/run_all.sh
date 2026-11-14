@@ -17,7 +17,8 @@ start() {  # port home extra-env...
   (cd "$R/app" && env "${unset[@]}" HOME="$Q/fakehome" MESHPOOL_HOME="$home" MH_BROWSER_HEADLESS=1 "$@" \
      nohup "$PY" -m meshpool_harness ui --port "$port" --no-browser > "$OUT/app-$port.log" 2>&1 &)
 }
-start 8799 "$OUT/home-main"; start 8798 "$OUT/home-fresh"; start 8797 "$OUT/home-code" MH_OBSERVE=1
+start 8799 "$OUT/home-main" MH_ALLOW_PRIVATE_FETCH=1;   # stop_check fetches a slow local page
+start 8798 "$OUT/home-fresh"; start 8797 "$OUT/home-code" MH_OBSERVE=1
 sleep 12
 rm -rf "$OUT/proj"; cp -r "$Q/proj-src" "$OUT/proj"
 for d in /tmp/proj1 /tmp/proj2; do rm -rf "$d"; mkdir -p "$d"; printf 'def add(a, b):\n    return a + b\n' > "$d/calc.py"

@@ -310,7 +310,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .hintline{max-width:760px;margin:6px auto 0;text-align:center;font-size:var(--fs-xs);color:var(--ink-3);min-height:18px;line-height:18px;height:18px;overflow:hidden}
 
 /* ---------- popovers and menus ---------- */
-.pop{position:fixed;z-index:50;background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);box-shadow:var(--shadow);min-width:240px;max-width:420px;max-height:min(460px,70vh);display:flex;flex-direction:column;overflow:hidden}
+.pop{position:fixed;z-index:50;background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);box-shadow:var(--shadow);min-width:min(240px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:min(460px,70vh);display:flex;flex-direction:column;overflow:hidden}
 .pop .ph{padding:8px;border-bottom:1px solid var(--line-2)}
 .pop .ph input{width:100%;border:1px solid var(--line-3);border-radius:var(--r-s);padding:6px 10px;background:var(--surface);outline:none}
 .pop .ph input:focus{border-color:var(--focus)}
@@ -445,9 +445,9 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .mnav .sp{flex:1}
 .mbody{overflow:auto;padding:24px 32px 32px;position:relative}
 .mbody.loading{opacity:.55;transition:opacity .12s ease}
-.mbody h3{font:600 var(--fs-xl)/1.25 var(--body);margin:0 0 4px}
+.mbody h3{font:600 var(--fs-xl)/1.25 var(--body);margin:0 0 4px;padding-right:40px}
 .mbody .lead{color:var(--ink-2);margin:0 0 24px;max-width:62ch}
-.mclose{position:absolute;top:16px;right:16px}
+.iconbtn.mclose,.mclose{position:absolute;top:16px;right:16px}
 .field{display:block;margin:0 0 16px;max-width:560px}
 .field>span{display:block;font-size:var(--fs-s);font-weight:500;color:var(--ink-2);margin-bottom:6px}
 .field input,.field select,.field textarea{width:100%;border:1px solid var(--line-3);border-radius:var(--r-s);padding:7px 10px;background:var(--surface)}
@@ -565,8 +565,13 @@ table.t td.n,table.t th:not(:first-child){text-align:right}
 /* ---------- responsive ---------- */
 /* mid-size windows with a side panel open: keep the chat at least ~430px wide */
 @media (max-width:1439px) and (min-width:981px){.panel{width:min(var(--pw,460px),max(340px,32vw))}}
-@media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow)}}
-@media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:264px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 12px 12px}}
+@media (max-width:980px){.panel{position:fixed;right:0;top:0;bottom:0;z-index:30;box-shadow:var(--shadow);width:min(var(--pw,460px),100vw)}}
+@media (max-width:760px){.app{--sw:0px}.side{display:none}.app.sideopen .side{display:flex;position:fixed;inset:0 auto 0 0;width:264px;z-index:35;box-shadow:var(--shadow)}.col{padding:16px}.composer-wrap{padding:0 12px 12px}
+  /* settings on a phone: full screen, sections in a scrolling row on top */
+  .scrim:not(.dlg-scrim){padding:0}.modal{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:100%;border-radius:0;border:0}
+  .mnav{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px;gap:4px}
+  .mnav h2,.mnav .sp{display:none}.mnav button{flex:none;white-space:nowrap}.mbody{padding:16px}
+  .iconbtn.mclose,.mclose{top:8px;right:8px;z-index:2}}
 /* narrow main column (panel open, small window): icons only where space runs out */
 @container main (max-width:999px){.topbar .tbtn span{display:none}.topbar .tbtn{padding:6px}}
 @container main (max-width:1180px){.topbar .chip.use{display:none}}

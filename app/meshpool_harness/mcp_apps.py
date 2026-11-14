@@ -270,6 +270,12 @@ def test_server(spec: dict, timeout: float = 30) -> dict:
         srv.close()
 
 
+def _plain(err: str) -> str:
+    """A server's error without its HTML page: tags removed, spaces collapsed, short."""
+    t = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", err or "")).strip()
+    return t if len(t) <= 200 else t[:199].rstrip() + "…"
+
+
 def add_custom(name: str, url: str, token: str = "", client_id: str = "", client_secret: str = "") -> dict:
     """Add any remote MCP server by URL. Meshpool works out what it needs: nothing, the pasted token or API key, or a
     browser sign-in (with the user's own client ID when the app does not let other apps register themselves)."""
@@ -289,7 +295,7 @@ def add_custom(name: str, url: str, token: str = "", client_id: str = "", client
             if r.get("status") in (401, 403):
                 raise ValueError(f"{row['name']} refused that token or key. Check it, or leave it empty to sign in "
                                  "through your browser.")
-            raise ValueError(f"Could not connect to {host}: {r['error']}")
+            raise ValueError(f"Could not connect to {host}: {_plain(r['error'])}")
         row.update(auth="token", header=hdr)
     else:
         r = test_server({"url": url})
@@ -303,7 +309,7 @@ def add_custom(name: str, url: str, token: str = "", client_id: str = "", client
                                  "header other than Authorization, paste it as Header-Name: value).")
             row["auth"] = "oauth"
         else:
-            raise ValueError(f"Could not connect to {host}: {r['error']}")
+            raise ValueError(f"Could not connect to {host}: {_plain(r['error'])}")
     with _LOCK:
         st = _read(_state_file())
         st.setdefault("custom", []).append(row)

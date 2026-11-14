@@ -3,6 +3,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | sh
 #
+# On macOS, `--app` installs the Meshpool app itself instead, the same one the download button gives you:
+#
+#   curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | bash -s -- --app
+#
 # It installs into ~/.meshpool-cli and puts the `meshpool` command on your PATH. It uses your Python 3.10 or later
 # if you have one; otherwise it downloads a private copy of Python into ~/.meshpool-cli (nothing system-wide changes).
 # Settings: MESHPOOL_REF (branch or tag), MESHPOOL_DIR, MESHPOOL_BIN, MESHPOOL_NO_SETUP=1 (do not start setup),
@@ -67,6 +71,74 @@ find_python() {
 
 sha256() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1; else sha256sum "$1" | cut -d' ' -f1; fi
+}
+
+# ---------- the app, for macOS -----------------------------------------------------------------------------------
+# Installs the Meshpool app itself, the same one the download button gives you. It is fetched with curl, which does
+# not set the "downloaded from the internet" mark that makes macOS show the "cannot be verified" warning, so the app
+# opens normally. This is how Homebrew and rustup install, and it is the stopgap until the app is signed and
+# notarized (then the download button works on its own and this is just a second way in).
+app_mac() {
+  [ "$(uname -s)" = Darwin ] || die "The app is for macOS. On Linux, install the terminal version: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh"
+  command -v hdiutil >/dev/null 2>&1 || die "hdiutil is missing, so the disk image cannot be opened."
+
+  case "$(uname -m)" in
+    arm64)  NAME=Meshpool.dmg ;;
+    x86_64) NAME=Meshpool-Intel.dmg ;;
+    *)      die "Meshpool does not have a build for this Mac ($(uname -m))." ;;
+  esac
+
+  logo
+  say "  ${DIM}Installing the Meshpool app. This takes a minute.${OFF}"
+  say ""
+
+  BASE="https://github.com/$REPO/releases/latest/download"
+  step "Downloading $NAME..."
+  curl -fL --progress-bar "$BASE/$NAME" -o "$TMP/$NAME" || die "Could not download $NAME. Check your internet connection."
+  ok "$NAME"
+
+  # The checksum is published next to the download. A mismatch means the file is not the one Meshpool built, so stop.
+  step "Checking the download..."
+  curl -fsSL "$BASE/SHA256SUMS.txt" -o "$TMP/SHA256SUMS.txt" ||
+    die "Could not download SHA256SUMS.txt, so the download cannot be checked. Nothing was installed."
+  WANT="$(grep -E "[[:space:]]\*?$NAME\$" "$TMP/SHA256SUMS.txt" | awk '{print $1}' | head -1)"
+  [ -n "$WANT" ] || die "$NAME is not listed in SHA256SUMS.txt. Nothing was installed."
+  GOT="$(sha256 "$TMP/$NAME")"
+  if [ "$WANT" != "$GOT" ]; then
+    die "The download does not match its checksum, so it was not installed.
+     expected $WANT
+     got      $GOT
+     Try again, and if it keeps happening tell us at https://github.com/$REPO/issues"
+  fi
+  ok "Checksum matches"
+
+  step "Opening the disk image..."
+  MNT="$TMP/mnt"
+  mkdir -p "$MNT"
+  hdiutil attach "$TMP/$NAME" -nobrowse -quiet -mountpoint "$MNT" || die "Could not open $NAME."
+  [ -d "$MNT/Meshpool.app" ] || { hdiutil detach "$MNT" -quiet || true; die "Meshpool.app is not in $NAME."; }
+
+  # /Applications needs admin rights; without them, install for this user only, which macOS also runs from.
+  DEST="/Applications"
+  if [ ! -w "$DEST" ]; then
+    DEST="$HOME/Applications"
+    mkdir -p "$DEST"
+    say "  ${DIM}No admin rights for /Applications, installing to ~/Applications instead.${OFF}"
+  fi
+  step "Installing to $(echo "$DEST" | sed "s|^$HOME|~|")..."
+  rm -rf "$DEST/Meshpool.app"
+  ditto "$MNT/Meshpool.app" "$DEST/Meshpool.app" || { hdiutil detach "$MNT" -quiet || true; die "Could not copy Meshpool.app."; }
+  hdiutil detach "$MNT" -quiet || true
+  ok "Meshpool.app"
+
+  # curl does not set the quarantine mark, but be sure: without it macOS has nothing to warn about.
+  xattr -dr com.apple.quarantine "$DEST/Meshpool.app" 2>/dev/null || true
+
+  say ""
+  say "  ${BLUE}Meshpool is installed.${OFF} Opening it now."
+  say "  ${DIM}You can also open it from Applications, or Spotlight.${OFF}"
+  say ""
+  open "$DEST/Meshpool.app" || true
 }
 
 private_python() {
@@ -134,6 +206,18 @@ main() {
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT
   mkdir -p "$DIR"
+
+  # --app installs the Meshpool app itself (macOS), not the terminal version.
+  case "${1:-}" in
+    --app|-a) app_mac; return 0 ;;
+    --help|-h)
+      say "Meshpool installer"
+      say "  (no arguments)  install Meshpool for the terminal"
+      say "  --app           install the Meshpool app (macOS)"
+      return 0 ;;
+    "") ;;
+    *) die "Unknown option \"$1\". Use --app for the app, or no option for the terminal version." ;;
+  esac
 
   logo
   say "  ${DIM}Installing Meshpool for the terminal. This takes a minute the first time.${OFF}"
