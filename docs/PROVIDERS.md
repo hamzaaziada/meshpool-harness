@@ -8,9 +8,9 @@ The message box has two separate choices:
 
   | Agent | Best at |
   |---|---|
-  | Meshpool Auto | General tasks: picks the best agent for each one |
-  | Meshpool Code | Coding in your project, with browser, connectors and skills |
-  | Meshpool Work | Documents, spreadsheets, decks and research |
+  | Meshpool Auto | Picks the best agent per task: quality first, then cost and speed |
+  | Meshpool Code | Coding in your project: more fixes solved, for less, than Codex CLI |
+  | Meshpool Work | Word, Excel, PowerPoint and PDF, checked before you get them |
   | Pi | Quick, low-cost code fixes |
   | Hermes | Ongoing work: remembers what it learns across chats |
   | Codex | Terminal and command-line work, on GPT models |

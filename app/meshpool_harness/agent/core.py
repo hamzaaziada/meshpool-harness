@@ -343,6 +343,11 @@ def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
     if hard:
         last = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=-1)
         _compact(messages, keep_recent=sum(1 for m in messages[last + 1:] if m.get("role") == "tool"))
+        for m in messages[last + 1:]:
+            c = m.get("content")
+            if m.get("role") == "tool" and isinstance(c, str) and len(c) > T.MAX_TOOL_CHARS:
+                m["content"] = (c[:T.HEAD] + f"\n... [{len(c) - T.HEAD - T.TAIL} chars cut: the conversation was "
+                                "over the model's context] ...\n" + c[-T.TAIL:])
         _shrink_args(messages)
         _drop_images(messages, keep=0)
         return

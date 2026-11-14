@@ -13,22 +13,25 @@ from meshpool_harness.providers import SIGNIN_ONLY as PROVIDER_AGENT   # a provi
 
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
-     "models": "meshpool", "tagline": "Coding in your project, with browser, connectors and skills",
-     "description": ("Best for coding in your project: edits code, runs commands and tests, and uses your "
-                    "connected apps, skills and a browser.")},
+     "models": "meshpool", "tagline": "Coding in your project: more fixes solved, for less, than Codex CLI",
+     "description": ("Best for coding in your project. On SWE-bench Verified it solved 18 of 20 tasks at $0.008 "
+                     "each, more and cheaper than Codex CLI on the same model. Edits code, runs commands and tests, "
+                     "and uses a browser, your connected apps and skills.")},
     {"id": "meshpool-work", "name": "Meshpool Work", "mode": "cowork", "type": "builtin", "models": "meshpool",
-     "tagline": "Documents, spreadsheets, decks and research",
-     "description": ("Best for documents, spreadsheets, decks, data and research. Makes real Word, Excel and "
-                    "PowerPoint files and checks each one before it reaches you.")},
+     "tagline": "Word, Excel, PowerPoint and PDF, checked before you get them",
+     "description": ("Best for documents, spreadsheets, decks, data and research. Passed all 7 tasks in our office "
+                     "run, from a live-formula workbook to editing a contract in place. Every deck and workbook is "
+                     "checked against Meshpool's design and formula rules before it reaches you.")},
 ]
 PI = {"id": "pi", "name": "Pi", "mode": "code", "type": "pi", "models": "meshpool",
       "tagline": "Quick, low-cost code fixes",
-      "description": ("Best for quick, low-cost coding. A small open-source coding agent, fast on everyday "
-                      "fixes.")}
+      "description": ("Best for quick, low-cost coding. A small open-source coding agent: 19 of 20 SWE-bench "
+                      "Verified tasks at $0.007 each in our run.")}
 AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "auto", "models": "meshpool",
-        "tagline": "General tasks: picks the best agent for each one",
-        "description": ("Best when you are not sure: picks a good agent for each task and tells you which one and "
-                        "why.")}
+        "tagline": "Picks the best agent per task: quality first, then cost and speed",
+        "description": ("Best when you are not sure. For each task it takes the agent with the best benchmark "
+                        "quality for that kind of work, then the cheapest and fastest of the equally good ones, "
+                        "and tells you which one and why.")}
 # The official Claude Code, Codex and Gemini CLI agents, over the Agent Client Protocol. They are harnesses (which
 # agent runs); the provider of the thread's model decides the credentials they run on (see credentials() below).
 CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"

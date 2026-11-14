@@ -198,6 +198,11 @@ def test_market_inputs_are_sourced_and_ranged(tmp_path):
     F = ROOT / "tests" / "fixtures" / "market"
     rf = MK.treasury_yield(text=(F / "treasury_2026_tail.xml").read_text())
     assert rf["value"] == pytest.approx(0.0515) and rf["date"] == "2026-11-13" and "10Y on 2026-11-13" in rf["source"]
+    feed = (F / "treasury_2026_tail.xml").read_text()
+    with pytest.MonkeyPatch.context() as mp:                  # early January: this year's feed is empty, use last year's
+        mp.setattr(MK, "_get", lambda url, timeout=30: feed if "value=2026" in url else "<feed/>")
+        mp.setattr(MK.time, "strftime", lambda fmt: "2027")
+        assert MK.treasury_yield()["date"] == "2026-11-13"
     erp = MK.damodaran_erp((F / "damodaran_home_snippet.html").read_text())
     assert erp["value"] == pytest.approx(0.0441) and (erp["low"], erp["high"]) == pytest.approx((0.0339, 0.0581))
     bt = (F / "damodaran_betas_snippet.html").read_text()
