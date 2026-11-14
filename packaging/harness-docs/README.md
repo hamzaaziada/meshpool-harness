@@ -46,7 +46,7 @@ Settings are shared with the Meshpool app:
 - Windows: `%APPDATA%\Meshpool\meshpool.config` and `mcp.json`
 
 `meshpool.config` holds `MESHPOOL_API_KEY`, `MESHPOOL_BASE_URL`, `MH_MODEL` and tokens such as `GITHUB_TOKEN`.
-`mcp.json` uses the same format as Claude Desktop; set `"disabled": false` on a server to turn it on.
+`mcp.json` uses the common `mcpServers` format most MCP apps use; set `"disabled": false` on a server to turn it on.
 
 ## Plug it into an editor (ACP)
 

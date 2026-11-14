@@ -1728,7 +1728,7 @@ async function renderSection(sec) {
     return;
   } else if (sec === "skills") {
     await loadSkills();
-    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Claude and Codex, and Meshpool shares them with every agent.</p>
+    b.innerHTML = `${close}<h3>Skills</h3><p class="lead">Skills are instructions the agent loads when a task matches, or when you type <code>$name</code> in the message box. They use the same SKILL.md format as Codex and Hermes, and Meshpool shares them with every agent.</p>
       <div class="dropzone" id="skDrop" tabindex="0" role="button">Drop a skill folder, a .zip or a SKILL.md here, or click to choose files<input type="file" id="skFile" multiple hidden></div>
       <ul class="rows2" id="skl"></ul>
       <details><summary class="btn" style="display:inline-block">Write a new skill</summary>
@@ -1781,7 +1781,7 @@ async function renderSection(sec) {
   } else if (sec === "harnesses") {
     await loadHarnesses();
     const ex = S.hInfo.examples || [];
-    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: Codex on an API key or ChatGPT, Claude Code on a Claude sign-in or an Anthropic key, Gemini CLI on a Google sign-in or a Gemini key. Other agents can be added too.</p>
+    b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
       <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">Not installed</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
@@ -1807,7 +1807,7 @@ async function renderSection(sec) {
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
-      <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">Same format as Claude Desktop. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
+      <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">The common mcpServers format most MCP apps use. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
@@ -1844,7 +1844,7 @@ async function renderSection(sec) {
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "Standard"], ["responses", "Responses API"]], MH_HARNESS_PROFILE: [["minimal", "Recommended"], ["", "Older, stricter checks"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
-    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
+    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
@@ -1857,12 +1857,11 @@ async function renderSection(sec) {
 
 /* ================================== first run ================================== */
 const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
-// Providers: what the models run on. Agents (harnesses) are picked separately; the default agent follows the provider.
+// Providers: what the models run on. Agents (harnesses) are picked separately.
 const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
-  ["custom", "Another API key", "OpenAI, Anthropic, OpenRouter or any OpenAI-compatible provider."],
-  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."],
-  ["claude", "Claude subscription, runs Claude Code", "Your Claude Pro or Max plan. Anthropic allows it for Claude Code only."]];
-const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}, claude: {name: "Claude", harness: "claude-code"}};
+  ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan, for Meshpool's agents, Pi, Hermes and Codex. No API key needed."]];
+const SIGNIN = {chatgpt: {name: "ChatGPT", harness: "codex"}};
 function showOnboarding() {
   if ($("#onb")) return;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
@@ -1886,7 +1885,7 @@ function showOnboarding() {
   const sub = () => SIGNIN[prov] && (S.harnesses || []).find(h => h.id === SIGNIN[prov].harness);
   const drawSub = () => {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
-    const what = prov === "claude" ? " It runs Claude Code, Anthropic's own agent: Anthropic's terms do not let other apps use a Claude sign-in, so Meshpool's own agents need an API key or ChatGPT." : " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
+    const what = " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
     $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;

@@ -144,12 +144,12 @@ def test_check_accepts_a_subscription_without_a_key(monkeypatch, capsys):
     from meshpool_harness import providers as PV
     monkeypatch.delenv("MESHPOOL_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(PV, "ready", lambda p: p == "claude")
+    monkeypatch.setattr(PV, "ready", lambda p: p == "chatgpt")
     monkeypatch.setattr(HR, "ready", lambda: True)
     monkeypatch.setattr(Cfg, "system_check", lambda: [])
     assert CLI._check(False) == 0
     out = capsys.readouterr().out
-    assert "MISSING" not in out and "Claude subscription" in out
+    assert "MISSING" not in out and "ChatGPT subscription" in out
     monkeypatch.setattr(HR, "ready", lambda: False)
     monkeypatch.setattr(PV, "ready", lambda p: False)
     assert CLI._check(False) == 1

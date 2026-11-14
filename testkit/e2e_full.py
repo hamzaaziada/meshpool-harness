@@ -110,8 +110,9 @@ check("CI panel without a remote answers cleanly", "_http" not in c, c)
 # ---------------------------------------------------------------- harnesses
 h = call("/api/harnesses")
 ids = [x["id"] for x in h.get("harnesses", [])]
-for want in ("meshpool-auto", "meshpool-code", "meshpool-work", "pi", "hermes", "codex", "claude-code"):
+for want in ("meshpool-auto", "meshpool-code", "meshpool-work", "pi", "hermes", "codex"):
     check(f"harness listed: {want}", want in ids, ids)
+check("no agents Meshpool does not support", not {"claude-code", "gemini-cli"} & set(ids), ids)
 r = call("/api/harnesses", {"example": "goose"})
 check("add example harness", any(x["id"] == "goose" for x in r.get("harnesses", [])), r)
 r = call("/api/harnesses", {"remove": "goose"})
@@ -194,16 +195,10 @@ vv = call(f"/api/agent/{v.get('id')}?since=0")
 check("auto thread created with routed harness", vv.get("harness", {}).get("id") not in (None, "meshpool-auto")
       and any("Meshpool Auto picked" in (e.get("text") or "") for e in vv.get("events", [])), vv.get("harness"))
 
-# Claude Code without a Claude sign-in or Anthropic key fails clearly, not silently
+# A thread naming an agent an older version had (saved chats, scheduled tasks) opens in Meshpool Code
 v = call("/api/agent", {"workdir": P, "harness": "claude-code", "kind": "code", "mode": "auto"})
-if v.get("id"):
-    time.sleep(1)
-    call(f"/api/agent/{v['id']}/send", {"text": "hello"})
-    vv = wait_idle(v["id"], limit=200)
-    msg = " ".join(texts(vv, "error") + texts(vv) + texts(vv, "status"))
-    check("Claude Code answers, or asks the user to sign in", texts(vv) or re.search(r"sign in|log ?in|auth", msg, re.I), msg[:300])
-else:
-    check("Claude Code without credentials says how to set it up", re.search(r"sign-in|API key", json.dumps(v)), v)
+vv = call(f"/api/agent/{v.get('id')}?since=0") if v.get("id") else v
+check("an old agent id opens in Meshpool Code", vv.get("harness", {}).get("id") == "meshpool-code", vv.get("harness") or v)
 
 # thread search, archive, delete
 check("thread search", call("/api/search?q=hello").get("hits"), "")

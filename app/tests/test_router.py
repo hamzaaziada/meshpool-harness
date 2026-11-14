@@ -10,22 +10,22 @@ def test_routing_stress_accuracy(tmp_path):
 
 
 def test_auto_skips_signed_in_subscriptions_unless_allowed(monkeypatch, tmp_path):
-    """QA blocker B2: Auto used to send work to the user's paid Claude plan without asking."""
+    """QA blocker B2: Auto used to send work to the user's paid plan without asking."""
     from meshpool_harness import harness_router as R
     from meshpool_harness import harnesses as HR
     from meshpool_harness import config as C
     rows = [{"id": "meshpool-code", "name": "Meshpool Code", "available": True},
-            {"id": "claude-code", "name": "Claude Code", "available": True, "ready": True, "plan": "claude",
+            {"id": "codex", "name": "Codex", "available": True, "ready": True, "plan": "chatgpt",
              "signed_in": True}]
     monkeypatch.setattr(HR, "load_all", lambda: rows)
     monkeypatch.setattr(R, "table", lambda: {"categories": {"code": {"keywords": ["bug"], "scores": {
-        "claude-code": 92, "meshpool-code": 90}}}})
+        "codex": 92, "meshpool-code": 90}}}})
     monkeypatch.setattr(C, "read", lambda *a, **k: {})
     monkeypatch.delenv("MH_AUTO_SUBSCRIPTIONS", raising=False)
     monkeypatch.setattr(HR, "provider", lambda: "meshpool")
     assert R.route("fix the bug", "code")["harness"] == "meshpool-code"
     monkeypatch.setattr(C, "read", lambda *a, **k: {"MH_AUTO_SUBSCRIPTIONS": "1"})
-    assert R.route("fix the bug", "code")["harness"] == "claude-code"
+    assert R.route("fix the bug", "code")["harness"] == "codex"
 
 
 def _auto(monkeypatch, table, ids):

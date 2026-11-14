@@ -1,4 +1,4 @@
-"""v2 #6: Responses API wire format (the route that cached at 84-93% for Codex and Claude Code). Pure conversion tests."""
+"""v2 #6: Responses API wire format (the route that cached at 84-93% for Codex). Pure conversion tests."""
 import json
 import sys
 from pathlib import Path

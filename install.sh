@@ -120,7 +120,7 @@ add_to_path() {
 }
 
 ready() {   # a key, or a signed-in subscription chosen at setup
-  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=(claude|chatgpt))' "$DIR/meshpool.config" 2>/dev/null
+  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$DIR/meshpool.config" 2>/dev/null
 }
 
 # ---------- install ----------------------------------------------------------------------------------------------

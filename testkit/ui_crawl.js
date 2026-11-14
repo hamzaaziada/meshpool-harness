@@ -24,9 +24,8 @@ async function watch(p) {
     await p.goto(`http://127.0.0.1:${freshPort}/`);
     await p.waitForSelector("#oKey", {timeout: 20000});
     check("onboarding shows the key screen", true);
-    // One provider choice: the Meshpool key, another key, a ChatGPT plan, or a Claude plan (which runs Claude Code only)
-    check("onboarding offers the four providers", (await p.$$eval("[data-prov]", x => x.map(e => e.dataset.prov).join(","))) === "meshpool,custom,chatgpt,claude");
-    check("the Claude plan is labelled as Claude Code only", /runs Claude Code/i.test(await p.textContent("[data-prov=claude]")));
+    // One provider choice: the Meshpool key, another OpenAI-compatible key, or a ChatGPT plan
+    check("onboarding offers the three providers", (await p.$$eval("[data-prov]", x => x.map(e => e.dataset.prov).join(","))) === "meshpool,custom,chatgpt");
     await p.click("#oGo"); await p.waitForTimeout(300);
     check("empty key shows a message", /Paste your API key/.test(await p.textContent("#oRes")));
     await p.fill("#oKey", "test-key-1234");
@@ -107,7 +106,7 @@ async function watch(p) {
   }
   await p.click("#hPill"); await p.waitForTimeout(300);
   const groups = await p.$$eval(".pop .grp", x => x.map(g => g.textContent));
-  // Agents only (Codex and Claude Code are agents; a subscription is a provider, chosen in the model menu)
+  // Agents only (Codex is an agent; a subscription is a provider, chosen in the model menu)
   check("harness picker shows Automatic and agents, no subscription entries", groups.some(g => /Automatic/.test(g)) && !groups.some(g => /subscription/i.test(g)), groups);
   check("each agent shows what it is best at", (await p.$$eval(".pop .opt[data-id] .od", x => x.filter(e => e.textContent.trim()).length)) >= 3);
   await p.click(".pop .opt[data-id='meshpool-auto']"); await p.waitForTimeout(300);

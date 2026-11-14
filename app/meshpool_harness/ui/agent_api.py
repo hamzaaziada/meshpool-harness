@@ -31,6 +31,16 @@ def _transcript(sid: str) -> dict | None:
 DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
 
+def _messages_from_events(events: list) -> list:
+    """The conversation (what the user and the agent said) from an ACP thread's saved events, so a chat from an agent
+    Meshpool no longer has can go on in Meshpool's own agent with its context."""
+    out = []
+    for e in events:
+        if e.get("type") in ("user", "assistant") and str(e.get("text") or "").strip():
+            out.append({"role": e["type"], "content": str(e["text"])})
+    return out
+
+
 def events_from_messages(messages: list) -> list:
     """Rebuild a transcript from saved messages (for sessions reopened after the app restarted)."""
     evs, outputs = [], {m.get("tool_call_id"): m.get("content", "") for m in messages if m.get("role") == "tool"}
@@ -182,15 +192,29 @@ class Session:
         self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
+        legacy = False
         if resume_id:
             data = _saved(resume_id)
             if not data:
                 raise KeyError(resume_id)
             if data.get("workdir") and not Path(data["workdir"]).is_dir():
                 raise ProjectMissing(data["workdir"])
-            self.harness = HR.get(data.get("harness") or "meshpool-code", read_meta(resume_id).get("model") or None)
+            old = data.get("harness") or "meshpool-code"
+            # A chat from an agent Meshpool no longer has (HR.LEGACY) continues in the built-in agent it maps to.
+            legacy = old in HR.LEGACY and "messages" not in data and HR.LEGACY[old] in ("meshpool-code", "meshpool-work")
+            self.harness = HR.get(old, None if legacy else (read_meta(resume_id).get("model") or None))
             self.kind = data.get("kind") or self.harness.get("mode", "code")
-            if self.harness["type"] in ("acp", "pi"):
+            if legacy:
+                a = Agent(data["workdir"], session_id=resume_id,
+                          profile="work" if self.harness["id"] == "meshpool-work" else "code", **kw)
+                a.messages = [a.messages[0]] + _messages_from_events(data.get("events") or [])
+                a.title = data.get("title", "")
+                a.created = data.get("created", a.created)
+                self.agent = a
+                with self.lock:
+                    self.events = [{k: v for k, v in e.items() if k != "i"} for e in data.get("events") or []]
+                    self.events = [dict(e, i=i) for i, e in enumerate(self.events)]
+            elif self.harness["type"] in ("acp", "pi"):
                 cls = PiAgent if self.harness["type"] == "pi" else ACPAgent
                 self.agent = cls.resume(data, self.harness, **kw)
                 with self.lock:
@@ -244,7 +268,7 @@ class Session:
         if resume_id:
             meta = read_meta(self.id)
             self.plan = bool(meta.get("plan", self.plan))
-            if meta.get("model") and not getattr(self.agent, "model", None):
+            if meta.get("model") and not getattr(self.agent, "model", None) and not legacy:
                 self.set_model(meta["model"])
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
@@ -257,6 +281,10 @@ class Session:
                 self.emit({"type": "status", "text": f"{name} is ready. "
                            + (self.harness.get("settings_note") or "")})
         else:
+            if legacy:
+                self.emit({"type": "status", "text": f"Meshpool no longer includes the agent this chat started with. "
+                                                     f"It continues in {self.harness['name']}."})
+                self.agent.save()
             threading.Thread(target=self._start_mcp, daemon=True).start()
 
     def _start_mcp(self):
@@ -774,7 +802,8 @@ def listing() -> list:
                 continue
             row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
                    "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
-                   "harness": d.get("harness") or "meshpool-code", "model": d.get("model"),
+                   "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
+                   "model": d.get("model"),
                    "imported": (d.get("imported") or {}).get("source", "")}
             _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
             rows[d["id"]] = dict(row)

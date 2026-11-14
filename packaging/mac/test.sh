@@ -63,9 +63,9 @@ CID=$(curl -s -H "$H" -H "$J" -d "{\"workdir\":\"$T/proj\",\"harness\":\"pi\",\"
 curl -s -H "$H" http://127.0.0.1:8791/api/agent | "$PY" -c "import json,sys;print('   ', [s['kind'] for s in json.load(sys.stdin)['sessions'] if s['id']=='$CID'])"
 echo "Documents, Meshpool Code:"; docs meshpool-code
 echo "Documents, Pi:"; docs pi
-echo "Meshpool Code:"; run meshpool-code anthropic/claude-sonnet-4.6
+echo "Meshpool Code:"; run meshpool-code deepseek/deepseek-v4.1-flash
 echo "Pi:"; run pi openai/gpt-5.1
-echo "Hermes:"; run hermes google/gemini-3-pro
+echo "Hermes:"; run hermes qwen/qwen3-coder
 
 echo "Shared tools each harness sees (from the mock's request log):"
 "$PY" -c "

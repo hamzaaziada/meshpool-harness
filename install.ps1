@@ -141,7 +141,7 @@ Ok "The meshpool command"
 Say ""
 
 $Config = Join-Path $Dir "meshpool.config"
-function Ready { (Test-Path $Config) -and (Select-String -Path $Config -Pattern '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=(claude|chatgpt))' -Quiet) }
+function Ready { (Test-Path $Config) -and (Select-String -Path $Config -Pattern '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' -Quiet) }
 
 # Straight into setup: pick how Meshpool runs, where it works, and what it may do. Then the session starts.
 if (-not $env:MESHPOOL_NO_SETUP -and -not (Ready)) {

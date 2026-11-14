@@ -62,12 +62,18 @@ def name(prov: str) -> str:
     return {"key": key_name(), "chatgpt": "ChatGPT subscription"}[prov]
 
 
+DEFAULT_MODEL = "deepseek-v4.1-flash"
+RETIRED = ("claude", "anthropic", "google", "gemini")   # providers of older builds; their saved model ids mean nothing now
+
+
 def split(model: str | None) -> tuple[str, str]:
     """(provider, model id the provider knows) for a model id from the picker or settings."""
     m = (model or "").strip()
     head, sep, rest = m.partition(":")
     if sep and head in PREFIXED:
         return head, rest
+    if sep and head in RETIRED:                  # a model saved for a provider Meshpool no longer has: use the default
+        m = DEFAULT_MODEL
     if (os.environ.get("MH_PROVIDER") or C.read().get("MH_PROVIDER")) == "chatgpt" and not key():
         return "chatgpt", m                      # set up with only a ChatGPT sign-in
     return "key", m

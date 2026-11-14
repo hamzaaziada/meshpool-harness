@@ -98,7 +98,7 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("anthropic/claude-sonnet-4.6","anthropic"),("anthropic/claude-haiku-4.5","anthropic"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("google/gemini-3-pro","google"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
+        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 

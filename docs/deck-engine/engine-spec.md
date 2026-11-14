@@ -175,16 +175,3 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | X11 | before/after diff of every changed cell (`--before`) |
 | X12 | a Checks sheet; `MasterCheck` = AND of all checks |
 | X13 | no externalLink parts, no external references, no VBA |
-
-## 7. Measured gaps between the engine today and this spec
-
-From `scorecard.csv` and the one-shot McKinsey rebuilds (`mckinsey-rebuild-test.md`):
-
-- The current slides renderer (`engines/slides/renderer.py`) draws on the Blank layout with hardcoded RGB, so it
-  fails P6, P7 and P15 by construction. It needs to become the template-placeholder renderer described in §4.
-- It writes no source line (0% of rebuilt slides against 47% median in references) and no provenance map, so it
-  fails P13.
-- Its type is Calibri with 13 body sizes. References use one sans family (Arial in 15 of 17) at 10–14 pt body,
-  mostly 24–25 pt titles and 8–9 pt footnotes.
-- It is already strong on P19 consistency (100% title size and position) and on action titles (73–90% with verbs,
-  against a reference median of 58%).

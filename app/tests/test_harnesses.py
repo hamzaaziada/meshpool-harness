@@ -98,7 +98,10 @@ def test_registry_add_remove_and_defaults(home):
     HR.remove("my-agent")
     assert not any(h["id"] == "my-agent" for h in HR.load_all())
     assert {e["id"] for e in HR.examples()} >= {"goose"}
-    assert any(h["id"] == "gemini-cli" for h in HR.load_all())          # built in now, no longer an example
+    assert not {"claude-code", "gemini-cli"} & {e["id"] for e in HR.examples()}
+    for old in ("claude-code", "gemini-cli"):          # a file an older version copied in is skipped, not loaded
+        (HR.folder() / f"{old}.json").write_text(json.dumps({"id": old, "name": old, "command": "npx"}))
+    assert not {"claude-code", "gemini-cli"} & {h["id"] for h in HR.load_all()}
 
 
 def test_a_bad_harness_file_does_not_break_the_registry(home):
@@ -115,33 +118,6 @@ def test_remove_and_add_example_refuse_paths(home, bad):
         HR.remove(bad)
     with pytest.raises(KeyError):
         HR.add_example(bad)
-
-
-def test_windows_sign_in_command_line_is_quoted_for_cmd():
-    npx = r"C:\Program Files\nodejs\npx.cmd"
-    line = f'"{npx}" -y @anthropic-ai/claude-code@latest'
-    s = HR.win_terminal_cmdline("Claude sign-in", line)
-    assert s == f'cmd /k "title Claude sign-in & "{npx}" -y @anthropic-ai/claude-code@latest"'
-    assert '\\"' not in s                                     # no list2cmdline escaping, which cmd.exe misreads
-    # cmd /k with more than two quotes drops the first and the last one; what runs keeps the path quoted.
-    rest = s[len("cmd /k "):]
-    assert rest[0] == '"' and rest.count('"') > 2
-    runs = rest[1:][::-1].replace('"', "", 1)[::-1]
-    assert runs == f'title Claude sign-in & "{npx}" -y @anthropic-ai/claude-code@latest'
-
-
-def test_windows_sign_in_opens_one_console_with_a_string(monkeypatch):
-    import types
-    seen = []
-    monkeypatch.setattr(HR, "npx", lambda: r"C:\Program Files\nodejs\npx.cmd")
-    monkeypatch.setattr(HR, "os", types.SimpleNamespace(name="nt", environ={}))
-    monkeypatch.setattr(HR.sys, "platform", "win32")
-    import subprocess
-    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: seen.append((cmd, kw)))
-    assert HR.login("gemini")["ok"]
-    cmd, kw = seen[0]
-    assert isinstance(cmd, str) and cmd.startswith('cmd /k "title Gemini sign-in & "C:\\Program Files')
-    assert kw.get("creationflags") == 0x10
 
 
 def test_relay_status_follows_the_stream_error():
