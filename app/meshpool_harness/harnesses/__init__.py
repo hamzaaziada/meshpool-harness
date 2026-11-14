@@ -93,7 +93,7 @@ def _bundled_hermes() -> dict | None:
     # on the Word proposal (42 s vs 64 s) and runs the forge deck/workbook checks; Hermes stays one click away.
     return {"id": "hermes", "name": "Hermes", "mode": "cowork", "type": "acp", "prepare": "hermes",
             "models": "meshpool", "command": sys.executable, "args": ["-m", "acp_adapter"], "env": env,
-            "tagline": "Ongoing work: remembers what it learns across threads", "description": HERMES_NOTE}
+            "tagline": "Ongoing work: remembers what it learns across chats", "description": HERMES_NOTE}
 
 
 def codex_home() -> Path:
