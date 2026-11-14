@@ -198,10 +198,10 @@ def main(argv=None):
             what = argv[1]
             if what in ("claude-code", "codex"):
                 r = CI.import_local([what])
-                print(f"Imported {r['imported']} {what} sessions as threads ({r['skipped']} were already here).")
+                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
                 return 0
             r = CI.import_export(os.path.expanduser(what))
-            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats as threads "
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
                   f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0

@@ -377,7 +377,7 @@ def context_step(st, header: bool = True) -> bool:
     if header:
         _p()
         _p(f"  {st.bold('Bring your chats and context')}")
-        _p(f"  {st.dim('Old chats become threads you can search and continue. Nothing leaves this computer.')}")
+        _p(f"  {st.dim('Old chats come over as chats you can search and continue. Nothing leaves this computer.')}")
         _p()
     local = {k: v for k, v in CI.scan_local().items() if v["found"] > v["imported"]}
     opts = [("zip", "Import a ChatGPT or Claude export (.zip)", "your chats, projects and what it knows about you")]
@@ -395,7 +395,7 @@ def context_step(st, header: bool = True) -> bool:
     if pick == "local":
         _p(st.dim("    Importing..."))
         r = CI.import_local(list(local))
-        _p(f"    {st.green('✓')} Imported {r['imported']} sessions as threads"
+        _p(f"    {st.green('✓')} Imported {r['imported']} sessions as chats"
            + (st.dim(f" ({r['skipped']} were already here)") if r["skipped"] else "") + ". They open in their project "
            "folders.")
         return True
@@ -433,9 +433,9 @@ def context_step(st, header: bool = True) -> bool:
     except Exception as e:  # noqa: BLE001
         _p(st.red(f"    Could not import it: {e}"))
         return True
-    _p(f"    {st.green('✓')} {'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats as "
-       f"threads" + (f" ({r['skipped']} were already here)" if r["skipped"] else "") + f", {len(r['skills'])} project "
-       f"skills, {r['memory']} facts into memory, {r['instructions']} instructions.")
+    _p(f"    {st.green('✓')} {'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats"
+       + (f" ({r['skipped']} were already here)" if r["skipped"] else "")
+       + f", {len(r['skills'])} project skills, {r['memory']} facts into memory, {r['instructions']} instructions.")
     _p(st.dim("    Find them in the app (meshpool ui), or ask the agent about an old chat."))
     return True
 
