@@ -1861,3 +1861,103 @@ def lbo(ws, row, model: dict, tranches: list[dict], names: dict | None = None, t
     return {"rows": rows, "cols": cols, "header_row": hdr, "opening": bal_open, "closing": closing,
             "names": {"irr": "lbo_irr", "moic": "lbo_moic", "floor_low": "lbo_floor_low",
                       "floor_high": "lbo_floor_high"}, "next_row": r + 1}
+
+
+# --------------------------------------------------------------------------- merger model: accretion / dilution
+MA_NAMES = {"acq_price": "acq_price", "acq_shares": "acq_shares", "acq_ni": "acq_net_income",
+            "tgt_price": "tgt_price", "tgt_shares": "tgt_shares", "tgt_ni": "tgt_net_income", "premium": "offer_premium",
+            "pct_stock": "pct_stock", "pct_debt": "pct_debt", "kd": "new_debt_rate", "cash_yield": "cash_yield",
+            "tax": "tax_rate", "synergies": "synergies", "phase": "synergy_phase", "writeup_da": "writeup_da",
+            "fees": "deal_fees", "prem_step": "premium_step", "stock_step": "stock_step"}
+
+
+def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / dilution") -> dict:
+    """One-year accretion / dilution from named inputs. Offer = target price x (1 + premium); consideration mix:
+    stock (new shares at the acquirer's price), new debt, and cash on hand (the rest). Pro forma net income =
+    acquirer + target + synergies x phase-in, less after-tax interest on new debt, after-tax interest forgone on cash,
+    after-tax extra D&A from write-ups, fees expensed. Also: breakeven pre-tax synergies, contribution vs ownership,
+    and a 5 x 5 grid of accretion over premium (rows) and stock share (columns). Names: ma_offer_price,
+    ma_pf_eps, ma_standalone_eps, ma_accretion, ma_breakeven_synergies, ma_pf_ownership, ma_ni_contribution."""
+    wb = ws.parent
+    N = {**MA_NAMES, **(names or {})}
+    missing = [v for v in N.values() if v.lower() not in _names_in(wb)]
+    if missing:
+        raise ValueError(f"merger: define these named inputs first: {', '.join(missing)}")
+    r = row
+    cell: dict[str, str] = {}
+
+    def one(key, label, expr, fmt="usd", total=False, name=None):
+        nonlocal r
+        ws.cell(row=r, column=1, value=label)
+        _f(ws, f"B{r}", expr, fmt, total=total)
+        cell[key] = f"B{r}"
+        if name:
+            define_name(wb, name, _abs(ws, f"B{r}"))
+        r += 1
+        return f"B{r - 1}"
+    t = N["tax"]
+    section(ws, r, f"{title_text}: offer and consideration", 4)
+    r += 1
+    op = one("offer", "Offer price per target share ($)", f"={N['tgt_price']}*(1+{N['premium']})", "usd2",
+             name="ma_offer_price")
+    eqv = one("eq", "Equity purchase price ($m)", f"={op}*{N['tgt_shares']}", total=True)
+    stk = one("stock", "Paid in acquirer stock ($m)", f"={eqv}*{N['pct_stock']}")
+    dbt = one("debt", "Funded with new debt ($m)", f"={eqv}*{N['pct_debt']}")
+    csh = one("cash", "Paid from cash on hand ($m)", f"={eqv}-{stk}-{dbt}")
+    nsh = one("new_shares", "New acquirer shares issued (m)", f"={stk}/{N['acq_price']}", "num")
+    r += 1
+    section(ws, r, f"{title_text}: pro forma earnings", 4)
+    r += 1
+    one("acq", "Acquirer net income ($m)", f"={N['acq_ni']}")
+    one("tgt", "Target net income ($m)", f"={N['tgt_ni']}")
+    one("syn", "Synergies after tax, phased ($m)", f"={N['synergies']}*{N['phase']}*(1-{t})")
+    one("int", "Interest on new debt after tax ($m, negative)", f"=-{dbt}*{N['kd']}*(1-{t})")
+    one("forgone", "Interest income forgone on cash after tax ($m, negative)", f"=-{csh}*{N['cash_yield']}*(1-{t})")
+    one("da", "Extra D&A from write-ups after tax ($m, negative)", f"=-{N['writeup_da']}*(1-{t})")
+    one("fees", "Deal fees expensed ($m, negative)", f"=-{N['fees']}")
+    pf = one("pf_ni", "Pro forma net income ($m)", f"=SUM({cell['acq']}:{cell['fees']})", total=True)
+    pfs = one("pf_shares", "Pro forma shares (m)", f"={N['acq_shares']}+{nsh}", "num")
+    sa = one("sa_eps", "Acquirer standalone EPS ($)", f"={N['acq_ni']}/{N['acq_shares']}", "usd2",
+             name="ma_standalone_eps")
+    pe = one("pf_eps", "Pro forma EPS ($)", f"={pf}/{pfs}", "usd2", total=True, name="ma_pf_eps")
+    one("accretion", "Accretion / (dilution) (%)", f"={pe}/{sa}-1", "pct", total=True, name="ma_accretion")
+    one("breakeven", "Pre-tax synergies needed to break even ($m)",
+        f"=MAX(0,({sa}*{pfs}-({pf}-{cell['syn']}))/(1-{t})/{N['phase']})", name="ma_breakeven_synergies")
+    r += 1
+    section(ws, r, f"{title_text}: contribution vs ownership", 4)
+    r += 1
+    one("own", "Acquirer shareholders' pro forma ownership (%)", f"={N['acq_shares']}/{pfs}", "pct",
+        name="ma_pf_ownership")
+    one("contrib", "Acquirer share of combined net income (%)", f"={N['acq_ni']}/({N['acq_ni']}+{N['tgt_ni']})", "pct",
+        name="ma_ni_contribution")
+    r += 1
+    section(ws, r, f"{title_text}: accretion (%) by premium (rows) and share of stock (columns)", 6)
+    r += 1
+    gh = r
+    ws.cell(row=gh, column=1, value="Premium (%) \\ stock (%)").font = Font(name=FONT, bold=True)
+    gcols = [get_column_letter(2 + j) for j in range(5)]
+    for j, c in enumerate(gcols):
+        e = f"=MAX(0,{N['pct_stock']}-2*{N['stock_step']})" if j == 0 else f"=MIN(1,{gcols[j - 1]}{gh}+{N['stock_step']})"
+        _f(ws, f"{c}{gh}", e, "pct").fill = SECTION_FILL
+    for i in range(5):
+        rr = gh + 1 + i
+        e = f"={N['premium']}-2*{N['prem_step']}" if i == 0 else f"=A{rr - 1}+{N['prem_step']}"
+        _f(ws, f"A{rr}", e, "pct").fill = SECTION_FILL
+        for c in gcols:
+            p_, s_ = f"$A{rr}", f"{c}${gh}"
+            eq_ = f"({N['tgt_price']}*(1+{p_})*{N['tgt_shares']})"
+            debt_ = f"({eq_}*{N['pct_debt']})"
+            cash_ = f"({eq_}*(1-{s_}-{N['pct_debt']}))"
+            ni_ = (f"({N['acq_ni']}+{N['tgt_ni']}+{N['synergies']}*{N['phase']}*(1-{t})-{debt_}*{N['kd']}*(1-{t})"
+                   f"-{cash_}*{N['cash_yield']}*(1-{t})-{N['writeup_da']}*(1-{t})-{N['fees']})")
+            sh_ = f"({N['acq_shares']}+{eq_}*{s_}/{N['acq_price']})"
+            _f(ws, f"{c}{rr}", f"=({ni_}/{sh_})/({N['acq_ni']}/{N['acq_shares']})-1", "pct")
+    if "Checks" in wb.sheetnames:
+        add_check(wb, f"{title_text}: stock and debt shares within 100% of the price",
+                  f"=MAX(0,{N['pct_stock']}+{N['pct_debt']}-1)")
+        add_check(wb, f"{title_text}: grid centre equals the base accretion",
+                  f"='{ws.title}'!{gcols[2]}{gh + 3}-ma_accretion")
+    ws.column_dimensions["A"].width = max(ws.column_dimensions["A"].width or 0, 50)
+    if ws.freeze_panes is None:
+        freeze(ws, "B4")
+    return {"cells": cell, "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}", "grid_header_row": gh, "next_row": gh + 7}

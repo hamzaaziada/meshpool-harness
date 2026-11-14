@@ -216,3 +216,73 @@ def test_market_inputs_are_sourced_and_ranged(tmp_path):
                                             ws.cell(row=r, column=6).value) for r in range(4, 7)}
     assert vals["Equity risk premium (%)"] == pytest.approx((0.0441, 0.0339, 0.0581))
     assert vals["Risk-free rate: US Treasury 10-year (%)"] == pytest.approx((0.0515, 0.0465, 0.0565))
+
+
+MA = {"acq_price": 50.0, "acq_shares": 200.0, "acq_net_income": 500.0, "tgt_price": 30.0, "tgt_shares": 50.0,
+      "tgt_net_income": 90.0, "offer_premium": 0.30, "pct_stock": 0.5, "pct_debt": 0.3, "new_debt_rate": 0.065,
+      "cash_yield": 0.03, "tax_rate": 0.25, "synergies": 60.0, "synergy_phase": 0.5, "writeup_da": 20.0,
+      "deal_fees": 25.0, "premium_step": 0.05, "stock_step": 0.25}
+
+
+def ma_recompute(x, prem=None, stock=None):
+    prem = x["offer_premium"] if prem is None else prem
+    stock = x["pct_stock"] if stock is None else stock
+    t = x["tax_rate"]
+    eq = x["tgt_price"] * (1 + prem) * x["tgt_shares"]
+    debt, cash = eq * x["pct_debt"], eq * (1 - stock - x["pct_debt"])
+    syn = x["synergies"] * x["synergy_phase"] * (1 - t)
+    ni = (x["acq_net_income"] + x["tgt_net_income"] + syn - debt * x["new_debt_rate"] * (1 - t)
+          - cash * x["cash_yield"] * (1 - t) - x["writeup_da"] * (1 - t) - x["deal_fees"])
+    sh = x["acq_shares"] + eq * stock / x["acq_price"]
+    sa = x["acq_net_income"] / x["acq_shares"]
+    acc = (ni / sh) / sa - 1
+    be = max(0, (sa * sh - (ni - syn)) / (1 - t) / x["synergy_phase"])
+    return {"pf_eps": ni / sh, "accretion": acc, "breakeven": be, "own": x["acq_shares"] / sh}
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")
+def test_merger_accretion_matches_recompute(tmp_path):
+    wb = B.banker_workbook("M&A", "Accretion / dilution", "T", "2026-11-14", middle=("Inputs", "Merger"))
+    book = B.assumption_book(wb["Inputs"], 3)
+    for k, v in MA.items():
+        book.add(k, v, "num", name=k, source="Test")
+    out = B.merger(wb["Merger"], 3)
+    p = tmp_path / "ma.xlsx"
+    wb.save(p)
+    rc = load_workbook(qa.recalc(str(p), str(tmp_path / "rc")), data_only=True)
+
+    def named(n):
+        sh, _, c = str(rc.defined_names[n].attr_text).rpartition("!")
+        return rc[sh.strip("'")][c.replace("$", "")].value
+    want = ma_recompute(MA)
+    assert named("ma_pf_eps") == pytest.approx(want["pf_eps"], rel=1e-9)
+    assert named("ma_accretion") == pytest.approx(want["accretion"], rel=1e-9)
+    assert named("ma_breakeven_synergies") == pytest.approx(want["breakeven"], rel=1e-9)
+    assert named("ma_pf_ownership") == pytest.approx(want["own"], rel=1e-9)
+    corner = rc["Merger"][out["grid"].split("!")[1].split(":")[0]].value                 # premium 20%, stock 0%
+    assert corner == pytest.approx(ma_recompute(MA, prem=0.20, stock=0.0)["accretion"], rel=1e-9)
+    assert rc["Checks"]["F3"].value == "OK"
+    from engines.forge import validate_xlsx as VX
+    r = VX.validate(str(p))
+    assert {k: v for k, v in r["rules"].items() if v not in ("pass", "not_run")} == {}, \
+        [f["message"] for f in r["failures"] if f["status"] == "fail"][:6]
+
+
+@pytest.mark.skipif(not HAS_LO, reason="LibreOffice needed")
+def test_merger_page_renders_with_a_heat_map(tmp_path):
+    test_merger_accretion_matches_recompute(tmp_path)
+    from engines.forge.finance_pages import pages_from_workbook
+    from engines.forge.render import render
+    from engines.forge.validate_pptx import validate
+    from engines.forge.validate_xlsx import load_rules
+    pages, _ = pages_from_workbook(str(tmp_path / "ma.xlsx"))
+    pg = next(p for p in pages if p["title"].startswith("The deal is"))
+    want = ma_recompute(MA)
+    assert ("accretive" if want["accretion"] >= 0 else "dilutive") in pg["title"]
+    table, stats = pg["parts"]
+    assert table["table"]["heat_grid"]["base"] == [2, 3] and table["table"]["rows"][2][3] == (f"{want['accretion'] * 100:.1f}%" if want['accretion'] >= 0 else f"({-want['accretion'] * 100:.1f}%)")
+    r = render([pg], str(tmp_path / "ma.pptx"))
+    assert r["errors"] == []
+    res = validate(str(tmp_path / "ma.pptx"), load_rules(), render=True)
+    hard = [f["message"] for f in res["failures"] if f["status"] == "fail" and f["rule"] not in ("P16",)]
+    assert not hard, hard

@@ -1055,6 +1055,14 @@ def _plain(t) -> str:
     return re.sub(r"\*\*|\^\w+", "", str(t))
 
 
+def _cellnum(v) -> float:
+    """A table cell as a number: $1,234.5 -> 1234.5; (2.5%) and -2.5% -> -2.5. ValueError when it is not one."""
+    txt = str(v).strip()
+    neg = txt.startswith("(") and txt.endswith(")") or txt.startswith("-")
+    num = float(re.sub(r"[^\d.]", "", txt))
+    return -num if neg else num
+
+
 def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     groups = t.get("groups")
     cols, rows = t["columns"], t["rows"]
@@ -1143,7 +1151,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             if r_i_ in rr:
                 for v in row[1:]:
                     try:
-                        vv.append(float(re.sub(r"[^\d.\-]", "", str(v))))
+                        vv.append(_cellnum(v))
                     except ValueError:
                         pass
         blk_vals.append(vv)
@@ -1199,7 +1207,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             hg, hg_vals = block(r_i)
             if hg and ci > 0:
                 try:
-                    fv = float(re.sub(r"[^\d.\-]", "", str(v)))
+                    fv = _cellnum(v)
                 except ValueError:
                     fv = None
                 centre = float(hg.get("center", 0))
@@ -1213,7 +1221,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                     else:
                         cell.fill.fore_color.theme_color = TC.ACCENT_4 if k_ > 0 else TC.ACCENT_2
                         cell.fill.fore_color.brightness = round(0.8 - 0.8 * min(1.0, abs(k_)), 2)
-                    color = TC.BACKGROUND_1 if abs(k_) > 0.6 and not base else TC.TEXT_1
+                    color = TC.BACKGROUND_1 if k_ > 0.6 and not base else TC.TEXT_1   # white only on deep blue
                 put(cell, v, base, False, PP_ALIGN.CENTER, color)
                 _borders(cell, bottom=("bg1", 1.5), top=("bg1", 1.5), left=("bg1", 1.5), right=("bg1", 1.5))
                 if base:
@@ -1226,7 +1234,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
             elif ci in heat and not (total and last):
                 vals = sorted(heat[ci])
                 try:
-                    fv = float(re.sub(r"[^\d.\-]", "", str(v)))
+                    fv = _cellnum(v)
                     q = sum(1 for z in vals if z <= fv) / len(vals)
                     band = min(3, int(q * 4 - 1e-9))
                     shade = [(TC.ACCENT_3, 0.65), (TC.ACCENT_3, 0.0), (TC.ACCENT_4, 0.0), (TC.TEXT_2, 0.0)][band]

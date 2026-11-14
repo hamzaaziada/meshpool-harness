@@ -551,6 +551,34 @@ def lbo_page(bk: Book) -> dict | None:
             "source": {"text": f"{FIRM_SRC} (LBO tab, operating forecast from the integrated statements)", "prov": prov}}
 
 
+def merger_page(bk: Book) -> dict | None:
+    acc, pf, sa = bk.name("ma_accretion"), bk.name("ma_pf_eps"), bk.name("ma_standalone_eps")
+    be, own, con = bk.name("ma_breakeven_synergies"), bk.name("ma_pf_ownership"), bk.name("ma_ni_contribution")
+    hit = bk.find("Premium (%) \\ stock (%)")
+    if _num(acc) is None or not hit:
+        return None
+    ws, gh, _ = hit
+    cols = ["Premium \\ stock"] + [_pct(ws.cell(row=gh, column=c).value) for c in range(2, 7)]
+    rows = [[_pct(ws.cell(row=r, column=1).value)] + [_pct(ws.cell(row=r, column=c).value) for c in range(2, 7)]
+            for r in range(gh + 1, gh + 6)]
+    word = "accretive" if acc >= 0 else "dilutive"
+    prov = [bk.fact(f"Year-one EPS {word} by {_pct(abs(acc))}; breakeven synergies ${_usd(be)}m; acquirer "
+                    f"ownership {_pct(own)}", "ma_accretion, ma_breakeven_synergies, ma_pf_ownership")]
+    tiles = [{"value": _pct(acc), "label": "Year-one EPS accretion / (dilution)"},
+             {"value": f"${_num(pf):,.2f}", "label": f"Pro forma EPS (standalone ${_num(sa):,.2f})"},
+             {"value": f"${_usd(be)}m", "label": "Pre-tax synergies to break even"},
+             {"value": _pct(own), "label": f"Acquirer ownership (contributes {_pct(con)} of earnings)"}]
+    return {"archetype": "grid", "fixed": True, "layout": "halves_v",
+            "title": f"The deal is {word} by {_pct(abs(acc))} in year one; breakeven needs ${_usd(be)}m of synergies",
+            "title_prov": prov,
+            "parts": [{"type": "table", "heading": "EPS accretion (%) by premium and share paid in stock",
+                       "table": {"columns": cols, "rows": rows, "keep_table": True,
+                                 "heat_grid": {"center": 0.0, "base": [2, 3]}}},
+                      {"type": "stats", "heading": "Base case", "items": tiles}],
+            "footnotes": ["Heat map: blue accretive, orange dilutive, boxed cell = the proposed terms"],
+            "source": {"text": f"{FIRM_SRC} ({ws.title} tab)", "prov": prov}}
+
+
 def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     """Banker pages in deck order (financial summary, football field, weighting, DCF outputs, DCF sensitivity,
     scenarios, comps, precedents)
@@ -558,7 +586,7 @@ def pages_from_workbook(path: str) -> tuple[list[dict], list[dict]]:
     bk = Book(path)
     pages = []
     for fn in (financial_summary, football_field, weighting_table, dcf_outputs, dcf_sensitivity, scenario_chart,
-               comps, lambda b: comps(b, "prec_", "Precedent transactions"), lbo_page):
+               comps, lambda b: comps(b, "prec_", "Precedent transactions"), lbo_page, merger_page):
         try:
             p = fn(bk)
         except Exception:                                      # noqa: BLE001 - one unreadable table skips its page
@@ -580,6 +608,6 @@ def finance_workbook(paths: list[str]) -> str | None:
         except Exception:                                      # noqa: BLE001
             continue
         if names & {"dcf_per_share", "comps_ev_ebitda_median", "weighted_value_per_share", "ts_revenue_final",
-                    "lbo_irr"}:
+                    "lbo_irr", "ma_accretion"}:
             return str(p)
     return None
