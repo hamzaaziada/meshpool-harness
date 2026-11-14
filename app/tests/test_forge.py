@@ -81,7 +81,10 @@ def _bad_deck(path):
         p.text = f"Point {k} about the market with 3{k}% share \U0001F680"
         p.level = 2 if k == 3 else 0
         p.runs[0].font.name = "Comic Sans MS"
-    s.shapes.add_picture(str(ROOT / "engines/slides/examples/sample.png"), Inches(5), Inches(1.2), Inches(4), Inches(3)).name = "Chart 1"
+    from PIL import Image
+    png = Path(path).with_suffix(".png")                   # a pasted chart picture
+    Image.new("RGB", (400, 300), (30, 90, 200)).save(png)
+    s.shapes.add_picture(str(png), Inches(5), Inches(1.2), Inches(4), Inches(3)).name = "Chart 1"
     prs.save(path)
 
 
