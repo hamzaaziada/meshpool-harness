@@ -426,7 +426,8 @@ class Session:
                 if self.cp:
                     try:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
-                        if t is None and self.cp.disabled:
+                        if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
+                            self._cp_noted = True          # say it once per thread, not on every turn
                             self.emit({"type": "status", "text": self.cp.disabled})
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
@@ -673,6 +674,9 @@ def get(sid: str) -> Session:
     return s
 
 
+_ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
+
+
 def listing() -> list:
     rows = {}
     if SESSIONS.exists():
@@ -680,12 +684,20 @@ def listing() -> list:
             if p.parent.name.startswith("sub-"):
                 continue
             try:
+                st = p.stat()
+                hit = _ROWS.get(str(p))
+                if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+                    rows[hit[2]["id"]] = dict(hit[2])
+                    continue
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            rows[d["id"]] = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
-                             "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
-                             "harness": d.get("harness") or "meshpool-code", "model": d.get("model")}
+            row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
+                   "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
+                   "harness": d.get("harness") or "meshpool-code", "model": d.get("model"),
+                   "imported": (d.get("imported") or {}).get("source", "")}
+            _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
+            rows[d["id"]] = dict(row)
     with LOCK:
         for sid, s in LIVE.items():
             rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New chat"), "workdir": s.workdir,

@@ -4,6 +4,7 @@
   meshpool -p "request" [--auto]                     # one request, print the reply, exit
   meshpool mcp                                       # MCP servers from mcp.json and their tools
   meshpool acp [--profile work] [--auto]             # serve the agent over ACP (Zed, JetBrains, other apps)
+  meshpool setup                                     # first-run walkthrough, then a session
   meshpool login                                     # save your API key
   python -m meshpool_harness ui                      # the Meshpool web app in your browser
   python -m meshpool_harness check [--live]          # settings, installed tools, and (with --live) one tiny model call
@@ -101,7 +102,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login"}
+COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
 
 
 def _agent_parser():
@@ -110,8 +111,11 @@ def _agent_parser():
         description="Meshpool coding agent. Run it in a project folder: `meshpool` for a session, "
                     "`meshpool -p \"...\"` for one answer.",
         epilog="other commands (meshpool <command> -h for options):\n"
+               "  setup            the first-run walkthrough: key, folder, permissions, your skills\n"
+               "  import           bring your old chats and sessions (ChatGPT, Claude, Claude Code, Codex) and context\n"
                "  login            save your Meshpool API key\n"
                "  check            show settings and installed tools (--live sends one tiny model call)\n"
+               "  connect          connect apps: Notion, Gmail, Slack, HubSpot... or any MCP server by URL\n"
                "  mcp              list, test and switch MCP servers\n"
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
                "  work             fetch a task from GitHub, Jira, a URL or a file, run it, report back\n"
@@ -170,6 +174,38 @@ def main(argv=None):
         a = ap.parse_args(argv[1:])
         from meshpool_harness.agent.acp_server import main as acp_main
         return acp_main(a.profile, a.auto)
+    if argv[0] == "setup":
+        from meshpool_harness.agent import onboard
+        from meshpool_harness.agent.tui import main as agent_main
+        folder = onboard.run()
+        if folder is None:
+            return 1
+        return agent_main(str(folder), onboarded=True)
+    if argv[0] == "connect":
+        from meshpool_harness.agent import connect_cli
+        return connect_cli.main(argv[1:])
+    if argv[0] == "disconnect":
+        from meshpool_harness.agent import connect_cli
+        if len(argv) < 2:
+            print("Usage: meshpool disconnect <name>")
+            return 1
+        return connect_cli.disconnect(argv[1])
+    if argv[0] == "import":
+        from meshpool_harness.agent import onboard
+        from meshpool_harness.agent.tui import Style, _enable_ansi
+        if len(argv) > 1:                         # meshpool import export.zip | claude-code | codex
+            from meshpool_harness import chat_import as CI
+            what = argv[1]
+            if what in ("claude-code", "codex"):
+                r = CI.import_local([what])
+                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
+                return 0
+            r = CI.import_export(os.path.expanduser(what))
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
+                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+                  f"memory, {r['instructions']} instructions.")
+            return 0
+        return 0 if onboard.context_step(Style(_enable_ansi())) else 1
     if argv[0] == "login":
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1

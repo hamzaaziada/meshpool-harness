@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from meshpool_harness import config as C
+from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
 from meshpool_harness.ui import workbench as W
 
@@ -235,7 +236,8 @@ def get_settings() -> dict:
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
-            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY"))}
+            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
+            "ready": HR.ready(), "provider": HR.provider()}
 
 
 def save_settings(body: dict) -> dict:
@@ -302,7 +304,7 @@ def test_connection(values: dict | None = None) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved."""
     C.load_into_env(override=True)
     from meshpool_harness.cli import ping
-    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")}
+    keep = {k: os.environ.get(k) for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL")}
     try:
         for k, v in (values or {}).items():
             if k in keep and str(v).strip():
@@ -405,6 +407,12 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 name = CN.finish(q.get("state", [""])[0], q.get("code", [None])[0], q.get("error", [None])[0])
                 msg, ok = f"{name} is connected. You can close this tab and go back to Meshpool.", True
+                cid = CN.LAST_FINISHED[0]
+                r = CN.check(cid) if cid else {"ok": True, "tools": []}
+                if r["ok"]:
+                    msg = f"{name} is connected ({len(r['tools'])} tools). You can close this tab and go back to Meshpool."
+                else:
+                    msg, ok = f"{name} signed in, but the connection test failed: {r['error']}", False
             except Exception as e:  # noqa: BLE001
                 msg, ok = str(e), False
             page = ("<!doctype html><meta charset=utf-8><title>Meshpool</title><body style=\"font:15px -apple-system,"
@@ -464,6 +472,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import-context":
                 from meshpool_harness import importer as IM
                 return self._send(200, {"prompt": IM.context_prompt()})
+            if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
+                from meshpool_harness import chat_import as CI
+                return self._send(200, CI.scan_local())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -556,6 +567,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
+            if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
+                HR.use_provider((self._json() or {}).get("provider", ""))
+                return self._send(200, get_settings())
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
@@ -619,6 +633,47 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"skill": IM.import_instructions_as_skill(
                         b.get("name", ""), b["instructions"], b.get("description", ""))})
                 return self._send(200, IM.import_context_text(b.get("text", "")))
+            if u.path == "/api/import-file":          # a ChatGPT or Claude export, streamed to disk (they get large)
+                from meshpool_harness import chat_import as CI
+                import tempfile
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 8 * 1024 ** 3:
+                    raise ValueError("That file is larger than 8 GB.")
+                q = parse_qs(u.query)
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
+                    left = n
+                    while left > 0:
+                        chunk = self.rfile.read(min(left, 1 << 20))
+                        if not chunk:
+                            break
+                        tf.write(chunk)
+                        left -= len(chunk)
+                want_ctx = q.get("context", ["1"])[0] != "0"
+                try:
+                    r = CI.import_export(tf.name, chats=q.get("chats", ["1"])[0] != "0", context=False)
+                except Exception:
+                    os.unlink(tf.name)
+                    raise
+                if not want_ctx:
+                    os.unlink(tf.name)
+                    return self._send(200, r)
+                # The chats are in. Projects (as skills) and lasting facts (one model call) follow in the background
+                # and land in Skills and in Instructions and memory a little later.
+                from meshpool_harness import importer as IM
+
+                def learn(path=tf.name):
+                    try:
+                        IM.import_export(path)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    finally:
+                        os.unlink(path)
+                threading.Thread(target=learn, daemon=True).start()
+                return self._send(200, dict(r, context_pending=True))
+            if u.path == "/api/import-chats":
+                from meshpool_harness import chat_import as CI
+                b = self._json()
+                return self._send(200, dict(CI.import_local(b.get("sources") or None), found=CI.scan_local()))
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])
@@ -640,7 +695,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, request_permission(b["id"]) if b.get("id") else permissions())
             if u.path == "/api/install-cli":
                 from meshpool_harness.ui.desktop import install_cli
-                return self._send(200, install_cli())
+                return self._send(200, install_cli(admin=True))
             if u.path == "/api/agent":
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":
@@ -751,19 +806,34 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import mcp_apps as CN
                 b = self._json()
                 act, cid = b.get("action"), b.get("id", "")
-                if act == "connect":
-                    redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
-                    url = CN.begin(cid, redirect)
+                redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
+                if act in ("connect", "client"):
+                    if act == "client":                  # the user's own client, for apps that do not register others
+                        CN.set_client(cid, b.get("client_id", ""), b.get("client_secret", ""))
+                    try:
+                        url = CN.begin(cid, redirect)
+                    except CN.NeedsClient as e:
+                        return self._send(200, {"needs_client": cid, "redirect": e.redirect, "message": str(e),
+                                                "connectors": CN.listing()})
                     webbrowser.open(url)
                     return self._send(200, {"url": url, "connectors": CN.listing()})
+                if act == "check":
+                    r = CN.check(cid)
+                    return self._send(200, dict(r, connectors=CN.listing()))
                 if act == "custom":
-                    c = CN.add_custom(b.get("name", ""), b.get("url", ""), b.get("token", ""))
+                    c = CN.add_custom(b.get("name", ""), b.get("url", ""), b.get("token", ""),
+                                      b.get("client_id", ""), b.get("client_secret", ""))
+                    n = len(c.get("tools") or [])
                     if c["auth"] == "oauth":
-                        redirect = f"http://127.0.0.1:{HTTPD[0].server_address[1]}/oauth/callback"
-                        url = CN.begin(c["id"], redirect)
+                        try:
+                            url = CN.begin(c["id"], redirect)
+                        except CN.NeedsClient as e:
+                            return self._send(200, {"id": c["id"], "needs_client": c["id"], "redirect": e.redirect,
+                                                    "message": str(e), "connectors": CN.listing()})
                         webbrowser.open(url)
                         return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
-                    return self._send(200, {"id": c["id"], "connectors": CN.listing()})
+                    return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
+                                            "message": f"Connected: {n} tool{'s' * (n != 1)}. New chats can use it."})
                 if act == "github_found":
                     r = CN.github_use_found()
                     C.load_into_env(override=True)

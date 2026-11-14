@@ -15,6 +15,7 @@ import threading
 import time
 
 from meshpool_harness import config as C
+from meshpool_harness.agent import brand as B
 
 HELP = """Commands
   /help            this list
@@ -22,8 +23,11 @@ HELP = """Commands
   /auto            switch between asking before changes and allowing them
   /model [id]      show or change the model for this session
   /mcp             MCP servers and their tools
+  /connect [app]   connect an app (Notion, Gmail, Slack...) or an MCP server by URL; no app lists them
   /tokens          tokens used in this session
   /init            ask the agent to write MESHPOOL.md (project notes it reads every session)
+  /import          bring your old chats, Claude Code and Codex sessions, and context from ChatGPT or Claude
+  /setup           change what Meshpool runs on (your key, another key, or a subscription)
   /exit            quit
 Tips
   End a line with \\ to keep typing on the next line.
@@ -31,13 +35,16 @@ Tips
 
 
 class Style:
-    def __init__(self, on: bool):
-        self.on = on
+    def __init__(self, depth: int):
+        self.depth = depth                # 0 (no color), 256 or 24 (24-bit), from brand.depth()
+        self.on = bool(depth)
 
     def _w(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else s
 
-    def teal(self, s): return self._w("38;5;37", s)
+    def blue(self, s):                    # the Meshpool blue
+        return B.paint(s, B.POOL if self.depth == 24 else B.SKY, self.depth) if self.on else s
+
     def amber(self, s): return self._w("38;5;172", s)
     def red(self, s): return self._w("38;5;167", s)
     def green(self, s): return self._w("38;5;71", s)
@@ -45,12 +52,8 @@ class Style:
     def bold(self, s): return self._w("1", s)
 
 
-def _enable_ansi() -> bool:
-    if os.environ.get("NO_COLOR") or not sys.stdout.isatty():
-        return False
-    if os.name == "nt":
-        os.system("")                     # turns on ANSI escape handling in the Windows console
-    return True
+def _enable_ansi() -> int:
+    return B.depth(sys.stdout)
 
 
 class Spinner:
@@ -130,7 +133,7 @@ class Terminal:
         elif t == "tool_start":
             name = ev["name"]
             label = name.split("__", 2)[-1] + st.dim(f" ({name.split('__')[1]})") if ev.get("mcp") else name
-            self.p(f"\n{st.teal('●')} {st.bold(label)}  {ev.get('summary', '')}")
+            self.p(f"\n{st.blue('●')} {st.bold(label)}  {ev.get('summary', '')}")
         elif t == "tool_end":
             out = (ev.get("output") or "").rstrip()
             if ev.get("denied"):
@@ -151,7 +154,7 @@ class Terminal:
         elif t == "status":
             self.p(st.dim("  " + ev["text"]))
         elif t == "plan":
-            mark = {"completed": st.green("[x]"), "in_progress": st.teal("[>]")}
+            mark = {"completed": st.green("[x]"), "in_progress": st.blue("[>]")}
             self.p("")
             for e in ev.get("entries") or []:
                 txt = e.get("content", "")
@@ -168,7 +171,7 @@ class Terminal:
                 self.p(st.dim(f"\n  {u['in']:,} in ({pct}% cached), {u['out']:,} out this turn. "
                               f"Session: {s['in']:,} in, {s['out']:,} out."))
 
-    def approve(self, kind: str, title: str, detail: str):
+    def approve(self, kind: str, title: str, detail: str, options=None):
         st = self.st
         self.spin.stop()
         if not sys.stdin.isatty():
@@ -182,11 +185,11 @@ class Terminal:
                 self.p("  " + st.red(line))
             else:
                 self.p("  " + (line if kind == "bash" else st.dim(line)))
-        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}[kind]
+        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         while True:
             try:
-                a = input(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
-                          f"{st.bold('n')} no > ").strip().lower()
+                a = input(B.prompt(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
+                                   f"{st.bold('n')} no > ")).strip().lower()
             except EOFError:
                 return "no", ""
             if a in ("y", "yes", ""):
@@ -229,8 +232,7 @@ class Terminal:
 
 
 def ask_key(force: bool = False) -> bool:
-    """First run: ask for the API key in the terminal and save it to meshpool.config."""
-    import getpass
+    """Ask for the API key in the terminal, check it, and save it to meshpool.config (meshpool login)."""
     C.ensure_home() if os.environ.get("MESHPOOL_HOME") else None
     C.load_into_env()
     if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")):
@@ -238,57 +240,25 @@ def ask_key(force: bool = False) -> bool:
     if not sys.stdin.isatty():
         print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})", file=sys.stderr)
         return False
-    print("\n  Meshpool needs your API key once. It is saved to " + str(C.config_path()))
-    try:
-        key = getpass.getpass("  Paste your Meshpool API key (input is hidden): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return False
-    if not key:
-        return False
-    C.write({"MESHPOOL_API_KEY": key})
-    os.environ["MESHPOOL_API_KEY"] = key
-    from meshpool_harness.cli import ping
-    r = ping()
-    print(("  Connected. " if r["ok"] else "  Saved, but the test call failed: ") + (r["detail"] if not r["ok"] else
-          f"{r['model']} answered in {r['seconds']} s."))
-    return True
-
-
-LOGO = ["  ▗▄▖ ▗▄▖  ",
-        " ▟███▙███▙ ",
-        "▟█▛ ▜█▛ ▜█▙"]
+    from meshpool_harness.agent import onboard
+    return onboard.key_step(Style(_enable_ansi()), header=True)
 
 
 def logo_lines(color: bool) -> list[str]:
-    """The Meshpool mark (two waves, blue to light blue) and the wordmark, for terminals."""
-    from meshpool_harness import __version__
-    stops = [(29, 78, 216), (37, 99, 235), (56, 189, 248)]
-
-    def grad(text: str) -> str:
-        if not color:
-            return text
-        out, n = [], max(len(text) - 1, 1)
-        for i, ch in enumerate(text):
-            t = i / n
-            a, b = (stops[0], stops[1]) if t < 0.5 else (stops[1], stops[2])
-            u = t * 2 if t < 0.5 else (t - 0.5) * 2
-            r, g, bl = (round(a[k] + (b[k] - a[k]) * u) for k in range(3))
-            out.append(f"\x1b[38;2;{r};{g};{bl}m{ch}" if ch != " " else ch)
-        return "".join(out) + "\x1b[0m"
-    tag = f"v{__version__} · meshpool.ai"
-    rows = [grad(LOGO[0]), grad(LOGO[1]) + "  " + ("\x1b[1m" if color else "") + "meshpool" + ("\x1b[0m" if color else ""),
-            grad(LOGO[2]) + "  " + ("\x1b[2m" if color else "") + tag + ("\x1b[0m" if color else "")]
-    return rows
+    """The Meshpool mark and wordmark, for terminals."""
+    return B.banner(B.depth() if color else 0)
 
 
-def _banner(term: Terminal, agent, mcp):
+def _banner(term: Terminal, agent, mcp, logo: bool = True):
     st = term.st
-    model = os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    model = (agent.manifest.get("name") if hasattr(agent, "manifest") else
+             os.environ.get("MH_MODEL") or "deepseek-v4.1-flash")
     term.p("")
-    for row in logo_lines(st.on):
-        term.p("  " + row)
-    term.p("")
-    term.p(f"  {st.dim('Model')}   {model}")
+    if logo:
+        for row in B.banner(st.depth):
+            term.p(row)
+        term.p("")
+    term.p(f"  {st.dim('Runs on' if hasattr(agent, 'manifest') else 'Model')}   {model}")
     term.p(f"  {st.dim('Folder')}  {agent.root}")
     if mcp:
         parts = []
@@ -305,6 +275,24 @@ def _banner(term: Terminal, agent, mcp):
     if len(agent.messages) > 1:
         term.p(f"  {st.dim('Resumed')} {agent.title} ({len(agent.messages) - 1} messages)")
     term.p(st.dim("  Type a request. /help for commands."))
+
+
+def _context() -> str:
+    """The user's instructions and memory (shared with the app), sent out of sight with a session's first message."""
+    try:
+        from meshpool_harness import assistant as AS
+        st = AS.settings()
+        ins = AS.instructions() if st["instructions_on"] else ""
+        mem = AS.memory() if st["memory_on"] else ""
+    except Exception:  # noqa: BLE001
+        return ""
+    parts = []
+    if ins:
+        parts.append("The user's instructions for every chat (follow them):\n" + ins[:6000])
+    if mem:
+        parts.append("What you remember about the user from earlier chats (use it only where it changes the answer; "
+                     "do not mention that it came from memory):\n" + mem[-6000:])
+    return "\n\n".join(parts)
 
 
 def _mcp_status(term: Terminal, mcp):
@@ -331,7 +319,9 @@ def _read(term: Terminal) -> str | None:
     lines = []
     while True:
         try:
-            line = input(("\n" + st.teal("> ")) if not lines else st.teal(". "))
+            if not lines:
+                print(flush=True)             # a separate newline: readline garbles colors in a multi-line prompt
+            line = input(B.prompt(st.blue(">") + " " if not lines else st.blue(".") + " "))
         except EOFError:
             return None
         if line.endswith("\\"):
@@ -342,7 +332,7 @@ def _read(term: Terminal) -> str | None:
 
 
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
-         session: str | None = None, no_mcp: bool = False, first: str | None = None) -> int:
+         session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False) -> int:
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.agent.mcp import Manager
     C.load_into_env()
@@ -353,37 +343,68 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     term = Terminal(print_mode=prompt is not None)
     st = term.st
     wd = workdir or os.getcwd()
-    if not (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")) and not ask_key():
-        term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
+    from meshpool_harness import harnesses as HR
+    if not HR.ready():
+        if prompt is None and sys.stdin.isatty():
+            from meshpool_harness.agent import onboard
+            folder = onboard.run(wd, st)          # first run: key, folder, setup, then a short tour
+            if folder is None:
+                return 1
+            wd, onboarded = str(folder), True
+        elif not ask_key():
+            term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
+            return 1
+    sub = HR.PROVIDERS.get(HR.provider())   # a Claude or ChatGPT subscription chosen as the provider
+    if sub and not HR.signed_in(HR.LOGINS[HR.provider()]):
+        term.p(st.red("You are not signed in to your subscription on this computer. Run: meshpool setup"))
         return 1
     mcp = None
-    if not no_mcp:
+    if not no_mcp and not sub:                   # a subscription agent gets the MCP servers through ACP itself
         if prompt is None:
             term.spin.start("Starting MCP servers")
         mcp = Manager(roots=[wd]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
     mode = "auto" if auto else None
     kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode)
-    agent = (Agent.resume(wd, session, **kw) if (resume or session) else None)
-    if (resume or session) and agent is None:
-        term.p(st.amber("No earlier session for this folder. Starting a new one."))
-    try:
-        agent = agent or Agent(wd, **kw)
-    except ValueError as e:
-        term.p(st.red(str(e)))
-        return 1
+    if sub:
+        from meshpool_harness.harnesses.acp import ACPAgent
+        if resume or session:
+            term.p(st.amber("Resuming is not available with a subscription in the terminal yet. Starting a new session."))
+        try:
+            agent = ACPAgent(HR.get(sub), wd, emit=term.emit, approve=term.approve, mode=mode)
+        except (ValueError, KeyError) as e:
+            term.p(st.red(str(e)))
+            return 1
+    else:
+        agent = (Agent.resume(wd, session, **kw) if (resume or session) else None)
+        if (resume or session) and agent is None:
+            term.p(st.amber("No earlier session for this folder. Starting a new one."))
+        try:
+            agent = agent or Agent(wd, **kw)
+        except ValueError as e:
+            term.p(st.red(str(e)))
+            return 1
     term.agent = agent
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
+    ctx = [True]                                 # your instructions and memory go with the first message
+
+    def send(text: str):
+        if ctx[0]:
+            ctx[0] = False
+            block = _context()
+            if block:
+                text += "\n\n\u200b" + block
+        return agent.send(text)
     try:
         if prompt is not None:
-            agent.send(prompt)
+            send(prompt)
             return 0
-        _banner(term, agent, mcp)
+        _banner(term, agent, mcp, logo=not onboarded)
         last_ctrl_c = 0.0
         if first:
-            term.p("\n" + st.teal("> ") + first)
+            term.p("\n" + st.blue("> ") + first)
             try:
-                agent.send(first)
+                send(first)
             except KeyboardInterrupt:
                 term.p(st.amber("\n  Stopped."))
         while True:
@@ -408,12 +429,18 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     term.p(HELP)
                 elif cmd == "clear":
                     agent.reset()
+                    ctx[0] = True
                     term.p(st.dim("  New conversation. Same folder and settings."))
                 elif cmd == "auto":
                     agent.mode = "ask" if agent.mode == "auto" else "auto"
                     term.p(st.dim("  Edits and commands are now " +
                                   ("allowed without asking." if agent.mode == "auto" else "asked first.")))
                 elif cmd == "model":
+                    if sub:
+                        if arg.strip():
+                            agent.set_model(arg.strip())
+                        term.p(st.dim(f"  Model: {agent.current_model()}"))
+                        continue
                     if arg.strip():
                         os.environ["MH_MODEL"] = arg.strip()
                     term.p(st.dim(f"  Model: {os.environ.get('MH_MODEL') or 'deepseek-v4.1-flash'}"))
@@ -424,8 +451,29 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
                     term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
                            f"{u['out']:,} output tokens.")
+                elif cmd == "connect":
+                    from meshpool_harness.agent import connect_cli
+                    if not arg.strip():
+                        connect_cli.listing(st)
+                    else:
+                        ok, cid = connect_cli.connect(arg.strip(), st=st)
+                        if ok and mcp:                    # its tools work in this session at once
+                            from meshpool_harness import mcp_apps as CN
+                            spec = CN.servers().get(cid)
+                            if spec:
+                                mcp.add(cid, spec)
+                        elif ok:
+                            term.p(st.dim("  New sessions use it."))
+                elif cmd == "import":
+                    from meshpool_harness.agent import onboard
+                    onboard.context_step(st)
+                    ctx[0] = True                  # the next message carries the new context
+                elif cmd == "setup":
+                    from meshpool_harness.agent import onboard
+                    if onboard.provider_step(st, 1):
+                        term.p(st.dim("  Saved. Restart meshpool to use it (type /exit, then meshpool)."))
                 elif cmd == "init":
-                    agent.send("Look at this project (layout, languages, how to install, build, run and test it, "
+                    send("Look at this project (layout, languages, how to install, build, run and test it, "
                                "and its conventions). Then write MESHPOOL.md in the project root with short notes a "
                                "new engineer would need: the exact commands, the main folders, and the rules to "
                                "follow. Keep it under 60 lines.")
@@ -433,13 +481,15 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     term.p(st.amber(f"  Unknown command /{cmd}. Type /help."))
                 continue
             try:
-                agent.send(text)
+                send(text)
             except KeyboardInterrupt:
                 term.p(st.amber("\n  Stopped."))
     finally:
         term.spin.stop()
         if mcp:
             mcp.close()
-    if prompt is None:
+        if sub:
+            agent.close()
+    if prompt is None and not sub:
         term.p(st.dim(f"  Session saved. Resume it with: meshpool --continue"))
     return 0

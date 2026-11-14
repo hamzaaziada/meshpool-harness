@@ -2,7 +2,7 @@
 
 Each entry says what the server does, how it runs (a local command through npx or uvx, or a remote URL), which
 settings it needs (environment variable NAMES only; values never live here), its docs and its licence. Every package
-name and URL below was checked on 2026-11-13 against npm, PyPI, the official MCP registry or the vendor's repository
+name and URL below was checked on 2026-11-13, and testkit/connectors_live.py starts each one against npm, PyPI, the official MCP registry or the vendor's repository
 (see VERIFIED); deprecated or archived packages were left out.
 
 Adding an entry writes it into Meshpool's mcp.json switched OFF, with ${NAME} placeholders for its settings. The user
@@ -77,9 +77,11 @@ LIBRARY = [
     _e("supabase", "Supabase", "dev", "Databases, SQL, edge functions and logs (sign in under Connectors).",
        None, "https://supabase.com/docs/guides/getting-started/mcp", "Apache-2.0", connector="supabase"),
     # ---- data
-    _e("postgres", "PostgreSQL", "data", "Query a Postgres database (read-only mode), explain plans and check "
-       "index health.", _uvx("postgres-mcp", "--access-mode=restricted"), GH + "crystaldba/postgres-mcp", "MIT",
-       {"DATABASE_URI": "postgresql://user:password@host:5432/dbname"}),
+    _e("postgres", "SQL databases", "data", "Explore schemas and run SQL on PostgreSQL, MySQL, MariaDB, SQL Server "
+       "or SQLite.", _npx("@bytebase/dbhub@1.6.1", "--transport", "stdio", "--dsn", "${DATABASE_URL}"),
+       GH + "bytebase/dbhub", "MIT",
+       {"DATABASE_URL": "postgres://user:password@host:5432/dbname (or mysql://, sqlserver://, sqlite:///path)"},
+       env=False),
     _e("duckdb", "DuckDB", "data", "Fast SQL over local CSV, Parquet and Excel files in an in-memory DuckDB.",
        _uvx("mcp-server-motherduck", "--db-path", ":memory:", "--read-write"),
        GH + "motherduckdb/mcp-server-motherduck", "MIT"),
@@ -94,16 +96,13 @@ LIBRARY = [
        "statements and insider transactions from the SEC, with filing links.", _uvx("sec-edgar-mcp"),
        GH + "stefanoamorelli/sec-edgar-mcp", "AGPL-3.0",
        {"SEC_EDGAR_USER_AGENT": "Your name and email, e.g. Jane Doe (jane@fund.com); the SEC requires it"}),
-    _e("fred", "FRED (St. Louis Fed)", "finance", "800,000+ economic time series: rates, inflation, GDP, "
-       "employment, spreads.", _npx("fred-mcp-server"), GH + "stefanoamorelli/fred-mcp-server", "AGPL-3.0",
-       {"FRED_API_KEY": "Free key from fred.stlouisfed.org/docs/api/api_key.html"}),
     _e("alpha-vantage", "Alpha Vantage", "finance", "Stock, ETF, FX and crypto prices, fundamentals, earnings and "
        "economic indicators.", _http("https://mcp.alphavantage.co/mcp?apikey=${ALPHAVANTAGE_API_KEY}"),
        GH + "alphavantage/alpha_vantage_mcp", "MIT",
        {"ALPHAVANTAGE_API_KEY": "Free key from alphavantage.co/support/#api-key"}),
     _e("massive", "Massive (Polygon.io)", "finance", "Market data: trades, quotes, aggregates, reference data, "
-       "financials and news.", {"transport": "stdio", "command": "uvx", "args": [
-           "--from", "git+https://github.com/massive-com/mcp_massive@v0.10.0", "mcp_massive"]},
+       "financials and news.", {"transport": "stdio", "command": "uvx", "args": [   # mcp<2: it uses FastMCP, renamed in mcp 2
+           "--with", "mcp<2", "--from", "git+https://github.com/massive-com/mcp_massive@v0.10.0", "mcp_massive"]},
        GH + "massive-com/mcp_massive", "MIT", {"MASSIVE_API_KEY": "API key from massive.com (formerly Polygon.io)"}),
     _e("financial-datasets", "Financial Datasets", "finance", "Income statements, balance sheets, cash flows, "
        "prices, filings and news for US equities (sign in through the browser).", None,
@@ -168,11 +167,11 @@ VERIFIED = {
     "local-files": "npm @modelcontextprotocol/server-filesystem 2.3.0", "google-workspace": "PyPI workspace-mcp 2.4.2",
     "git": "PyPI mcp-server-git 2026.11.11", "playwright": "npm @playwright/mcp 0.0.85",
     "chrome-devtools": "npm chrome-devtools-mcp 1.13.0", "context7": "initialize 200 at mcp.context7.com",
-    "postgres": "PyPI postgres-mcp 0.3.0", "duckdb": "PyPI mcp-server-motherduck 1.1.1",
+    "postgres": "npm @bytebase/dbhub 1.6.1 (postgres-mcp left out: every release pins a pglast that is gone)",
+    "duckdb": "PyPI mcp-server-motherduck 1.1.1",
     "bigquery": "PyPI mcp-server-bigquery 0.3.3", "mongodb": "npm mongodb-mcp-server 3.3.0",
-    "sec-edgar": "PyPI sec-edgar-mcp 1.1.0", "fred": "npm fred-mcp-server 1.2.0",
-    "alpha-vantage": "registry io.github.alphavantage/alpha_vantage_mcp; 401 without key",
-    "massive": "git tag v0.10.0 of massive-com/mcp_massive", "financial-datasets": "registry ai.financialdatasets/mcp; "
+    "sec-edgar": "PyPI sec-edgar-mcp 1.1.0", "alpha-vantage": "registry io.github.alphavantage/alpha_vantage_mcp; 401 without key",
+    "massive": "git tag v0.10.0 of massive-com/mcp_massive, with mcp<2", "financial-datasets": "registry ai.financialdatasets/mcp; "
     "OAuth with dynamic registration", "yahoo-finance": "PyPI yfmcp 0.14.0", "slack": "npm slack-mcp-server 1.3.0",
     "asana": "OAuth with dynamic registration at mcp.asana.com", "hubspot": "npm @hubspot/mcp-server 0.4.0",
     "time": "PyPI mcp-server-time 2026.11.11", "web-fetch": "PyPI mcp-server-fetch 2026.11.11",

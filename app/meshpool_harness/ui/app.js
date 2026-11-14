@@ -258,7 +258,7 @@ function globalKeys(e) {
 }
 
 /* ================================== data loads ================================== */
-async function loadSettings() { S.settings = await api("/api/settings"); $("#kdot").className = "kdot" + (S.settings.has_key ? " ok" : ""); }
+async function loadSettings() { S.settings = await api("/api/settings"); $("#kdot").className = "kdot" + (S.settings.ready ? " ok" : ""); }
 async function loadModels(refresh) {
   try { S.models = await api("/api/models" + (refresh ? "?refresh=1" : "")); } catch (e) { S.models = {models: [], favorites: [], default: "", error: e.message}; }
   if (!S.draft.model) S.draft.model = S.models.default;
@@ -646,7 +646,7 @@ async function sendNow(interrupt) {
   if (!text && !S.attachments.length) return;
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
-  if (!S.settings?.has_key) { showOnboarding(); return; }
+  if (!S.settings?.ready) { showOnboarding(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
   inp.value = ""; inp.style.height = "auto";
   try {
@@ -1385,7 +1385,7 @@ function panelPreview(body) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
+const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["import", "Import chats and context"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
 function openSettings(sec = "general") {
   closePop();
@@ -1408,12 +1408,18 @@ async function renderSection(sec) {
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
     b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
+      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">A subscription runs every new chat on your own Claude or ChatGPT plan instead of an API key.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
       <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model from the picker in the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>`;
     const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
+    $("#sProv").onchange = async () => {
+      const v = $("#sProv").value, h = SUB_HARNESS[v] && ((S.harnesses || []).find(x => x.id === SUB_HARNESS[v]) || {name: v === "claude" ? "Claude" : "ChatGPT"});
+      if (h && !h.signed_in) { $("#sProv").value = S.settings.provider || "meshpool"; RES("sRes").className = "res bad"; RES("sRes").textContent = `Sign in to ${h.name} first under Agents, then choose it here.`; return; }
+      try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New chats use " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
+    };
     $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
     const save = async () => {
       const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();
@@ -1467,7 +1473,9 @@ async function renderSection(sec) {
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
-      <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>`;
+      <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
+      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Claude, Claude Code or Codex? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
+    $("#paImport").onclick = () => renderSection("import");
     $("#paSave").onclick = async () => {
       try {
         await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
@@ -1476,6 +1484,9 @@ async function renderSection(sec) {
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New chats use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
+  } else if (sec === "import") {
+    b.innerHTML = `${close}<div id="impBox"></div>`;
+    await contextPanel($("#impBox", b));
   } else if (sec === "scheduled") {
     const draw = a => {
       const proj = S.projects.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join("");
@@ -1522,41 +1533,84 @@ async function renderSection(sec) {
     $("#wSave").onclick = async () => { const values = {}; $$("[data-wk]", b).forEach(x => { if (x.value.trim() || x.dataset.wk === "SEARXNG_URL") values[x.dataset.wk] = x.value.trim(); }); try { await post("/api/settings", {values}); RES("wRes").className = "res ok"; RES("wRes").textContent = "Saved."; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
     $("#wTest").onclick = async () => { RES("wRes").className = "res"; RES("wRes").textContent = "Searching..."; try { const r = await post("/api/web-test"); RES("wRes").className = "res " + (r.ok ? "ok" : "bad"); RES("wRes").textContent = r.ok ? `Search works: ${r.count} results in ${r.seconds} s, first: ${r.first}` : r.error; } catch (e) { RES("wRes").className = "res bad"; RES("wRes").textContent = e.message; } };
   } else if (sec === "connectors") {
+    const cats = ["Connected", "Engineering", "Work and documents", "Sales and marketing", "Finance and data", "Yours"];
+    const redirect = `${location.origin}/oauth/callback`;
+    const say = (t, cls = "") => { RES("cnRes").className = "res " + cls; RES("cnRes").textContent = t; };
+    const clientForm = c => `<span class="ownclient" data-cf="${esc(c.id)}"><small>${esc(c.client_help || "This app only signs in apps it knows. Create an OAuth app in its developer settings with the redirect URL below, then paste its client ID (and secret, if it gives you one).")}</small>
+      <small>Redirect URL: <code>${esc(redirect)}</code></small>
+      <span class="keyrow" style="margin-top:6px"><input data-cid="${esc(c.id)}" placeholder="Client ID" autocomplete="off" spellcheck="false"><input type="password" data-csec="${esc(c.id)}" placeholder="Client secret (if any)" autocomplete="off" spellcheck="false"><button class="btn primary" data-client="${esc(c.id)}">Connect</button></span></span>`;
+    const row = c => {
+      const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
+      const own = c.needs_client && !c.own_client && !c.connected;
+      const btn = c.connected ? `<label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
+        : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
+        : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
+      return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
+        ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
+        ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}
+        ${own || S.cnNeedClient === c.id ? clientForm(c) : ""}</span>${btn}</li>`;
+    };
+    const filter = () => {
+      const q = ($("#cnq")?.value || "").trim().toLowerCase(), cat = S.cnCat || "";
+      $$("#cnl > li", b).forEach(li => { li.hidden = (q && !li.dataset.text.includes(q)) || (cat && li.dataset.cat !== cat); });
+      $$("[data-cncat]", b).forEach(x => x.classList.toggle("primary", x.dataset.cncat === cat));
+    };
+    const signIn = (r, id) => {                       // poll until the browser sign-in finished
+      if (r.needs_client) { S.cnNeedClient = r.needs_client; draw(r.connectors); say(r.message); return; }
+      RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
+      const t0 = Date.now();
+      const tick = async () => {
+        if (!$("#cnl")) return;
+        const l = (await api("/api/connectors")).connectors;
+        if (l.find(c => c.id === id)?.connected) { S.cnNeedClient = ""; draw(l); say(`${l.find(c => c.id === id).name} is connected. New chats can use it.`, "ok"); return; }
+        if (Date.now() - t0 < 300000) setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    };
     const draw = rows => {
-      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools: CRM records, leads, tasks, issues, pages, pull requests and more. Sign-in happens in your browser; Meshpool keeps the access on this computer only.</p>
-        <ul class="rows2" id="cnl">${[...rows].sort((a, z) => (z.connected - a.connected) || (z.custom - a.custom)).map(c => `<li data-id="${esc(c.id)}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">Connected</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : ""}<small>${esc(c.description)}</small>
-          ${c.id === "github" && !c.connected ? `<span class="row" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${c.can_sign_in ? `<button class="btn primary" data-ghdev="1">Sign in with GitHub</button>` : ""}<button class="btn ${c.can_sign_in ? "" : "primary"}" data-ghfound="1">Use the GitHub login on this computer</button><a class="btn" href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org&amp;description=Meshpool" target="_blank" rel="noopener">Create a token</a></span>` : ""}
-          ${c.auth === "token" && !c.connected ? `<span class="keyrow" style="margin-top:6px"><input type="password" data-tok="${esc(c.id)}" placeholder="Paste a token" autocomplete="off" spellcheck="false"><button class="btn" data-save="${esc(c.id)}">Save</button></span><small>${esc(c.token_help)}</small>` : ""}</span>
-          ${c.connected ? `<label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-off="${esc(c.id)}">Disconnect</button>`
-            : c.auth === "oauth" ? `<button class="btn primary" data-go="${esc(c.id)}">Connect</button>` : ""}</li>`).join("")}</ul>
+      const order = c => (c.connected ? 0 : 1);
+      b.innerHTML = `${close}<h3>Connectors</h3><p class="lead">Connect the apps you work in. Every agent can then use them as tools. Sign-in happens between this computer and the app itself: Meshpool keeps the access on this computer only and runs no server in between.</p>
+        <div class="cnbar"><input id="cnq" placeholder="Search ${rows.length} apps" spellcheck="false" value="${esc(S.cnQ || "")}"><span class="cnchips"><button class="btn${S.cnCat ? "" : " primary"}" data-cncat="">All</button>${cats.filter(k => rows.some(c => (c.connected ? "Connected" : c.custom ? "Yours" : c.category) === k)).map(k => `<button class="btn" data-cncat="${esc(k)}">${esc(k)}</button>`).join("")}</span></div>
         <div class="res" id="cnRes"></div>
-        <h3 style="font-size:16px;margin:18px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address. Leave the token empty to sign in through your browser.</p>
-        <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>`;
+        <ul class="rows2" id="cnl">${[...rows].sort((x, z) => order(x) - order(z)).map(row).join("")}</ul>
+        <h3 style="font-size:16px;margin:18px 0 4px">Add another app</h3><p class="lead" style="font-size:13px">Any app with a remote MCP server works. Paste its address; Meshpool works out whether it needs nothing, a token or a browser sign-in. For a key that goes in another header, paste it as <code>Header-Name: value</code>.</p>
+        <div class="cform"><input id="cxName" placeholder="Name" spellcheck="false"><input id="cxUrl" placeholder="https://mcp.example.com/mcp" spellcheck="false"><input id="cxTok" type="password" placeholder="Token or API key (optional)" autocomplete="off"><button class="btn primary" id="cxAdd">Add</button></div>
+        <details style="margin-top:8px"><summary class="linkbtn" style="display:inline;padding-left:0">More options: your own sign-in client</summary><span class="keyrow" style="margin-top:6px"><input id="cxCid" placeholder="Client ID" autocomplete="off" spellcheck="false"><input id="cxSec" type="password" placeholder="Client secret" autocomplete="off" spellcheck="false"></span><small class="muted">For apps that only sign in apps they know. Redirect URL: <code>${esc(redirect)}</code></small></details>`;
       done();
+      $("#cnq").oninput = () => { S.cnQ = $("#cnq").value; filter(); };
+      $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
+      filter();
       $("#cxAdd").onclick = async () => {
         const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
-        $("#cxAdd").disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Checking the server...";
-        const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim()}); $("#cxAdd").disabled = false;
+        $("#cxAdd").disabled = true; say("Checking the server...");
+        const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim(), client_id: $("#cxCid").value.trim(), client_secret: $("#cxSec").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
-        S.connCache = r.connectors; draw(r.connectors);
-        if (r.url) { RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
-          const id = r.id, t0 = Date.now(); const tick = async () => { if (!$("#cnl")) return; const l = (await api("/api/connectors")).connectors; if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected. New chats can use it."; return; } if (Date.now() - t0 < 300000) setTimeout(tick, 2000); }; setTimeout(tick, 2000);
-        } else { RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Added. New chats can use it."; }
+        S.connCache = r.connectors; S.cnCat = ""; draw(r.connectors);
+        if (r.url || r.needs_client) signIn(r, r.id); else say(r.message || "Added. New chats can use it.", "ok");
       };
-      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { RES("cnRes").className = "res bad"; RES("cnRes").textContent = e.message; return null; } };
+      const act = async body => { try { const r = await post("/api/connectors", body); return r; } catch (e) { say(e.message, "bad"); return null; } };
       $$("[data-go]", b).forEach(x => x.onclick = async () => {
         x.disabled = true; x.textContent = "Opening sign-in...";
         const r = await act({action: "connect", id: x.dataset.go});
         if (!r) { x.disabled = false; x.textContent = "Connect"; return; }
-        RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
-        const id = x.dataset.go, t0 = Date.now();
-        const tick = async () => {
-          if (!$("#cnl")) return;
-          const l = (await api("/api/connectors")).connectors;
-          if (l.find(c => c.id === id)?.connected) { draw(l); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `${l.find(c => c.id === id).name} is connected. New chats can use it.`; return; }
-          if (Date.now() - t0 < 300000) setTimeout(tick, 2000);
-        };
-        setTimeout(tick, 2000);
+        signIn(r, x.dataset.go);
+      });
+      $$("[data-client]", b).forEach(x => x.onclick = async () => {
+        const id = x.dataset.client, cid = $(`[data-cid="${id}"]`, b).value.trim();
+        if (!cid) { $(`[data-cid="${id}"]`, b).focus(); return; }
+        const r = await act({action: "client", id, client_id: cid, client_secret: $(`[data-csec="${id}"]`, b).value.trim()});
+        if (r) signIn(r, id);
+      });
+      $$("[data-turnon]", b).forEach(x => x.onclick = async () => {
+        x.disabled = true;
+        const r = await act({action: "enable", id: x.dataset.turnon, on: true}); if (!r) { x.disabled = false; return; }
+        draw(r.connectors); say("Checking it...");
+        const t = await act({action: "check", id: x.dataset.turnon}); if (t) say(t.ok ? `On: ${t.tools.length} tools. New chats can use it.` : t.error, t.ok ? "ok" : "bad");
+      });
+      $$("[data-test]", b).forEach(x => x.onclick = async () => {
+        x.disabled = true; say("Testing...");
+        const t = await act({action: "check", id: x.dataset.test}); x.disabled = false;
+        if (t) say(t.ok ? `Works: ${t.tools.length} tools (${t.tools.slice(0, 6).join(", ")}${t.tools.length > 6 ? ", ..." : ""}).` : t.error, t.ok ? "ok" : "bad");
       });
       $("[data-ghfound]", b)?.addEventListener("click", async e => {
         e.target.disabled = true; RES("cnRes").className = "res"; RES("cnRes").textContent = "Looking for a GitHub login on this computer...";
@@ -1575,7 +1629,7 @@ async function renderSection(sec) {
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
-      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = "Connected."; } });
+      $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); const t = await act({action: "check", id: x.dataset.save}); if (t) say(t.ok ? `Connected: ${t.tools.length} tools.` : t.error, t.ok ? "ok" : "bad"); } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Chats stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
@@ -1690,13 +1744,13 @@ async function renderSection(sec) {
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
     b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
-      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? "Installed. Open a new terminal window and type meshpool." : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
+      <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_STREAM: [["1", "On"], ["0", "Off"]], MH_CACHE_KEY: [["1", "On"], ["0", "Off"]], MH_WIRE: [["chat", "Standard"], ["responses", "Responses API"]], MH_HARNESS_PROFILE: [["minimal", "Recommended"], ["", "Older, stricter checks"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
-    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
+    const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
@@ -1709,34 +1763,83 @@ async function renderSection(sec) {
 
 /* ================================== first run ================================== */
 const onbSteps = n => `<div class="onb-steps" aria-label="Step ${n} of 3">${[1, 2, 3].map(i => `<span class="${i <= n ? "on" : ""}"></span>`).join("")}<small>Step ${n} of 3</small></div>`;
+const PROVIDERS = [["meshpool", "Meshpool API key", "Recommended. Every model on one key, 20% cheaper."],
+  ["custom", "Another API key", "OpenAI, OpenRouter or any OpenAI-compatible provider."],
+  ["claude", "Claude subscription", "Your Claude Pro or Max plan. No API key needed."],
+  ["chatgpt", "ChatGPT subscription", "Your ChatGPT Plus, Pro or Business plan. No API key needed."]];
+const SUB_HARNESS = {claude: "claude-subscription", chatgpt: "chatgpt-subscription"};
 function showOnboarding() {
   if ($("#onb")) return;
   const o = document.createElement("div"); o.className = "onb"; o.id = "onb";
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Paste your Meshpool API key to get started. It stays on this computer.</p><p class="credit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a></p>
-    <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
-    <details id="oAdv"><summary class="linkbtn" style="display:inline;margin-left:0;padding-left:0">Use another AI provider</summary><label class="field" style="max-width:none;margin-top:10px"><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://llm.meshpool.ai/v1"></label></details>
+    ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Choose what Meshpool runs on. It stays on this computer, and you can change it any time in Settings.</p>
+    <div class="scope prov" role="radiogroup" aria-label="What Meshpool runs on">${PROVIDERS.map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
+    <div id="oKeyBox">
+      <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a> and run every model 20% cheaper.</p>
+      <label class="field" id="oBaseF" style="max-width:none" hidden><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
+      <label class="field" id="oModelF" style="max-width:none" hidden><span>Model</span><input id="oModel" spellcheck="false" placeholder="gpt-4.1-mini"></label>
+      <label class="field" style="max-width:none"><span>API key</span><span class="keyrow"><input id="oKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="oShow" type="button">Show</button></span></label>
+    </div>
+    <div id="oSubBox" hidden><p class="credit" id="oSubTxt"></p><button class="btn primary" id="oSign">Sign in</button></div>
     <div class="res" id="oRes"></div>
     <div class="onb-go"><button class="bigbtn" id="oGo">Continue</button></div></div>
     <div class="onb-card" id="onbPerm" hidden></div>`;
   document.body.appendChild(o);
+  let prov = "meshpool";
+  const res = RES("oRes");
+  const sub = () => SUB_HARNESS[prov] && (S.harnesses || []).find(h => h.id === SUB_HARNESS[prov]);
+  const drawSub = () => {
+    const h = sub(); const name = prov === "claude" ? "Claude" : "ChatGPT";
+    $("#oSign").hidden = !h || h.signed_in || h.available === false;
+    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`
+      : h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`;
+    $("#oGo").disabled = !(h && h.signed_in);
+  };
+  const pick = id => {
+    prov = id; res.className = "res"; res.textContent = "";
+    $$("[data-prov]", o).forEach(x => x.setAttribute("aria-checked", x.dataset.prov === id));
+    const isSub = !!SUB_HARNESS[id];
+    $("#oKeyBox").hidden = isSub; $("#oSubBox").hidden = !isSub;
+    $("#oBaseF").hidden = $("#oModelF").hidden = id !== "custom"; $("#oCredit").hidden = id !== "meshpool";
+    $("#oGo").disabled = false;
+    if (isSub) { drawSub(); loadHarnesses().then(drawSub).catch(() => {}); } else $(id === "custom" ? "#oBase" : "#oKey").focus();
+  };
+  $$("[data-prov]", o).forEach(x => x.onclick = () => pick(x.dataset.prov));
   $("#oKey").focus();
   $("#oShow").onclick = () => { const i = $("#oKey"); i.type = i.type === "password" ? "text" : "password"; $("#oShow").textContent = i.type === "password" ? "Show" : "Hide"; };
   $("#oKey").onkeydown = e => { if (e.key === "Enter") $("#oGo").click(); };
-  $("#oKey").oninput = () => { RES("oRes").textContent = ""; };
-  $("#oKey").closest(".field").after($("#oRes"));
+  $("#oKey").oninput = () => { res.textContent = ""; };
+  $("#oSign").onclick = async () => {
+    const id = SUB_HARNESS[prov];
+    try { const r = await post("/api/harness-login", {id}); res.className = "res " + (r.ok ? "" : "bad"); res.textContent = r.message; } catch (e) { res.className = "res bad"; res.textContent = e.message; return; }
+    const t0 = Date.now();
+    const tick = async () => { if (!$("#oSubBox") || SUB_HARNESS[prov] !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
+    setTimeout(tick, 3000);
+  };
+  const finish = async () => { await loadSettings(); await loadHarnesses(); S.draft.harness = modeHarness(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
   $("#oGo").onclick = async () => {
-    const key = $("#oKey").value.trim(); const res = RES("oRes");
+    if (SUB_HARNESS[prov]) {
+      if (!sub()?.signed_in) { res.className = "res bad"; res.textContent = "Sign in first."; return; }
+      $("#oGo").disabled = true;
+      try { await post("/api/provider", {provider: prov}); store("harness_code", null); store("harness_cowork", null); await finish(); } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
+      return;
+    }
+    const key = $("#oKey").value.trim();
     if (!key) { res.className = "res bad"; res.textContent = "Paste your API key first."; $("#oKey").focus(); return; }
+    const values = {MESHPOOL_API_KEY: key, MESHPOOL_BASE_URL: ""};
+    if (prov === "custom") {
+      const base = $("#oBase").value.trim(), model = $("#oModel").value.trim();
+      if (!base || !model) { res.className = "res bad"; res.textContent = "Fill in the provider address and a model it serves."; (base ? $("#oModel") : $("#oBase")).focus(); return; }
+      values.MESHPOOL_BASE_URL = base; values.MH_MODEL = model;
+    }
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
-      const values = {MESHPOOL_API_KEY: key}; if ($("#oBase").value.trim()) values.MESHPOOL_BASE_URL = $("#oBase").value.trim();
-      const r = await post("/api/test", {values});      // check first; save only a key that works
-      if (r.ok) await post("/api/settings", {values});
+      const r = await post("/api/test", {values: prov === "custom" ? values : {MESHPOOL_API_KEY: key, MESHPOOL_BASE_URL: "https://llm.meshpool.ai/v1"}});   // check first; save only a key that works
       if (!r.ok) { res.className = "res bad"; res.textContent = connMsg(r.detail); $("#oGo").disabled = false; return; }
-      await loadSettings(); await loadModels(true); renderBar();
-      $("#onbKey").remove(); permStep(o);
+      await post("/api/settings", {values}); await post("/api/provider", {provider: prov});
+      store("harness_code", null); store("harness_cowork", null);
+      await finish();
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
   };
 }
@@ -1745,37 +1848,66 @@ function showOnboarding() {
    custom GPT / project instructions as skills. */
 async function contextPanel(box) {
   if (!box) return;
-  let prompt = "";
+  let prompt = "", local = {};
   try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
-  box.innerHTML = `<h3 class="onb-h">Bring your context</h3>
-    <p class="muted">So Meshpool knows how you work from day one. Pick either way; both take a minute.</p>
+  try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
+  const srcs = Object.entries(local).filter(([, v]) => v.found);
+  const n = x => Number(x || 0).toLocaleString();
+  box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
+    <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Nothing leaves this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Ask your current assistant.</b> Copy this prompt into ChatGPT, Claude or Gemini, then paste its answer below.
-        <div><button class="btn" id="ctxCopy">Copy the prompt</button></div>
-        <textarea id="ctxText" rows="4" placeholder="Paste the answer here"></textarea>
-        <div><button class="btn" id="ctxGo">Import the answer</button></div></li>
-      <li><b>Or upload your data export.</b> ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data.
-        Both email you a .zip. Meshpool keeps your projects' instructions as skills and lasting facts as memory; it does not copy your chats.
-        <div><input type="file" id="ctxZip" accept=".zip"></div></li>
-      <li><b>Have a custom GPT or a Claude project you rely on?</b> Paste its instructions to make it a skill.
-        <input id="ctxName" placeholder="Name, e.g. board-memo-writer">
-        <textarea id="ctxIns" rows="3" placeholder="Paste the instructions"></textarea>
-        <div><button class="btn" id="ctxSkill">Save as a skill</button></div></li>
+      <li><b>Your ChatGPT or Claude chats</b>
+        <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
+        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link, usually within minutes.</small>
+        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
+        <small class="muted">Every conversation comes over with its original date. Claude projects become skills, and lasting facts about you become memory.</small></li>
+      ${srcs.length ? `<li><b>Sessions on this computer</b>
+        <p>Each session opens in its project folder, so you can carry on with any agent.</p>
+        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
+      <li><b>What your assistant knows about you</b>
+        <p>Copy the prompt into ChatGPT, Claude or Gemini, then paste its whole answer here. It becomes your instructions and memory.</p>
+        <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
+        <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
+      <li><b>A custom GPT or Claude project you rely on</b>
+        <p>Paste its instructions to keep them as a skill every agent can use.</p>
+        <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
+        <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></li>
     </ol><div class="res" id="ctxRes"></div>`;
-  const res = (t, bad) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ""); r.textContent = t; };
+  const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
+  const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
   $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
   $("#ctxGo", box).onclick = async () => {
     const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
-    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : "")); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : ""), false, true); } catch (e) { res(e.message, true); }
   };
-  $("#ctxZip", box).onchange = async ev => {
-    const f = ev.target.files[0]; if (!f) return; res("Reading your export…");
-    const data = await new Promise(ok => { const rd = new FileReader(); rd.onload = () => ok(String(rd.result).split(",")[1]); rd.readAsDataURL(f); });
-    try { const r = await post("/api/import-context", {file: {name: f.name, data}}); res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${r.skills.length} project skills, ${r.memory} facts into memory, ${r.instructions} instructions (from ${r.conversations_seen} conversations; chats not copied).`); } catch (e) { res(e.message, true); }
+  const upload = async f => {
+    if (!f) return;
+    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or Claude, without unzipping it.", true);
+    res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
+    try {
+      const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
+      await refresh();
+      res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+    } catch (e) { res(e.message, true); }
   };
+  const dz = $("#ctxDrop", box);
+  dz.onclick = () => $("#ctxZip", box).click(); dz.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#ctxZip", box).click(); } };
+  $("#ctxZip", box).onchange = ev => upload(ev.target.files[0]);
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add("over"); }; dz.ondragleave = () => dz.classList.remove("over");
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove("over"); upload(e.dataTransfer.files[0]); };
+  $$("[data-local]", box).forEach(x => x.onclick = async () => {
+    x.disabled = true; res(`Importing ${local[x.dataset.local].name} sessions…`);
+    try {
+      const r = await post("/api/import-chats", {sources: [x.dataset.local]}); await refresh();
+      res(`Imported ${n(r.imported)} ${local[x.dataset.local].name} session${r.imported === 1 ? "" : "s"} as chats${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.`, false, true);
+      x.textContent = "Imported";
+    } catch (e) { x.disabled = false; res(e.message, true); }
+  });
   $("#ctxSkill", box).onclick = async () => {
     const instructions = $("#ctxIns", box).value.trim(); if (!instructions) return res("Paste the instructions first.", true);
-    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {name: $("#ctxName", box).value.trim(), instructions}); res(`Saved the skill ${r.skill}.`, false, true); } catch (e) { res(e.message, true); }
   };
 }
 
@@ -1999,7 +2131,7 @@ async function restartApp() {
   if (S.draft.project && !S.projects.some(p => p.path === S.draft.project) && S.draft.project !== S.defaultProject) S.draft.project = "";
   newThread();
   if (S.panel) renderPanel();
-  if (!S.settings.has_key) showOnboarding();
+  if (!S.settings.ready) showOnboarding();
   else {
     loadModels().then(renderBar);
     if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
