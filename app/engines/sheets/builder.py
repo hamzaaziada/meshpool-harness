@@ -5,6 +5,7 @@ links to other sheets in green; Inputs / Calc / Outputs sheets; named ranges for
 """
 from __future__ import annotations
 
+from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -24,8 +25,27 @@ FMT = {"usd": '$#,##0;($#,##0);"-"', "usd2": '$#,##0.00;($#,##0.00)', "pct": '0.
        "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)'}
 
 
+class _Book(Workbook):
+    """A workbook that sets each sheet up for printing when saved: landscape, one page wide, as many pages long as
+    it needs. Without it a model printed as 74 pages with sheets split across them."""
+
+    def save(self, filename):
+        for ws in self.worksheets:
+            ps = ws.page_setup
+            ps.orientation = ps.orientation or "landscape"
+            if not ws.sheet_properties.pageSetUpPr or not ws.sheet_properties.pageSetUpPr.fitToPage:
+                ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+                ps.fitToWidth, ps.fitToHeight = 1, 0
+            ws.print_options.horizontalCentered = True
+            if ws.freeze_panes and not ws.print_title_rows:          # header rows repeat on every page
+                row = int(_re.sub(r"\D", "", ws.freeze_panes) or 1) - 1
+                if row >= 1:
+                    ws.print_title_rows = f"1:{row}"
+        return super().save(filename)
+
+
 def new_workbook(sheets=("Inputs", "Calc", "Outputs")) -> Workbook:
-    wb = Workbook()
+    wb = _Book()
     wb.active.title = sheets[0]
     for s in sheets[1:]:
         wb.create_sheet(s)

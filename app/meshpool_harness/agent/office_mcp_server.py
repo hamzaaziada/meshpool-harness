@@ -178,11 +178,21 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
             cols = max(len(r) for r in rows)
             t = doc.add_table(rows=len(rows), cols=cols)
             t.style = "Table Grid"
+            # numbers line up on the right, as in a spreadsheet: a column whose body cells are mostly numbers
+            num = re.compile(r"^[-+(]?\s*[$€£¥]?\s*[\d.,]+\s*(%|x|bn|m|k|mm|b)?\)?$|^(n/?a|nm|-|—)$", re.I)
+            right = set()
+            for ci in range(cols):
+                body = [r[ci].replace("*", "").strip() for r in rows[1:] if ci < len(r) and r[ci].strip()]
+                if body and sum(bool(num.match(b)) for b in body) * 2 > len(body):
+                    right.add(ci)
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
             for ri, row in enumerate(rows):
                 for ci in range(cols):
                     cell = t.cell(ri, ci)
                     cell.text = ""
                     _runs(cell.paragraphs[0], row[ci] if ci < len(row) else "")
+                    if ci in right:
+                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
                     if ri == 0:
                         for r in cell.paragraphs[0].runs:
                             r.bold = True
