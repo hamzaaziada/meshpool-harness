@@ -25,7 +25,6 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool. Apache License 2.0."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Meshpool.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Meshpool now"
 !insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE "Meshpool\LICENSE.txt"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH

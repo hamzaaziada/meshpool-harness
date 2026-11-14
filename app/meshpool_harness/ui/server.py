@@ -21,7 +21,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
-from meshpool_harness import providers as PVD
 from meshpool_harness.ui import agent_api as A
 from meshpool_harness.ui import workbench as W
 
@@ -62,8 +61,7 @@ def get_settings() -> dict:
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
             "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
-            "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()},
-            "keys": {"anthropic": bool(HR.anthropic_key()), "gemini": bool(PVD.gemini_key())}}
+            "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
 def save_settings(body: dict) -> dict:
@@ -419,8 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import harnesses as HRS
                 b = self._json()
                 hid = HRS.LEGACY.get(b.get("id", ""), b.get("id", ""))
-                which = {"claude-code": "claude", "codex": "codex", "gemini-cli": "gemini"}.get(hid) or HRS.LOGINS.get(hid, hid)
-                return self._send(200, HRS.login(which))     # by harness id, or by provider (claude, chatgpt)
+                which = "codex" if hid == "codex" else HRS.LOGINS.get(hid, hid)
+                return self._send(200, HRS.login(which))     # by harness id (codex) or by provider (chatgpt)
             if u.path == "/api/import-context":
                 # context from ChatGPT, Claude or another assistant: pasted answer, pasted instructions, or an export
                 from meshpool_harness import importer as IM

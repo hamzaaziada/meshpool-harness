@@ -1,4 +1,4 @@
-"""ACP client: runs any Agent Client Protocol agent (Hermes, Gemini CLI, Goose, Claude Code/Codex adapters, ...)
+"""ACP client: runs any Agent Client Protocol agent (Hermes, Goose, the Codex adapter, ...)
 as a Meshpool harness. Standard library only.
 
 The agent is a child process speaking newline-delimited JSON-RPC 2.0 on stdin/stdout. This class presents the same
@@ -271,7 +271,7 @@ class ACPAgent:
             "clientInfo": {"name": "meshpool", "title": "Meshpool", "version": _VERSION}}, timeout=300)
         self.agent_info = init.get("agentInfo") or {}
         self.capabilities = init.get("agentCapabilities") or {}
-        auth = m.get("auth")                   # e.g. Gemini CLI: which of its own logins to use
+        auth = m.get("auth")                   # a manifest's "auth": which of its own logins to use
         if auth and any(a.get("id") == auth.get("methodId") for a in init.get("authMethods") or []):
             self._request("authenticate", auth, timeout=120)
         return True

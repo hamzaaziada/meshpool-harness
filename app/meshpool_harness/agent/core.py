@@ -740,19 +740,15 @@ class Agent:
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
-        # The model's provider decides where the call goes (providers.py): the key endpoint in settings, the
-        # ChatGPT sign-in, or an Anthropic or Gemini key.
+        # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
+        # ChatGPT sign-in.
         from meshpool_harness import providers as PV
         prov, body["model"] = PV.split(body["model"])
-        if prov in PV.SIGNIN_ONLY:
-            raise RuntimeError(f"{PV.name(prov)} models run only in {'Claude Code' if prov == 'claude' else 'Gemini CLI'}. "
-                               "Choose that agent, or another model.")
         base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
                                                # with OPENAI_BASE_URL, never with the Meshpool base)
-        wire = "chatgpt" if prov == "chatgpt" else ("chat" if prov != "key" else os.environ.get("MH_WIRE", "chat"))
+        wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
         if not key and wire != "chatgpt":
-            raise RuntimeError(PV.setup(prov) if prov != "key" else
-                               f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
+            raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None

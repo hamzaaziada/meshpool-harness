@@ -26,14 +26,12 @@ function termShellPicker() {
   return `<select id="tshell" aria-label="Shell" onchange="store('term_shell', this.value)">${Object.entries(sh.shells).map(([k, v]) => `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
 }
 // "deepseek-v4.1-flash" reads as "DeepSeek V4.1 Flash"; unknown ids are tidied the same way.
-// A model id carries its provider (providers.py): "chatgpt:gpt-6.1-sol", "gemini:...", or no prefix for the key endpoint.
-const PROV_PREFIX = ["chatgpt", "anthropic", "gemini", "claude", "google"];
+// A model id carries its provider (providers.py): "chatgpt:gpt-6.1-sol", or no prefix for the key endpoint.
+const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelName(id) {
-  const known = {deepseek: "DeepSeek", gpt: "GPT", claude: "Claude", gemini: "Gemini", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
-  const p = provOf(id);
-  if ((p === "claude" || p === "google") && bareModel(id) === "default") return p === "claude" ? "Claude (your plan)" : "Gemini (your plan)";
+  const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
   return bareModel(id).split("/").pop().split(/[-_ ]+/).map(w => known[w.toLowerCase()] || (/^v?\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ").replace(/(\d) (?=\d)/g, "$1.");
 }
 function connMsg(d) {
@@ -794,13 +792,12 @@ function harnessPop(anchor) {
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
 }
 function agentFor(prov) {   // the agent to switch to for a model the current agent cannot run
-  const only = {claude: "claude-code", google: "gemini-cli"}[prov]; if (only) return only;
   const mine = S.appMode === "code" ? "meshpool-code" : "meshpool-work";
   return harness(mine).providers?.includes(prov) ? mine : (S.harnesses.find(h => h.providers?.includes(prov) && h.available !== false) || {}).id;
 }
 async function connectProvider(g) {   // a provider that is not set up yet: sign in, or add its key in Settings
   closePop();
-  if (["chatgpt", "claude", "google"].includes(g.id)) {
+  if (g.id === "chatgpt") {
     try { const r = await post("/api/harness-login", {id: g.id}); toast(r.message); } catch (e) { return toast(e.message); }
     const t0 = Date.now(); const tick = async () => { await loadModels(true); const ok = (S.models.groups || []).find(x => x.id === g.id)?.ready; if (ok) { await loadHarnesses(); await loadSettings(); renderBar(); toast(g.name + " is connected."); } else if (Date.now() - t0 < 600000) setTimeout(tick, 4000); };
     setTimeout(tick, 4000); return;
@@ -828,7 +825,7 @@ function modelPop(anchor) {
   const own = S.cur && h.models !== "meshpool" ? (S.cur.view?.harness_models || []) : [];   // models a running agent offers itself
   // First choose where the model runs (a tab per provider), then the model.
   const keyName = (M.groups || []).find(g => g.id === "key")?.name || "Meshpool";
-  const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]], ["claude", "Claude", ["anthropic", "claude"]], ["gemini", "Gemini", ["gemini", "google"]]];
+  const TABS = [["key", keyName, ["key"]], ["chatgpt", "ChatGPT", ["chatgpt"]]];
   let tab = (TABS.find(t => t[2].includes(provOf(c.model))) || TABS[0])[0];
   const tabBtn = ([id, name, gs]) => { const on = (M.groups || []).some(g => gs.includes(g.id) && g.ready); return `<button type="button" role="tab" data-tab="${id}" aria-selected="${id === tab}" style="flex:1;padding:6px 4px;border-radius:var(--r-s);border:1px solid ${id === tab ? "var(--pool)" : "var(--line)"};background:${id === tab ? "var(--pool-soft)" : "transparent"};color:var(--ink);font:inherit;font-size:13px;cursor:pointer">${esc(name)}${on ? "" : ` <span style="color:var(--ink-3)">· set up</span>`}</button>`; };
   const p = openPop(anchor, `<div class="ph"><div role="tablist" aria-label="Where the model runs" id="mtabs" style="display:flex;gap:4px;margin-bottom:6px"></div><input id="mq" placeholder="Search models" aria-label="Search models"></div><div class="pl" id="ml"></div>
@@ -848,10 +845,10 @@ function modelPop(anchor) {
       const can = !h.providers || h.providers.includes(g.id);
       const note = can ? "" : `Runs in ${harness(agentFor(g.id) || "").name || "another agent"}`;
       html += `<div class="grp">${esc(g.name)}</div>`;
-      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${{chatgpt: "Sign in with ChatGPT", claude: "Sign in with Claude", google: "Sign in with Google"}[g.id] || "Add a key"}<span class="od">${esc(g.only ? `Runs in ${harness(g.only).name}. ` : "")}${esc(["chatgpt", "claude", "google"].includes(g.id) ? "Opens the official sign-in. If you already use " + {chatgpt: "Codex", claude: "Claude Code", google: "Gemini CLI"}[g.id] + " on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
+      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${g.id === "chatgpt" ? "Sign in with ChatGPT" : "Add a key"}<span class="od">${esc(g.id === "chatgpt" ? "Opens the official sign-in. If you already use Codex on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
       const rows = g.models.filter(hit);
       if (g.error && !q) html += `<div class="pe">${esc(g.error)}</div>`;
-      html += rows.map(m => row(m, note || (g.only ? `Runs in ${harness(g.only).name}, which picks the model` : ""))).join("");
+      html += rows.map(m => row(m, note)).join("");
     }
     if (!html) html = `<div class="pe">No models match.</div>`;
     $("#ml").innerHTML = html; p._place();
@@ -1493,17 +1490,14 @@ async function renderSection(sec) {
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
     b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
-      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box. A Claude subscription runs Claude Code only.</small></label>
+      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
       <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
       <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model, from any provider below, in the model picker in the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
-      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run. Connect as many as you like; each one's models show in the model picker. Claude and Google sign-ins run only in Claude Code and Gemini CLI, as Anthropic's and Google's terms require.</p>
-      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for every agent except Claude Code and Gemini CLI.", "signin"], ["claude", "Claude subscription", "Your Claude plan. Runs in Claude Code.", "signin"], ["google", "Gemini (Google sign-in)", "Your Google AI plan. Runs in Gemini CLI.", "signin"], ["ANTHROPIC_API_KEY", "Anthropic API key", "Claude models for every agent except Codex and Gemini CLI.", "key"], ["GEMINI_API_KEY", "Gemini API key", "Gemini models for every agent except Codex and Claude Code. Free at aistudio.google.com.", "key"]].map(([id, name, desc, kind]) => {
-        if (kind === "signin") return `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`;
-        const f = (S.settings.fields || []).find(x => x.key === id) || {};
-        return `<li><span class="tg"><b>${name}</b><small>${desc}</small><span class="keyrow" style="margin-top:6px"><input data-pkey="${id}" type="password" autocomplete="off" spellcheck="false" placeholder="${f.set ? "Saved, " + esc(f.hint) + ". Paste a new key to replace it." : "Paste the key"}"><button class="btn" data-pkeysave="${id}" type="button">Save</button></span></span>${f.set ? `<span class="badge added">Saved</span>` : ""}</li>`;
-      }).join("")}</ul><div class="res" id="sProvRes"></div>`;
+      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
+      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].map(([id, name, desc]) =>
+        `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="sProvRes"></div>`;
     const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelName(m.id))}</option>`).join(""); };
     if (!S.models) await loadModels(); fill();
     $("#sProv").onchange = async () => {
@@ -1516,10 +1510,6 @@ async function renderSection(sec) {
       const id = x.dataset.psign; try { const r = await post("/api/harness-login", {id}); RES("sProvRes").className = "res" + (r.ok ? "" : " bad"); RES("sProvRes").textContent = r.message; } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; return; }
       const t0 = Date.now(); const tick = async () => { if (!RES("sProvRes")) return; await loadSettings(); if (S.settings.signed_in?.[id]) { await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
       setTimeout(tick, 3000);
-    });
-    $$("[data-pkeysave]", b).forEach(x => x.onclick = async () => {
-      const k = x.dataset.pkeysave, v = $(`[data-pkey="${k}"]`, b).value.trim(); if (!v) { $(`[data-pkey="${k}"]`, b).focus(); return; }
-      try { await post("/api/settings", {values: {[k]: v}}); await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Saved. Its models are in the model picker."); } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; }
     });
     const save = async () => {
       const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();

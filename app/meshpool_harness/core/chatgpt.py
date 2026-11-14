@@ -16,7 +16,7 @@ and writes the new pair back to auth.json so Codex keeps working too.
 
 Scope: OpenAI allows this for local and open-source apps and asks them to move to "Sign in with ChatGPT" (SIWC);
 it has never been allowed for hosted or commercial services. Meshpool runs it only on the user's own computer, with
-the user's own sign-in. Claude subscriptions are never used here (see harnesses.credentials).
+the user's own sign-in.
 """
 from __future__ import annotations
 

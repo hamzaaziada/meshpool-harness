@@ -179,7 +179,7 @@ def models(refresh: bool = False) -> dict:
     if dprov == "key" and dbare not in ids and key:
         rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
-    # One section per provider (the key endpoint, ChatGPT, Claude, Gemini), ready or with what to set up.
+    # One section per provider (the key endpoint and ChatGPT), ready or with what to set up.
     groups = PV.groups(rows, err, refresh=refresh)
     flat = [m for g in groups for m in g["models"]]
     return {"models": flat, "groups": groups, "favorites": fav, "default": default,

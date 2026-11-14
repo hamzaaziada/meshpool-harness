@@ -1,7 +1,7 @@
 {
   "about": "Meshpool Auto: which agent gets a new task. Each category lists keywords and, per agent, a benchmark quality score from 0 to 100 (the solve rate where measured) and, where measured, cost_usd and seconds per solved task. Auto takes the best quality among the agents that are installed and signed in, treats every agent within quality_band points of it as equally good, and among those picks the cheapest, then the fastest. The source field says where each number came from.",
   "version": 3,
-  "source": "docs/BENCHMARKS.md. code: SWE-bench Verified, 20 frozen test tasks, app agents at the same time, 13 Nov 2026 (Pi 19/20 $0.0069 95 s, Meshpool Code 18/20 $0.0079 133 s, Codex 17/20 $0.0101 121 s); Claude Code from run C (20/20 $0.036, 5.7 min, on DeepSeek V4.1 Flash). terminal: Terminal-Bench 2.0 run C, 15 tasks (Codex 8/15 $0.060, Meshpool loop 6/15 $0.182, Claude Code 4/15 $0.380). browser: MiniWoB++ run C, 102 runs, for quality (Meshpool loop and Claude Code 97/102) and the 12 Nov dev round, 10 tasks at the same time, for cost and time (Meshpool loop $0.0009 18.7 s, Pi $0.0014 22.5 s, Codex $0.0025 23.3 s). Every other score is an estimate set below the measured agents; Hermes, Gemini CLI and the office categories have no cost or time yet.",
+  "source": "docs/BENCHMARKS.md. code: SWE-bench Verified, 20 frozen test tasks, app agents at the same time, 13 Nov 2026 (Pi 19/20 $0.0069 95 s, Meshpool Code 18/20 $0.0079 133 s, Codex 17/20 $0.0101 121 s). terminal: Terminal-Bench 2.0 run C, 15 tasks (Codex 8/15 $0.060, Meshpool loop 6/15 $0.182). browser: MiniWoB++ run C, 102 runs, for quality (Meshpool loop 97/102) and the 12 Nov dev round, 10 tasks at the same time, for cost and time (Meshpool loop $0.0009 18.7 s, Pi $0.0014 22.5 s, Codex $0.0025 23.3 s). Every other score is an estimate set below the measured agents; Hermes and the office categories have no cost or time yet.",
   "quality_band": 5,
   "categories": {
     "code": {
@@ -33,7 +33,6 @@
         "lint"
       ],
       "scores": {
-        "claude-code": 100,
         "pi": 95,
         "meshpool-code": 90,
         "codex": 85,
@@ -43,14 +42,12 @@
       "cost_usd": {
         "pi": 0.0069,
         "meshpool-code": 0.0079,
-        "codex": 0.0101,
-        "claude-code": 0.036
+        "codex": 0.0101
       },
       "seconds": {
         "pi": 95,
         "meshpool-code": 133,
-        "codex": 121,
-        "claude-code": 342
+        "codex": 121
       }
     },
     "terminal": {
@@ -84,20 +81,17 @@
       "scores": {
         "codex": 53,
         "meshpool-code": 40,
-        "claude-code": 27,
         "pi": 25,
         "hermes": 20,
         "meshpool-work": 10
       },
       "cost_usd": {
         "codex": 0.06,
-        "meshpool-code": 0.182,
-        "claude-code": 0.38
+        "meshpool-code": 0.182
       },
       "seconds": {
         "codex": 888,
-        "meshpool-code": 1746,
-        "claude-code": 2532
+        "meshpool-code": 1746
       }
     },
     "browser": {
@@ -121,7 +115,6 @@
       "scores": {
         "meshpool-work": 95,
         "meshpool-code": 95,
-        "claude-code": 95,
         "pi": 90,
         "codex": 90,
         "hermes": 70
@@ -163,7 +156,6 @@
         "hermes": 80,
         "meshpool-code": 62,
         "pi": 55,
-        "claude-code": 76,
         "codex": 76
       }
     },
@@ -190,7 +182,6 @@
         "hermes": 78,
         "meshpool-code": 55,
         "pi": 50,
-        "claude-code": 70,
         "codex": 68
       }
     },
@@ -219,7 +210,6 @@
         "hermes": 74,
         "meshpool-code": 70,
         "pi": 60,
-        "claude-code": 72,
         "codex": 72
       }
     },
@@ -246,7 +236,6 @@
         "meshpool-work": 80,
         "meshpool-code": 55,
         "pi": 50,
-        "claude-code": 72,
         "codex": 70
       }
     },
@@ -257,7 +246,6 @@
         "hermes": 74,
         "meshpool-code": 70,
         "pi": 60,
-        "claude-code": 72,
         "codex": 72
       }
     }

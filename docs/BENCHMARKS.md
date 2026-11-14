@@ -12,7 +12,7 @@ not its loop. Since 12 November 2026 the app agent is measured directly (next se
 
 Every agent ran at the same time on DeepSeek V4.1 Flash through the Meshpool gateway, with the same task text, caps
 and graders. These are dev tasks and one run each, so a result can move by about two tasks; the frozen test tasks
-confirm before any claim. Raw rows: `harness-lab/bench/results/`.
+confirm before any claim.
 
 SWE-bench Verified, 9 dev tasks:
 
@@ -103,7 +103,7 @@ Cost is billed cost per solved task. Time is total wall time divided by the numb
 
 ## Harness v3 against v2
 
-v2 was the engine in the pre-release builds before 0.1.0. It ran beside v3 at the same hours until it was dropped for budget.
+v2 was the engine in the pre-release builds. It ran beside v3 at the same hours until it was dropped for budget.
 
 | Benchmark | v3 | v2 |
 |---|---|---|

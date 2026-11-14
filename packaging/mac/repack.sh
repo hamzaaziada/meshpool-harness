@@ -18,7 +18,7 @@ for a in arm64 x64; do
   for d in meshpool_harness engines profiles defaults; do
     rm -rf "${R:?}/app/$d"; rsync -a --exclude __pycache__ --exclude '*.pyc' "$REPO/app/$d/" "$R/app/$d/"
   done
-  cp "$REPO/LICENSE" "$REPO/NOTICE" "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$REPO/packaging/requirements-cli.txt" "$R/app/"
+  cp "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$REPO/packaging/requirements-cli.txt" "$R/app/"
   cp "$REPO/packaging/hermes-NOTICE-MESHPOOL.txt" "$R/app/vendor/hermes/NOTICE-MESHPOOL.txt"
   (cd "$R/app/vendor/hermes" && patch -p1 -N -s < "$REPO/packaging/hermes-acp-server.patch" >/dev/null 2>&1 || true)
   sed -e "s/@VERSION_NUM@/$NUM/g" -e "s/@VERSION@/$VER/g" "$REPO/packaging/mac/Info.plist" > "$APP/Contents/Info.plist"

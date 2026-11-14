@@ -108,7 +108,7 @@ def _pi_model(model: str | None) -> tuple[str, str]:
     """(Pi provider name, model id) for a Meshpool model id; one Pi cannot use falls back to the key endpoint."""
     from meshpool_harness import providers as PV
     prov, bare = PV.split(model)
-    if prov in ("chatgpt", "anthropic", "gemini") and bare:
+    if prov == "chatgpt" and bare:
         return prov, bare
     return "meshpool", (bare if prov == "key" and bare else "deepseek-v4.1-flash")
 
@@ -122,8 +122,7 @@ def prepare(root: Path) -> Path:
     models = {"providers": {"meshpool": {
         "baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
         "compat": {"supportsDeveloperRole": False}, "models": _models()}}}
-    for prov, env in (("chatgpt", "MESHPOOL_CHATGPT_RELAY_KEY"), ("anthropic", "ANTHROPIC_API_KEY"),
-                      ("gemini", "GEMINI_API_KEY")):
+    for prov, env in (("chatgpt", "MESHPOOL_CHATGPT_RELAY_KEY"),):
         if PV.ready(prov):                     # the other providers Pi can use, keys from its environment
             ids, _ = PV.list_models(prov)      # ChatGPT: the local relay, which holds the sign-in
             models["providers"][prov] = {
@@ -265,8 +264,7 @@ class PiAgent:
         from meshpool_harness import providers as PV
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
                     "MESHPOOL_PI_SAFE": json.dumps(sorted(READ_ONLY)),     # pi_gate.js: tools that never ask
-                    "MESHPOOL_API_KEY": PV.key(), "ANTHROPIC_API_KEY": PV.anthropic_key(),
-                    "GEMINI_API_KEY": PV.gemini_key()})
+                    "MESHPOOL_API_KEY": PV.key()})
         if PV.ready("chatgpt"):
             from meshpool_harness.core import chatgpt_relay
             env.update(chatgpt_relay.env())    # the relay's address and token, never the ChatGPT sign-in

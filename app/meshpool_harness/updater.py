@@ -107,7 +107,7 @@ def check(force: bool = False) -> dict:
 
 
 def _legacy(r: dict, releases: list, cur: str) -> bool:
-    """A build from the 2.x line that came before the 0.1.0 renumbering. Its number looks higher than every 0.x and
+    """A build from the 2.x line that came before the 0.x renumbering. Its number looks higher than every 0.x and
     1.x release, but it is older: a 0.x copy never moves to 2.x, and a later copy only to a 2.x published after the
     first release of the renumbered line."""
     if _ver(r["tag_name"])[0] < 2:

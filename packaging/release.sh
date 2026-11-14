@@ -1,6 +1,6 @@
 #!/bin/bash
 # Publish a Meshpool release to GitHub from a computer where `gh` is signed in.
-# Usage: packaging/release.sh 0.1.0 NOTES.md Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe
+# Usage: packaging/release.sh 0.0.1 NOTES.md Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe
 # Creates the release as a draft, uploads each file with retries (slow or shaky connections are fine; a file that
 # fails is retried, and a rerun skips files already uploaded unless they were rebuilt), checks the sizes on GitHub,
 # then publishes it. SHA256SUMS.txt is uploaded on every run.

@@ -21,13 +21,13 @@ HELP = """Commands
   /help            this list
   /clear           start a new conversation (same folder)
   /auto            switch between asking before changes and allowing them
-  /model [id]      show or change the model: an id from your key, or chatgpt:<id>, anthropic:<id>, gemini:<id>
+  /model [id]      show or change the model: an id from your key, or chatgpt:<id>
   /mcp             MCP servers and their tools
   /connect [app]   connect an app (Notion, Gmail, Slack...) or an MCP server by URL; no app lists them
   /tokens          tokens used in this session
   /init            ask the agent to write MESHPOOL.md (project notes it reads every session)
   /import          bring your old chats, Claude Code and Codex sessions, and context from ChatGPT or Claude
-  /setup           change the provider: your key, another key, or a ChatGPT or Claude subscription
+  /setup           change the provider: your key, another key, or a ChatGPT subscription
   /exit            quit
 Tips
   End a line with \\ to keep typing on the next line.
@@ -405,8 +405,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         elif not ask_key():
             term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
-    # The terminal runs Meshpool Code when it can run on the chosen provider; a Claude subscription runs Claude Code
-    # (the only agent Anthropic lets it run), and the official Codex or Claude Code also when set as the default.
+    # The terminal runs Meshpool Code, or the official Codex when it is set as the default.
     hid = HR.default_for("code")
     try:
         h = HR.get(hid)

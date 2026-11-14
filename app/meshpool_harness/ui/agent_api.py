@@ -208,8 +208,6 @@ class Session:
             hid = harness or HR.default_for(kind)
             if hid == "meshpool-auto":                     # Auto picks per task; without one, use the mode default
                 hid = "meshpool-code" if kind == "code" else "meshpool-work"
-                if not HR.get(hid).get("ready", True):     # e.g. a Claude subscription alone: Claude Code
-                    hid = HR.PROVIDER_AGENT.get(HR.provider(), hid)
             self.harness = HR.get(hid, model)               # credentials from the provider of the thread's model
             if not self.harness.get("ready", True):        # nothing to run on under the chosen provider
                 raise ValueError(f"{self.harness['name']} cannot run yet. {self.harness.get('setup') or ''}".strip())

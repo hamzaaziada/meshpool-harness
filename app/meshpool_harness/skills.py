@@ -1,5 +1,5 @@
 """Skills: folders with a SKILL.md (name and description in YAML front matter, then instructions), the same format
-Claude, Codex and Hermes use. They live in the Meshpool data folder under skills/. Agents see each skill's name and
+Codex and Hermes use. They live in the Meshpool data folder under skills/. Agents see each skill's name and
 description, and load the full instructions when a task matches (or when the user mentions $skill-name).
 
 Meshpool ships a few skills in defaults/skills; the user adds their own by dropping a folder, a .zip or a SKILL.md
@@ -70,7 +70,7 @@ def parse(text: str) -> tuple[dict, str]:
 
 def front_matter(**kv) -> str:
     """A SKILL.md front matter block. Values are written as YAML (quoted when needed), so a description with a colon,
-    a '#', quotes or a leading '-' still parses in Claude, Codex and here. Empty values are left out."""
+    a '#', quotes or a leading '-' still parses in Codex, Hermes and here. Empty values are left out."""
     import yaml
     lines = [yaml.safe_dump({k: v}, allow_unicode=True, default_flow_style=False, sort_keys=False,
                             width=1_000_000).rstrip("\n") for k, v in kv.items() if v not in (None, "")]

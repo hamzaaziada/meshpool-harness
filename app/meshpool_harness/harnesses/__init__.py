@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 from meshpool_harness import config as C
-from meshpool_harness.providers import SIGNIN_ONLY as PROVIDER_AGENT   # a provider only one harness can use
 
 BUILTIN = [
     {"id": "meshpool-code", "name": "Meshpool Code", "mode": "code", "type": "builtin", "default": True,
@@ -32,19 +31,10 @@ AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "
         "description": ("Best when you are not sure. For each task it takes the agent with the best benchmark "
                         "quality for that kind of work, then the cheapest and fastest of the equally good ones, "
                         "and tells you which one and why.")}
-# The official Claude Code, Codex and Gemini CLI agents, over the Agent Client Protocol. They are harnesses (which
-# agent runs); the provider of the thread's model decides the credentials they run on (see credentials() below).
-CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.106.0"
+# The official Codex agent, over the Agent Client Protocol. It is a harness (which agent runs); the provider of the
+# thread's model decides the credentials it runs on (see credentials() below).
 CODEX_ACP = "@agentclientprotocol/codex-acp@2.6.0"
-GEMINI_CLI = "@google/gemini-cli@0.68.0"
 NODE_NOTE = "It needs Node.js, which the Meshpool app includes; from the command line, install Node.js first."
-# Claude Code on a Claude sign-in (the user's Pro or Max plan) or an Anthropic API key. Anthropic's terms let a
-# claude.ai sign-in run only Anthropic's own agent, so the Claude subscription is used here and nowhere else.
-CLAUDE_CODE = {"id": "claude-code", "name": "Claude Code", "mode": "code", "type": "acp", "command": "npx",
-               "args": ["-y", CLAUDE_ACP], "models": "harness", "login": "claude", "share_mcp": True,
-               "install": NODE_NOTE, "tagline": "Hard, multi-file coding, on Claude models",
-               "description": ("Best for hard coding tasks. Anthropic's Claude Code agent, on your Claude subscription "
-                               "(sign in) or an Anthropic API key. Uses your connected apps and skills.")}
 # Codex: the same official agent on the Meshpool key, another API key (its own config in the Meshpool data folder
 # points it at that endpoint) or the user's ChatGPT sign-in (Codex's own login in ~/.codex).
 CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models": "meshpool", "login": "codex",
@@ -56,18 +46,12 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "
                          "asking and asks before anything outside it; Undo reverses its changes.")}
-# Gemini CLI on a Google sign-in or a Gemini API key. Google's terms forbid using a Gemini CLI sign-in from other
-# tools, so that sign-in runs here and nowhere else; Meshpool only tells Gemini CLI which of its own logins to use.
-GEMINI = {"id": "gemini-cli", "name": "Gemini CLI", "mode": "code", "type": "acp", "command": "npx",
-          "args": ["-y", GEMINI_CLI, "--acp"], "models": "harness", "login": "gemini", "share_mcp": True,
-          "install": NODE_NOTE, "tagline": "Large codebases and long context, on Gemini models",
-          "description": ("Best for large codebases and long files. Google's open-source Gemini CLI agent, on your "
-                          "Google sign-in or a Gemini API key. Uses your connected apps and skills.")}
-# Thread files and settings saved before harnesses and providers were separated name these ids.
-LEGACY = {"claude-subscription": "claude-code", "chatgpt-subscription": "codex"}
+# Thread files and settings saved by older versions name these ids: agents Meshpool no longer has open in
+# Meshpool Code, so old chats still open.
+LEGACY = {"chatgpt-subscription": "codex", "claude-subscription": "meshpool-code", "claude-code": "meshpool-code",
+          "gemini-cli": "meshpool-code"}
 MODES = ("code", "cowork")
-RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "claude-code", "codex", "gemini-cli",
-            *LEGACY}
+RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", *LEGACY}
 ID_RE = r"[A-Za-z0-9_.-]{1,60}"
 HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
@@ -141,7 +125,7 @@ def write_private(p: Path, text: str) -> None:
 
 
 def prepare_hermes(model: str | None = None) -> None:
-    """Point the bundled Hermes at the thread's provider (the key endpoint, Anthropic or Gemini), model and key
+    """Point the bundled Hermes at the thread's provider (the key endpoint or the ChatGPT relay), model and key
     (written to its own config in the Meshpool data folder, next to meshpool.config)."""
     from meshpool_harness import providers as PV
     import yaml
@@ -171,8 +155,8 @@ def prepare_hermes(model: str | None = None) -> None:
     sec["allow_lazy_installs"] = False          # no pip downloads at runtime; never write into the signed app
     cfg["security"] = sec
     au = cfg.get("auth") if isinstance(cfg.get("auth"), dict) else {}
-    au["adopt_external_logins"] = False         # never borrow the Claude Code or Codex sign-in: Hermes runs on the
-    cfg["auth"] = au                            # key above, and a Claude sign-in is for Claude Code only
+    au["adopt_external_logins"] = False         # never borrow another app's sign-in: Hermes runs on the key above
+    cfg["auth"] = au
     ap = cfg.get("approvals") if isinstance(cfg.get("approvals"), dict) else {}
     ap["mode"] = "manual"                       # every command comes to Meshpool, which applies the user's setting;
     cfg["approvals"] = ap                       # Hermes's own "smart" mode auto-approved deletes
@@ -251,14 +235,14 @@ def load_all() -> list[dict]:
     if bh:
         out.append(dict(bh, available=True, builtin=True, **credentials("hermes")))
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
-    for h in (CODEX, CLAUDE_CODE, GEMINI):
-        out.append(dict(h, available=_available(h), builtin=True, signed_in=signed_in(h["login"]),
-                        **credentials(h["id"])))
+    out.append(dict(CODEX, available=_available(CODEX), builtin=True, signed_in=signed_in(CODEX["login"]),
+                    **credentials(CODEX["id"])))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
             if p.stem in RESERVED:
-                continue                   # an agent added from an example before it became built in (Gemini CLI)
+                continue                   # an agent added from an example before it became built in, or one
+                                           # Meshpool no longer has
             try:
                 d = _validate(json.loads(p.read_text(encoding="utf-8")))
                 out.append(dict(d, available=_available(d), builtin=False, file=str(p)))
@@ -282,33 +266,11 @@ def examples() -> list[dict]:
     return rows
 
 
-_KEYCHAIN: dict = {}          # {"t": time, "ok": bool}: the macOS keychain lookup, which load_all runs often
-
-
-def _claude_keychain() -> bool:
-    import subprocess
-    import time
-    if _KEYCHAIN and time.time() - _KEYCHAIN["t"] < 30:
-        return _KEYCHAIN["ok"]
-    r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials"],
-                       capture_output=True, timeout=5)
-    _KEYCHAIN.update(t=time.time(), ok=r.returncode == 0)
-    return _KEYCHAIN["ok"]
-
-
 def signed_in(which: str) -> bool:
-    """Whether the Claude Code or Codex sign-in already exists on this computer (it never reads the secret)."""
+    """Whether the Codex (ChatGPT) sign-in already exists on this computer (it never reads the secret)."""
     try:
         if which == "codex":
             return (user_codex_home() / "auth.json").is_file()
-        if which == "gemini":
-            return (Path(os.environ.get("GEMINI_CLI_HOME") or Path.home()) / ".gemini" / "oauth_creds.json").is_file()
-        if which == "claude":
-            cfg = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-            if (cfg / ".credentials.json").is_file():
-                return True
-            if sys.platform == "darwin":
-                return _claude_keychain()
     except Exception:  # noqa: BLE001
         return False
     return False
@@ -318,19 +280,8 @@ def npx() -> str:
     return shutil.which("npx") or "npx"
 
 
-def win_terminal_cmdline(title: str, line: str) -> str:
-    """The cmd.exe command line that runs `line` in a new console window titled `title` and keeps it open. Built as
-    one string because cmd.exe does not read the \\" escaping subprocess.list2cmdline would give an argument with
-    quotes in it. cmd /k strips the first and last quote of its command when it holds more than two, so the
-    executable keeps its own quotes (and a path with spaces or & in it stays one word)."""
-    if any(c in title for c in '"&|<>^%'):
-        raise ValueError("unsafe window title")
-    return f'cmd /k "title {title} & {line}"'
-
-
 def login(which: str) -> dict:
-    """Start the official sign-in for a subscription. Codex opens the browser by itself; Claude Code's sign-in runs
-    in a terminal window, where the user types /login."""
+    """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself."""
     import subprocess
     if which == "codex":
         cmd = [npx(), "-y", "@openai/codex@latest", "login"]
@@ -338,28 +289,6 @@ def login(which: str) -> dict:
                          **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
         return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "
                                        "are signed in."}
-    if which in ("claude", "gemini"):
-        line = (f'"{npx()}" -y @anthropic-ai/claude-code@latest' if which == "claude" else
-                f'"{npx()}" -y {GEMINI_CLI}')
-        if sys.platform == "darwin":
-            script = line.replace("\\", "\\\\").replace('"', '\\"')
-            subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{script}"',
-                              "-e", 'tell application "Terminal" to activate'])
-        elif os.name == "nt":
-            subprocess.Popen(win_terminal_cmdline(f"{which.title()} sign-in", line),
-                             creationflags=0x00000010)       # CREATE_NEW_CONSOLE: its own terminal window
-        else:
-            for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
-                if shutil.which(term):
-                    subprocess.Popen([term, "-e", line])
-                    break
-            else:
-                return {"ok": False, "message": f"Open a terminal and run: {line}  then sign in."}
-        if which == "gemini":
-            return {"ok": True, "message": "A terminal window opened with Gemini CLI. Choose Sign in with Google, "
-                                           "finish in your browser, then close the window and come back."}
-        return {"ok": True, "message": "A terminal window opened with Claude Code. Type /login there, choose your "
-                                       "Claude account, then close the window and come back."}
     raise ValueError("Unknown sign-in.")
 
 
@@ -386,7 +315,7 @@ def _manifest_env(hid: str) -> dict:
     """The environment a built-in harness itself needs, apart from any provider's credentials."""
     if hid == "hermes":
         return dict((_bundled_hermes() or {}).get("env") or {})
-    h = next((h for h in (*BUILTIN, PI, AUTO, CODEX, CLAUDE_CODE, GEMINI) if h["id"] == hid), None)
+    h = next((h for h in (*BUILTIN, PI, AUTO, CODEX) if h["id"] == hid), None)
     return dict((h or {}).get("env") or {})
 
 
@@ -402,11 +331,7 @@ def default_for(mode: str) -> str:
         return want
     # Meshpool's own harnesses are the defaults: they passed every task in the practical check (13 Nov 2026) and
     # need nothing else installed. Hermes and the others stay one click away in the harness picker.
-    own = "meshpool-code" if mode == "code" else "meshpool-work"
-    if usable(own):
-        return own
-    alt = PROVIDER_AGENT.get(provider())         # e.g. a Claude subscription alone runs Claude Code only
-    return alt if alt and usable(alt) else own
+    return "meshpool-code" if mode == "code" else "meshpool-work"
 
 
 def add(text: str) -> dict:
@@ -448,11 +373,9 @@ def remove(hid: str) -> None:
 # A harness is which agent runs; a provider is where its models run (providers.py). The model picker chooses the
 # provider per thread; sign-up chooses the default one (MH_PROVIDER):
 #   meshpool  the Meshpool key                  custom   another OpenAI-compatible key and URL
-#   chatgpt   the user's ChatGPT sign-in        claude   the user's Claude sign-in (Claude Code only)
-# Meshpool never reads or forwards a Claude or Google sign-in: those run only in Claude Code and Gemini CLI.
-PROVIDER_NAMES = {"meshpool": "Meshpool API key", "custom": "Another API key",
-                  "chatgpt": "ChatGPT subscription", "claude": "Claude subscription, runs Claude Code"}
-LOGINS = {"claude": "claude", "chatgpt": "codex", "google": "gemini"}   # provider -> the official sign-in it uses
+#   chatgpt   the user's ChatGPT sign-in
+PROVIDER_NAMES = {"meshpool": "Meshpool API key", "custom": "Another API key", "chatgpt": "ChatGPT subscription"}
+LOGINS = {"chatgpt": "codex"}   # provider -> the official sign-in it uses
 SIGNIN_PROVIDERS = tuple(LOGINS)
 
 
@@ -471,11 +394,6 @@ def base_url() -> str:
     return PV.key_base()
 
 
-def anthropic_key() -> str:
-    from meshpool_harness import providers as PV
-    return PV.anthropic_key()
-
-
 def _launch(hid: str, prov: str | None) -> dict:
     """How a harness process starts on a provider: env, config to write, how Meshpool picks its models."""
     from meshpool_harness import providers as PV
@@ -486,18 +404,6 @@ def _launch(hid: str, prov: str | None) -> dict:
                     "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
         return {"models": "harness", "env": {"CODEX_HOME": str(user_codex_home())},
                 "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
-    if hid == "claude-code":
-        unset = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
-        if prov == "anthropic":
-            return {"env": {"ANTHROPIC_API_KEY": PV.anthropic_key()}, "env_unset": unset[1:]}
-        return {"env_unset": unset}
-    if hid == "gemini-cli":
-        unset = ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT"]
-        if prov == "gemini":
-            k = PV.gemini_key()
-            return {"env": {"GEMINI_API_KEY": k}, "env_unset": unset[1:],
-                    "auth": {"methodId": "gemini-api-key", "_meta": {"api-key": k}}}
-        return {"env_unset": unset, "auth": {"methodId": "oauth-personal"}}
     if hid == "hermes":
         return {"prepare": "hermes"}
     return {}
@@ -514,32 +420,26 @@ def credentials(hid: str, model: str | None = None) -> dict:
     prov = PV.for_harness(hid, model)
     out = {"providers": sup, "provider": prov, "ready": prov is not None,
            "runs_on": PV.name(prov) if prov else ""}
-    if prov in ("chatgpt", "claude", "google"):
+    if prov == "chatgpt":
         out["plan"] = prov                      # a subscription: Auto uses it only when it is the chosen provider
     if prov is None:
-        if provider() == "claude" and "claude" not in sup:
-            out["setup"] = ("Your Claude subscription runs Claude Code only. For this agent, add an API key or sign "
-                            "in with ChatGPT: Settings, Account.")
-        else:
-            out["setup"] = PV.setup(sup[0]) if len(sup) <= 2 else \
-                f"Runs on {', '.join(PV.name(p) for p in sup[:-1])} or {PV.name(sup[-1])}. {PV.setup(sup[0])}"
+        out["setup"] = PV.setup(sup[0])
     out.update(_launch(hid, prov))
     return out
 
 
 def use_provider(which: str) -> None:
     """Save the provider chosen at sign-up and pick the defaults from it: its models become the default model, and
-    a Claude subscription makes Claude Code the default agent (Meshpool Code and Work otherwise)."""
+    Meshpool Code and Work stay the default agents."""
     if which not in PROVIDER_NAMES:
         raise ValueError(f"Unknown provider: {which}")
-    hid = PROVIDER_AGENT.get(which, "")
-    vals = {"MH_PROVIDER": which, "MH_HARNESS_CODE": hid, "MH_HARNESS_COWORK": hid}
+    vals = {"MH_PROVIDER": which, "MH_HARNESS_CODE": "", "MH_HARNESS_COWORK": ""}
     cur = (C.read().get("MH_MODEL") or "").strip()
     if which == "chatgpt":
         from meshpool_harness.core import chatgpt as CG
         if not cur.startswith("chatgpt:"):
             vals["MH_MODEL"] = "chatgpt:" + CG.default_model()
-    elif which in ("meshpool", "custom") and ":" in cur and cur.split(":", 1)[0] in ("chatgpt", "anthropic", "gemini"):
+    elif which in ("meshpool", "custom") and cur.startswith("chatgpt:"):
         vals["MH_MODEL"] = ""                   # back to the key endpoint's default model
     C.write(vals)
     os.environ["MH_PROVIDER"] = which
@@ -554,7 +454,6 @@ def use_provider(which: str) -> None:
 def ready() -> bool:
     """Whether Meshpool has something to run on: an API key, or a signed-in subscription chosen as the provider."""
     from meshpool_harness import providers as PV
-    p = provider()
-    if p in ("chatgpt", "claude"):
-        return signed_in(LOGINS[p])
-    return PV.ready("key") or PV.ready("anthropic") or PV.ready("gemini")
+    if provider() == "chatgpt":
+        return signed_in(LOGINS["chatgpt"])
+    return PV.ready("key")

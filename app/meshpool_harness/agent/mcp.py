@@ -6,7 +6,7 @@ Transports:
 - HTTP with SSE (the 2024-11-05 transport): {"url": "https://.../sse", "type": "sse"}; also used on its own when a
   server refuses the streamable HTTP POST, as the MCP spec's backwards-compatibility section describes.
 
-Config file: mcp.json next to meshpool.config, in the same shape Claude Desktop and Claude Code use:
+Config file: mcp.json next to meshpool.config, in the common shape most MCP clients use:
     {"mcpServers": {"name": {...}, ...}}
 Extra keys: "disabled": true skips a server; "timeout": seconds per tool call (default 120).
 ${VAR} in any string is replaced from the environment (meshpool.config values are in the environment).
@@ -49,7 +49,7 @@ def _expand(v):
 
 
 def _servers_key(data: dict) -> str:
-    """The key a config file keeps its servers under: Claude's "mcpServers", or VS Code's "servers"."""
+    """The key a config file keeps its servers under: the common "mcpServers", or VS Code's "servers"."""
     return "mcpServers" if "mcpServers" in data else "servers" if "servers" in data else "mcpServers"
 
 

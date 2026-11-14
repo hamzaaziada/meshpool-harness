@@ -109,8 +109,7 @@ def app_code(dst: Path):
     dst.mkdir(parents=True)
     for name in ("meshpool_harness", "engines", "profiles", "defaults"):
         shutil.copytree(APP_SRC / name, dst / name, ignore=IGN)
-    for f in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
-        shutil.copy2(ROOT / f, dst / f)
+    shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", dst / "THIRD_PARTY_NOTICES.md")
     shutil.copy2(APP_SRC / "requirements.txt", dst / "requirements.txt")
     # The package list the bundled runtime is built from (docs/BUILDING.md); the in-app update compares it.
     shutil.copy2(PKG / "requirements-cli.txt", dst / "requirements-cli.txt")
@@ -156,7 +155,6 @@ def win_app():
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "win")
     docs(root / "harness-docs")
-    (root / "LICENSE.txt").write_text((ROOT / "NOTICE").read_text() + "\n\n" + (ROOT / "LICENSE").read_text(), encoding="utf-8")
     stamp(PKG / "nsis/installer.nsi", OUT / "app-win" / "installer.nsi")
     shutil.copy2(PKG / "nsis/winsetup.ps1", OUT / "app-win" / "winsetup.ps1")
 

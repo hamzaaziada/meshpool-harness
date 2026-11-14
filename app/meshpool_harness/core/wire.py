@@ -1,6 +1,6 @@
 """Stand-alone model transport: any OpenAI-compatible endpoint (chat-completions or Responses API). No eval/ needed.
 Env: MESHPOOL_BASE_URL and MESHPOOL_API_KEY (or OPENAI_BASE_URL with OPENAI_API_KEY: providers.key_base/key), MH_WIRE=chat|responses.
-A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in, an Anthropic or a Gemini key."""
+A model id's provider prefix (providers.py) sends the call to the ChatGPT sign-in."""
 from __future__ import annotations
 
 import http.client
@@ -163,10 +163,6 @@ class SimpleLedger:
             log_usage_line(task_id, body["model"], out["usage"])
             return out
         base_url, api_key = self.base_url, self.api_key
-        if prov in ("anthropic", "gemini"):
-            (base_url, api_key), wire = PV.endpoint(prov), "chat"
-        elif prov in PV.SIGNIN_ONLY:
-            raise RuntimeError(f"{PV.name(prov)} models run only in their maker's agent.")
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
         stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"

@@ -10,7 +10,6 @@ dist-src/
 mcp-health.json
 /runs/
 /skills/
-harness-lab/bench/results/raw/
 app/vendor/
 app/engines/forge/schemas/ooxml/
 /projects.json
@@ -33,7 +32,5 @@ app/engines/forge/schemas/ooxml/
 app/timing.jsonl
 app/failures.csv
 app/mh_out/
-harness-lab/bench/results/patches/
-harness-lab/bench/results/transcripts/
 app/build/
 *.egg-info/

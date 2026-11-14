@@ -317,9 +317,9 @@ def _check(live: bool) -> int:
     from meshpool_harness import harnesses as HR
     from meshpool_harness import providers as PV
     key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-    # A subscription (ChatGPT, Claude) or an Anthropic / Gemini key is enough on its own: report what is ready
-    # rather than calling the setup broken when there is no Meshpool key.
-    ready = {p: _safe(lambda p=p: PV.ready(p)) for p in ("key", "chatgpt", "anthropic", "gemini", "claude", "google")}
+    # A ChatGPT sign-in is enough on its own: report what is ready rather than calling the setup broken when there
+    # is no Meshpool key.
+    ready = {p: _safe(lambda p=p: PV.ready(p)) for p in PV.PROVIDERS}
     usable = _safe(HR.ready)
     print(f"Settings file : {_config.config_path()}")
     print(f"Endpoint      : {os.environ.get('MESHPOOL_BASE_URL', 'https://llm.meshpool.ai/v1')}")

@@ -7,7 +7,7 @@
 When a new chat starts with **Meshpool Auto**, Meshpool:
 
 1. Sorts the task into a category: code, terminal, browser, research, documents, data, gtm or general. It matches keywords, with no model call. A phrase of several words counts for more than a single generic word, and a tie goes to the category named first in the request.
-2. Takes each agent's benchmark quality for that category from the routing table, plus a small bonus for the current mode (Work or Code). Only agents that are installed and can run on your provider count (see [PROVIDERS.md](PROVIDERS.md)). An agent on a Claude or ChatGPT sign-in you did not choose as the provider counts only when **Let Auto use your other subscriptions** is on.
+2. Takes each agent's benchmark quality for that category from the routing table, plus a small bonus for the current mode (Work or Code). Only agents that are installed and can run on your provider count (see [PROVIDERS.md](PROVIDERS.md)). An agent on a ChatGPT sign-in you did not choose as the provider counts only when **Let Auto use your other subscriptions** is on.
 3. **Quality first.** It finds the best quality among those agents. Every agent within `quality_band` points of it (5 by default: one task in twenty, inside run-to-run noise) counts as equally good. An agent below that is never picked, however cheap.
 4. **Then cost, then speed.** Among the equally good agents it picks the lowest cost per solved task, then the shortest time. Where the table has no cost or time for an agent, quality decides.
 
