@@ -58,7 +58,7 @@ def settings() -> dict:
     def num(key, default, lo, hi):
         try:
             return max(lo, min(hi, int(float(get(key, default)))))
-        except ValueError:
+        except (ValueError, OverflowError):              # "inf", "nan": the default
             return default
     access = str(get("MH_SUBAGENT_ACCESS", "inherit")).strip().lower()
     s.update(auto_approve=flag("MH_SUBAGENT_AUTO_APPROVE", "0"),
@@ -87,27 +87,43 @@ def _mcp_paths_outside(root, args) -> bool:
         vals += [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, str) and x.strip()]
     if not vals:
         return False
+    uploads = _uploads()
+    return _paths_outside(root, vals, uploads)
+
+
+def _uploads():
+    from meshpool_harness import config as C
     try:
-        uploads = (C.runs_dir() / "_uploads").resolve()
+        return (C.runs_dir() / "_uploads").resolve()
     except Exception:  # noqa: BLE001
-        uploads = None
-    return any(_files_outside(root, {"files": [v]}) and not _under(v, uploads) for v in vals)
+        return None
 
 
-def _under(f, base) -> bool:
+def _paths_outside(root, vals, uploads) -> bool:
+    """Any of these paths outside the project; the files the user attached are fine."""
+    return any(_files_outside(root, {"files": [v]}) and not _under(v, uploads, root) for v in vals)
+
+
+def _abs(f, root):
+    """A path as the tools read it: ~ is home, a relative path is from the project (never this process's cwd)."""
     from pathlib import Path
+    p = Path(str(f)).expanduser()
+    return (p if p.is_absolute() else Path(root) / p).resolve()
+
+
+def _under(f, base, root) -> bool:
     try:
-        return base is not None and Path(str(f)).expanduser().resolve().is_relative_to(base)
+        return base is not None and _abs(f, root).is_relative_to(base)
     except (OSError, ValueError):
         return False
 
 
-def _skill_file(path) -> bool:
+def _skill_file(path, root) -> bool:
     """A file inside an enabled skill's folder (use_skill tells the agent to read them by full path)."""
     from pathlib import Path
     from meshpool_harness import skills as SK
     try:
-        q = Path(str(path or "")).expanduser().resolve()
+        q = _abs(path or "", root)
         return any(q.is_relative_to(Path(s["path"]).parent.resolve()) for s in SK.enabled())
     except Exception:  # noqa: BLE001
         return False
@@ -335,9 +351,10 @@ class Delegation:
                 if self.final_only:                      # out of steps: only the report is left
                     return False, "you are out of steps: no more tool calls; reply with your report now"
                 web = name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch")
-                skill = name == "read_file" and _skill_file(args.get("path"))   # a skill's own files, read only
-                if (self._outside(name, args) and not web and not skill) or \
-                        (name == "office_task" and _files_outside(parent.root, args)) or \
+                if name == "read_file" and _skill_file(args.get("path"), parent.root):
+                    return True, ""                      # a skill's own files: use_skill already shows SKILL.md
+                if (self._outside(name, args) and not web) or \
+                        (name == "office_task" and _paths_outside(parent.root, args.get("files") or [], _uploads())) or \
                         (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
@@ -464,11 +481,15 @@ class Delegation:
         finally:
             if a is not None:
                 out_dir = str(a.ws.run_dir)                # a full tool output its report points to: keep it
-                if out_dir in str(rec.get("summary") or "") and a.ws.run_dir.is_dir():
-                    keep = self.parent.ws.run_dir / f"subagent-{sid}-output"
+                keep = self.parent.ws.run_dir / f"subagent-{sid}-output"
+                forms = [(out_dir, str(keep)), (json.dumps(out_dir)[1:-1], json.dumps(str(keep))[1:-1])]  # JSON too
+                summ = str(rec.get("summary") or "")
+                if any(o in summ for o, _ in forms) and a.ws.run_dir.is_dir():
                     try:
                         shutil.copytree(a.ws.run_dir, keep, dirs_exist_ok=True)
-                        rec["summary"] = rec["summary"].replace(out_dir, str(keep))
+                        for o, n in forms:
+                            summ = summ.replace(o, n)
+                        rec["summary"] = summ
                     except OSError:
                         pass
                 shutil.rmtree(a.dir, ignore_errors=True)

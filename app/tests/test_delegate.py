@@ -760,3 +760,50 @@ def test_round_nine_json_schemas_nested_files_overflow_and_skills(monkeypatch, _
     c = _bare_child(_agent(_env, mode="auto"))
     assert c._permit("read_file", {"path": str(sk / "CONNECTORS.md")})[0] is True
     assert c._permit("read_file", {"path": str(tmp_path / "other.txt")})[0] is False
+
+
+def test_round_ten_uploads_relative_paths_skills_settings_and_json_overflow(monkeypatch, _env, tmp_path):
+    from meshpool_harness import config as C
+    from meshpool_harness import skills as SK
+    up = C.runs_dir() / "_uploads" / "abc"
+    up.mkdir(parents=True)
+    (up / "data.csv").write_text("a,b\n")
+    (_env / "x.csv").write_text("a,b\n")
+    auto = _bare_child(_agent(_env, mode="auto", profile="work"))
+    assert auto._permit("office_task", {"engine": "data", "request": "x", "files": [str(up / "data.csv")]})[0] is True
+    # a skill's files read in any mode; a relative path is judged from the project, not this process's cwd
+    sk = tmp_path / "skills" / "demo"
+    (sk / "sub").mkdir(parents=True)
+    (sk / "SKILL.md").write_text("x")
+    (sk / "secret.txt").write_text("TOPSECRET")
+    monkeypatch.setattr(SK, "enabled", lambda: [{"name": "demo", "path": str(sk / "SKILL.md"), "files": []}])
+    ask = _bare_child(_agent(_env, mode="ask", profile="work"))
+    assert ask._permit("read_file", {"path": str(sk / "SKILL.md")})[0] is True
+    monkeypatch.chdir(sk / "sub")
+    assert auto._permit("read_file", {"path": "../secret.txt"})[0] is False
+    monkeypatch.chdir(up)
+    assert auto._permit("mcp__meshpool-office__convert_document", {"path": "data.csv", "to": "pdf"})[0] is True
+    assert D._paths_outside(_env, ["../../outside.csv"], D._uploads()) is True
+    # a setting of inf or nan falls back to the default
+    monkeypatch.setenv("MH_SUBAGENT_STEPS", "inf")
+    monkeypatch.setenv("MH_SUBAGENT_PARALLEL", "nan")
+    s = D.settings()
+    assert s["steps"] == 50 and s["parallel"] == 4
+
+
+def test_an_overflow_file_cited_inside_a_json_report_is_kept(monkeypatch, _env, tmp_path):
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "r\\uns"))   # a backslash, as in every Windows path
+    (_env / "big.txt").write_text("needle line\n" * 3000)
+
+    def grepper(b):
+        last = b["messages"][-1]
+        if last["role"] == "tool":
+            import re as _re
+            p = _re.search(r"full output in (\S+?)\]", last["content"]).group(1)
+            return _msg(json.dumps({"overflow": p}))               # JSON escapes the backslash
+        return _msg("", [("grep", {"pattern": "needle"})])
+    fake(monkeypatch, grepper)
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the needles", "output_schema": {"type": "object"}}]})
+    report = out.split("```json")[0]
+    path = json.loads(report[report.index('{"overflow"'):report.index("}", report.index('{"overflow"')) + 1])["overflow"]
+    assert os.path.exists(path) and "needle" in open(path).read()

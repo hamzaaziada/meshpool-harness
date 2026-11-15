@@ -499,7 +499,7 @@ def subagent_settings() -> dict:
     def num(key, default, lo, hi):
         try:
             return max(lo, min(hi, int(float(get(key) or default))))
-        except ValueError:
+        except (ValueError, OverflowError):                  # "inf", "nan": the default
             return default
     return {"on": (get("MH_SUBAGENTS") or "1").strip().lower() not in ("0", "off", "false", "no"),
             "model": get("MH_SUBAGENT_MODEL").strip(),

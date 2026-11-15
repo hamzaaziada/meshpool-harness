@@ -1191,7 +1191,7 @@ function applyEv(ev) {
       if (!li) { li = document.createElement("li"); li.dataset.sid = ev.sid || ""; li.innerHTML = `<span class="sg"></span> <small class="sn"></small>`; $("ol", box).appendChild(li); $(".sg", li).textContent = ev.title || ""; li.className = "in_progress"; }
       const tl = ev.tool ? (TOOL_RUN[ev.tool] || TOOL_LABEL[ev.tool] || String(ev.tool).replace(/_/g, " ")) : "";
       if (ev.kind === "tool") $(".sn", li).textContent = "· " + tl + (ev.text ? " " + ev.text : "");
-      if (ev.kind === "done") { $(".sn", li).textContent = "· " + (ev.text || ev.status || ""); li.className = ev.status === "completed" ? "completed" : "failed"; }
+      if (ev.kind === "done") { $(".sn", li).textContent = "· " + (ev.text || ev.status || ""); li.className = ev.status === "completed" ? "completed" : ev.status === "interrupted" ? "stopped" : "failed"; }
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
