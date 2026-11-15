@@ -271,6 +271,19 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
         return f"HTTP 0: {e}"
 
 
+def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
+    """Shorten user messages over `keep` characters to their start and end, with a note in the middle. A message too
+    big for the endpoint otherwise goes with every later request too and the chat cannot recover. True if cut."""
+    cut = False
+    for m in messages:
+        c = m.get("content")
+        if m.get("role") == "user" and isinstance(c, str) and len(c) > keep:
+            m["content"] = (c[:keep * 3 // 4] + f"\n\n[... {len(c) - keep} characters left out: the message was too "
+                            "large for the endpoint ...]\n\n" + c[-keep // 4:])
+            cut = True
+    return cut
+
+
 def _lighten(messages: list) -> None:
     """After an outage: elide older tool outputs only when the conversation is very large (over 150k characters),
     keeping the last eight verbatim. Smaller conversations are left whole, so a long task keeps its context."""
@@ -749,7 +762,9 @@ class Agent:
             self._repair()
             msg = raw = str(e)
             if "endpoint could not take this request" in msg:
-                msg = msg.rsplit(" (", 1)[0]            # already says what to do
+                head, _, detail = msg.rpartition(" (")   # already says what to do; keep only the status
+                code = re.search(r"HTTP \d+", detail)
+                msg = raw = head + (f" ({code.group(0)})" if code else "")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
@@ -1002,9 +1017,15 @@ class Agent:
                                 raise RuntimeError("The endpoint could not take this request: the attached image "
                                                    "is too large. Attach a smaller one (a screenshot of part of the "
                                                    "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
-                            raise RuntimeError("The endpoint could not take this request: the message is too "
-                                               "large even after older outputs were shortened. Send a shorter "
-                                               "message (attach long text as a file) or start a new chat. ("
+                            if _cut_long_user_text(self.messages) and len(json.dumps(self._body())) <= lim:
+                                body = self._body()          # a pasted wall of text: keep its start and end
+                                body["model"] = PV.split(body["model"])[1]
+                                self.emit({"type": "status", "text": "Your message was too large for the endpoint, "
+                                                                     "so its middle was left out. Attach long text "
+                                                                     "as a file to keep all of it."})
+                                continue
+                            raise RuntimeError("The endpoint could not take this request: the conversation is too "
+                                               "large even after it was shortened. Start a new chat to carry on. ("
                                                + msg[:120] + ")")
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]

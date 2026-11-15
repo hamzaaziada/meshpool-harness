@@ -210,12 +210,34 @@ def test_one_image_too_big_alone_is_kept_and_the_user_told(agent, monkeypatch):
     assert any(p.get("type") == "image_url" for p in agent.messages[-1]["content"])   # never silently removed
 
 
-def test_a_too_big_text_only_request_says_so_without_mentioning_an_image(agent, monkeypatch):
+def test_a_too_big_pasted_message_is_cut_and_the_chat_recovers(agent, monkeypatch):
     monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    base = len(__import__("json").dumps(agent._body()))
+    lim = base + 60000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
     agent.messages.append({"role": "user", "content": "log:\n" + "x" * 90000})
-    monkeypatch.setenv("MH_BIG_REQUEST", str(len(__import__("json").dumps(agent._body())) - 1000))
+    agent._probe = lambda b, k, m: "ok"
+    events = []
+    agent.emit = events.append
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert "characters left out" in agent.messages[-1]["content"]           # later requests fit too
+    assert any("middle was left out" in (e.get("text") or "") for e in events)
+
+
+def test_a_request_that_cannot_be_made_small_enough_says_so_once(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    monkeypatch.setenv("MH_BIG_REQUEST", "1000")                   # nothing fits
     agent._probe = lambda b, k, m: "ok"
     agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(RuntimeError("HTTP 502: upstream request failed"))
-    with pytest.raises(RuntimeError, match="message is too large") as e:
-        agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    assert "image" not in str(e.value).split("(")[0]
+    events = []
+    agent.emit = events.append
+    agent.send("hello " + "y" * 50000)
+    err = [e["text"] for e in events if e.get("type") == "error"][-1]
+    assert err.count("could not take this request") == 1 and err.endswith("(HTTP 502)")
+    assert "image" not in err and "Start a new chat" in err
