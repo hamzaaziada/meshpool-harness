@@ -83,6 +83,12 @@ def test_goal_never_gives_up_on_an_outage(monkeypatch):
     s = session()
     s.agent = type("Ag", (), {"_stop": False})()
     down = {"type": "error", "text": "Couldn't reach the model, even after waiting. (HTTP 0: timed out)"}
+    busy = {"type": "error", "text": "The model is busy right now. Wait a minute. (HTTP 429: Max parallel request "
+                                     "limit reached)"}
+    n = len(s.events)
+    turn(s, "", extra=[busy])                                      # a key whose slots are full: wait it out too
+    assert s._goal_next(n) == (A.GOAL_NEXT, [])
+    s._goal_net = 0
     for i in range(1, 6):                                         # however long the outage: pick up again
         n = len(s.events)
         turn(s, "", extra=[down])

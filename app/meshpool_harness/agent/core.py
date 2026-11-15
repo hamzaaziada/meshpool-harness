@@ -256,14 +256,15 @@ def _urlopen(req, timeout: float, sink):
     return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
 
 
-def _probe_once(base: str, key: str, model: str) -> str:
+def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=float(os.environ.get("MH_PROBE_S", "30"))) as r:
+        t = float(os.environ.get("MH_PROBE_S", "30"))
+        with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
             r.read()
         return "ok"
     except urllib.error.HTTPError as e:
@@ -870,7 +871,7 @@ class Agent:
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
-        attempt, recoveries = -1, 0
+        attempt, recoveries, swapped = -1, 0, False
         self._first_scale = 1.0
         while True:
             attempt += 1
@@ -918,12 +919,17 @@ class Agent:
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
-                if kind == "model_missing" and wire == "chat" and not getattr(self, "_model_swapped", False):
-                    # A chat from weeks ago on a model the endpoint has dropped: continue on today's default.
+                if kind == "model_missing":
+                    # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
+                    # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
                     C.load_into_env(override=True)
-                    now = os.environ.get("MH_MODEL") or DEFAULT_MODEL
-                    if PV.split(now)[0] == prov and PV.split(now)[1] != body["model"]:
-                        self._model_swapped, old_model = True, body["model"]
+                    if prov == "chatgpt":
+                        from meshpool_harness.core import chatgpt as CG
+                        now = "chatgpt:" + CG.default_model()
+                    else:
+                        now = os.environ.get("MH_MODEL") or DEFAULT_MODEL
+                    if not swapped and PV.split(now)[0] == prov and PV.split(now)[1] != body["model"]:
+                        swapped, old_model = True, body["model"]
                         self.model = now
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
@@ -1057,7 +1063,17 @@ class Agent:
                 pass
 
     def _probe(self, base: str, key: str, model: str) -> str:
-        return _probe_once(base, key, model)
+        def sink(c):                                     # Stop shuts the probe's socket too (_abort_live)
+            self._live = c
+            connect = c.connect
+
+            def checked_connect():
+                connect()
+                if getattr(c, "_mh_abort", False):
+                    c.close()
+                    raise ConnectionAbortedError("stopped while connecting")
+            c.connect = checked_connect
+        return _probe_once(base, key, model, sink)
 
     def _await_endpoint(self, h, base: str, key: str, model: str) -> bool:
         """Wait, shared with every other chat on this endpoint, until it answers a probe again: up to

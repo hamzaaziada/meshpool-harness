@@ -513,7 +513,7 @@ EDIT_TOOLS = READ_TOOLS + ["write_file", "edit"]
 
 
 def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps: int = 0,
-                 parent: dict | None = None) -> str:
+                 parent: dict | None = None, cancelled=None) -> str:
     """Run independent parts of a job in parallel with Meshpool's own agent.
 
     Settings (Settings, Advanced): on or off, the model (empty: the parent chat's model), read-only or edit access,
@@ -581,7 +581,8 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         while not halted.get("done"):
             if not halted["why"]:
                 halted["why"] = ("the time limit" if time.time() >= deadline else
-                                 "Stop" if stop_file and os.path.exists(stop_file) else "")
+                                 "Stop" if (stop_file and os.path.exists(stop_file)) or (cancelled and cancelled())
+                                 else "")
             if halted["why"]:                                # keep at it: a sub-agent that was still being set
                 for a in list(live):                         # up, or whose send() reset its flag, stops too
                     if not getattr(a, "_stop", False):

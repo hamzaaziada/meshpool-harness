@@ -27,7 +27,8 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
-_NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|HTTP 0|HTTP 5\d\d", re.I)
+_NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429",
+                     re.I)                          # an outage or a key whose slots are full: wait it out
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan"}

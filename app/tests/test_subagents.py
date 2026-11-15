@@ -217,3 +217,43 @@ def test_stop_just_before_the_call_still_reaches_the_sub_agents(tmp_path):
         a._run_subtasks("mcp__meshpool-assistant__run_subtasks", {"tasks": []})
     stop_files = list(a.dir.glob("stop-subtasks-*"))
     assert stop_files and stop_files[0].read_text() == "stop"
+
+
+def test_a_cancelled_call_stops_the_sub_agents(monkeypatch, _env):
+    _record(monkeypatch, [], delay=30)
+    t0 = time.time()
+    out = A.run_subtasks([{"prompt": "a"}], str(_env), cancelled=lambda: time.time() - t0 > 0.5)
+    assert time.time() - t0 < 4 and "stopped by Stop" in out
+
+
+def test_the_mcp_server_hands_a_clients_cancel_to_the_tool(tmp_path):
+    import json
+    import subprocess
+    import sys
+    tool = tmp_path / "slow_server.py"
+    tool.write_text(
+        "import sys, time\n"
+        f"sys.path.insert(0, {str(K.C.APP)!r})\n"
+        "from meshpool_harness.agent.mcp_stdio import Tool, serve, cancel_check\n"
+        "def slow():\n"
+        "    stop = cancel_check()\n"
+        "    t0 = time.time()\n"
+        "    while time.time() - t0 < 20:\n"
+        "        if stop():\n"
+        "            return 'cancelled after %.1f s' % (time.time() - t0)\n"
+        "        time.sleep(0.05)\n"
+        "    return 'ran to the end'\n"
+        "serve('t', {'slow': Tool(slow, 'x')})\n")
+    p = subprocess.Popen([sys.executable, str(tool)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                  "params": {"name": "slow", "arguments": {}}}) + "\n")
+        p.stdin.flush()
+        time.sleep(0.5)
+        p.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                                  "params": {"requestId": 7, "reason": "Stop"}}) + "\n")
+        p.stdin.flush()
+        reply = json.loads(p.stdout.readline())
+        assert reply["id"] == 7 and "cancelled after" in reply["result"]["content"][0]["text"]
+    finally:
+        p.kill()

@@ -22,9 +22,23 @@ PROBE_REUSE_S = 15
 BACKOFF_S = 10                                      # gaps between probes while down: 10, 20 ... 60 s
 
 
+_CFG = {"t": 0.0, "v": None}
+
+
 def _max_inflight() -> int:
+    """The setting from the config file (read at most every 2 s), so a change in Settings reaches this process and
+    the assistant servers without a restart; else the environment; else 4."""
+    now = time.time()
+    if now - _CFG["t"] > 2:
+        _CFG["t"] = now
+        try:
+            from meshpool_harness import config as C
+            _CFG["v"] = C.read().get("MH_MAX_INFLIGHT")
+        except Exception:  # noqa: BLE001
+            _CFG["v"] = None
+    raw = _CFG["v"] or os.environ.get("MH_MAX_INFLIGHT") or "4"
     try:
-        return max(1, int(os.environ.get("MH_MAX_INFLIGHT", "4")))
+        return max(1, int(raw))
     except ValueError:
         return 4
 
@@ -94,12 +108,16 @@ class Gate:
         self.slots = _Slots(name) if name and os.environ.get("MH_SHARED_SLOTS", "1") == "1" else None
         self.cond = threading.Condition()
         self.inflight = 0
-        self.limit = _max_inflight()
+        self.degraded = False
         self.ok_streak = 0
+
+    @property
+    def limit(self) -> int:
+        return 1 if self.degraded else _max_inflight()  # the setting as it is now
 
     def degrade(self):
         with self.cond:
-            self.limit, self.ok_streak = 1, 0       # while something recovers: one call at a time
+            self.degraded, self.ok_streak = True, 0  # while something recovers: one call at a time
 
     def acquire(self, check_stop, emit=None):
         told = False
@@ -108,8 +126,8 @@ class Gate:
                 if emit and not told:
                     told = True
                     emit({"type": "status", "text": "Waiting for another chat's model call to finish (the endpoint "
-                                                    "is recovering, so calls go one at a time)." if self.limit == 1
-                                                    and self.limit < _max_inflight() else
+                                                    "is recovering, so calls go one at a time)." if self.degraded
+                                                    else
                                                     f"Waiting for a free slot: {self.inflight} model calls are "
                                                     "already running on this key (MH_MAX_INFLIGHT)."})
                 self.cond.wait(0.25)
@@ -138,7 +156,7 @@ class Gate:
             if ok:
                 self.ok_streak += 1
                 if self.ok_streak >= 3:
-                    self.limit = _max_inflight()
+                    self.degraded = False
             self.cond.notify_all()
 
 

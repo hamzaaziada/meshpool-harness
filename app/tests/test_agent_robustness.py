@@ -13,6 +13,8 @@ from meshpool_harness.agent import core  # noqa: E402
 from meshpool_harness.agent.core import Agent  # noqa: E402
 from meshpool_harness.core.client import classify_error  # noqa: E402
 
+_REAL_PROBE = Agent._probe                                        # before conftest stubs it per test
+
 
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
@@ -700,3 +702,52 @@ def test_the_call_limit_holds_across_processes(tmp_path, monkeypatch):
     GW._Slots.give(f)
     holder.wait(5)
     assert waited > 0.8                                            # it waited for the other process's call
+
+
+def test_the_call_limit_follows_settings_without_a_restart(tmp_path, monkeypatch):
+    from meshpool_harness import config as C
+    from meshpool_harness.core import gateway as GW
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
+    C.write({"MH_MAX_INFLIGHT": "2"})
+    GW._CFG["t"] = 0
+    g = GW.health("http://v/v1", "k-4", "m").gate
+    assert g.limit == 2
+    C.write({"MH_MAX_INFLIGHT": "6"})                              # changed in Settings while the app runs
+    GW._CFG["t"] = 0
+    assert g.limit == 6
+    g.degrade()
+    assert g.limit == 1
+
+
+def test_a_model_that_cannot_be_replaced_fails_at_once(tmp_path, monkeypatch):
+    slept = []
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: slept.append(s))
+    monkeypatch.setenv("MH_MODEL", "gone-model")                   # today's default is the same model
+    a = Agent(str(tmp_path), mode="auto")
+    a.model = "gone-model"
+    calls = []
+
+    def post(base, key, body, stream):
+        calls.append(1)
+        raise RuntimeError("HTTP 400: The 'gone-model' model is not supported")
+    a._post = post
+    with pytest.raises(RuntimeError, match="does not serve the model"):
+        a._chat(_turn())
+    assert len(calls) == 1 and not slept                           # no pointless retries
+
+
+def test_stop_closes_the_probe_connection_too(tmp_path, monkeypatch):
+    import threading
+    import time
+    monkeypatch.setattr(Agent, "_probe", _REAL_PROBE)
+    a = Agent(str(tmp_path), mode="auto")
+    log = []
+    srv, base = _silent_server(log)
+    threading.Timer(0.5, lambda: setattr(a, "_stop", True)).start()
+    with pytest.raises(core.Interrupted):
+        a._wait(a._probe, base, "k", "m")
+    t0 = time.time()
+    while "closed" not in log and time.time() - t0 < 3:
+        time.sleep(0.05)
+    assert "closed" in log
+    srv.close()

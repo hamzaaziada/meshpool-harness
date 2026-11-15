@@ -3,7 +3,7 @@ parallel sub-agents. The data lives in the Meshpool data folder (see meshpool_ha
 from __future__ import annotations
 
 from meshpool_harness import assistant as A
-from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, serve
+from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, cancel_check, serve
 
 
 def _wrap(fn):
@@ -53,7 +53,8 @@ def search_chats(query: str) -> str:
 
 def run_subtasks(tasks: list, max_parallel: int = 0, parent: dict | None = None) -> str:
     import os
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, parent=parent)
+    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, parent=parent,
+                          cancelled=cancel_check())       # Stop in Hermes, Codex or Pi cancels the call
 
 
 TOOLS = {
