@@ -457,3 +457,15 @@ def test_economics_facts_compute_the_capital_allocation_arithmetic_with_their_in
     assert "18.8%" in got["after-tax return on capital"]               # 10B x (1 - 25%) / 40B
     assert all(x["derived"] and x["research"] for x in R.economics_facts(facts, 20))
     assert R.economics_facts([f(1, "operating cash flow", 15e9)], 20) == []    # a missing input skips the line
+
+
+def test_a_model_that_returns_no_json_never_becomes_a_blank_deck(tmp_path):
+    import engines.forge.build as B
+
+    class Thinker:                                  # a reasoning model that spent its budget thinking
+        def chat(self, *, model, messages, **kw):
+            return {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+    with pytest.raises(RuntimeError, match="storyline came back empty"):
+        B.build("Board briefing\nFacts\n- Revenue $10M in 2025", str(tmp_path), slides_wanted=4, client=Thinker())
+    with pytest.raises(RuntimeError, match="returned no JSON"):
+        B._call(Thinker(), "m", "s", "u", "t")

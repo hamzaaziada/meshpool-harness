@@ -266,7 +266,11 @@ def _call(client, model, system, user, task_id, max_tokens=12000) -> dict:
     r = client.chat(model=model, messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                     max_tokens=max_tokens, temperature=0.2, task_id=task_id, role="worker",
                     extra={"response_format": {"type": "json_object"}})
-    txt = r["choices"][0]["message"].get("content") or "{}"
+    ch = r["choices"][0]
+    txt = ch["message"].get("content") or ""
+    if "{" not in txt:                  # a reasoning model can spend the whole budget thinking: say so, never "{}"
+        raise RuntimeError(f"{model} returned no JSON (finish_reason {ch.get('finish_reason')!r}, "
+                           f"{len(txt)} chars of content)")
     return json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
 
 
@@ -1081,9 +1085,18 @@ points in one unit. If the facts are thin on a point, merge it into another slid
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
 {help_}"""
-    story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}",
-                  task_id + "-story", 6000)
-    calls += 1
+    story, why = {}, ""
+    for budget in (8000, 16000):                 # once more with room when a reasoning model ran out of tokens
+        try:
+            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}",
+                          task_id + "-story", budget)
+        except (RuntimeError, ValueError) as e:
+            why = str(e)
+        calls += 1
+        if [x for x in (story.get("slides") or []) if isinstance(x, dict)] if isinstance(story, dict) else []:
+            break
+    else:
+        raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
     notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
     if notes and len(story.get("slides") or []) >= 4:
         try:                                     # the partner's read of the storyboard, sent back once
