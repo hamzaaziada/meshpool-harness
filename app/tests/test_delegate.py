@@ -601,14 +601,73 @@ def test_a_broken_schema_keeps_the_report_and_the_json_always_parses(monkeypatch
 
 def test_out_of_steps_asks_for_a_report_with_no_tools(monkeypatch, _env):
     monkeypatch.setenv("MH_SUBAGENT_STEPS", "5")
-    seen = []
+    bodies, ran = [], []
 
     def child(b):
+        bodies.append(b)
         if "used all your steps" in b["messages"][-1]["content"]:
             return _msg("REPORT: listed the files, nothing found")
         return _msg("", [("glob", {"pattern": "*"})])
-    fake(monkeypatch, child, seen=seen)
+    fake(monkeypatch, child)
     out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "List the files forever"}]})
     r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
     assert ok and r["exit_reason"] == "max_steps" and "REPORT: listed the files" in out
-    assert seen[-1]["tools"] == []                                  # the last call offers no tools
+    last = bodies[-1]                         # tools stay listed (endpoints refuse a history of calls without them)
+    assert last["tools"] and last["tool_choice"] == "none"
+
+    class Mcp:                                # and a call the model makes anyway is refused, MCP included
+        last_images = []
+        def has(self, n): return n == "mcp__github__create_issue"
+        def schemas(self): return [{"type": "function", "function": {"name": "mcp__github__create_issue",
+                                                                      "parameters": {"type": "object"}}}]
+        def call(self, n, a): ran.append(n); return ("made", False)
+
+    def stubborn(b):
+        return _msg("", [("mcp__github__create_issue", {"title": "x"})])
+    fake(monkeypatch, stubborn)
+    out, ok = D.run_tool(_agent(_env, mcp=Mcp()), {"tasks": [{"goal": "File issues forever"}]})
+    assert len(ran) == 5 and "without writing a report" in out    # the 5 steps ran; the final call did not
+
+
+def test_out_of_steps_report_is_checked_against_the_schema(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_STEPS", "5")
+
+    def child(b):
+        if "used all your steps" in b["messages"][-1]["content"]:
+            assert "only JSON" in b["messages"][-1]["content"]
+            return _msg("prose, not JSON")
+        return _msg("", [("glob", {"pattern": "*"})])
+    fake(monkeypatch, child)
+    sch = {"type": "object", "required": ["name"]}
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the name", "output_schema": sch}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert r["schema_valid"] is False and r["schema_errors"]
+
+
+def test_only_the_office_server_has_its_paths_fenced_and_parallel_children_keep_their_own_images(_env, tmp_path):
+    c = _bare_child(_agent(_env, mode="auto", profile="work"))
+    assert c._permit("mcp__github__get_file_contents", {"path": "/"})[0] is True     # a repo path, not a local one
+    assert c._permit("mcp__meshpool_office__check_deck", {"path": "/etc/x.pptx"})[0] is False
+    from meshpool_harness.agent import mcp as M
+    from concurrent.futures import ThreadPoolExecutor
+
+    class S(M.Server):
+        def __init__(self):
+            self.status, self.images, self.spec = "connected", [], {}
+        def _rpc(self, method, params, timeout):
+            time.sleep(0.001)
+            return {"content": [{"type": "image", "data": params["arguments"]["who"]}]}
+    m = M.Manager.__new__(M.Manager)
+    m.servers, m.map, m.last_images = {"b": S()}, {"mcp__b__shot": ("b", "shot")}, []
+
+    def one(who):
+        ch = D.ChildMcp(m)
+        bad = 0
+        for _ in range(200):
+            ch.call("mcp__b__shot", {"who": who})
+            bad += [i["data"] for i in ch.last_images] != [who]
+        return bad
+    with ThreadPoolExecutor(4) as ex:
+        assert sum(ex.map(one, ["a", "b", "c", "d"])) == 0
+    out = m.call("mcp__b__shot", {"who": "chat"})                   # the chat's own path is unchanged
+    assert out == ("[image attached]", False) and m.last_images[0]["data"] == "chat"

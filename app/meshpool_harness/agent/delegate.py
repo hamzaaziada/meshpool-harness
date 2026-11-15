@@ -70,7 +70,10 @@ def settings() -> dict:
     return s
 
 
-PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to", "source", "input")
+# Meshpool's office server reads local files and runs without asking; other servers' "path" is often remote (a repo,
+# a bucket, an API) and they need a yes from a sub-agent anyway (and in Full access it has bash)
+OFFICE_MCP = "mcp__meshpool_office__"
+PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to")
 
 
 def _mcp_paths_outside(root, args) -> bool:
@@ -227,8 +230,11 @@ class ChildMcp:
         return [s for s in self.m.schemas() if self._ok(s["function"]["name"])]
 
     def call(self, name: str, args: dict):
+        if hasattr(self.m, "call_with_images"):          # this call's own images, not a sibling's
+            out, self.last_images = self.m.call_with_images(name, args)
+            return out
         out = self.m.call(name, args)
-        self.last_images, self.m.last_images = list(getattr(self.m, "last_images", []) or []), []
+        self.last_images = list(getattr(self.m, "last_images", []) or [])
         return out
 
     def __getattr__(self, k):
@@ -292,14 +298,13 @@ class Delegation:
             final_only = False
 
             def _tool_names(self):
-                return [] if self.final_only else names + (["delegate_task"] if nested else [])
-
-            def tool_schemas(self):
-                return [] if self.final_only else super().tool_schemas()
+                return names + (["delegate_task"] if nested else [])
 
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
+                if self.final_only:                      # out of steps: only the report is left
+                    return False, "you are out of steps: no more tool calls; reply with your report now"
                 if self._outside(name, args) or (name == "office_task" and _files_outside(parent.root, args)) or \
-                        (name.startswith("mcp__") and _mcp_paths_outside(parent.root, args)):
+                        (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
                     rec["pending_path"] = args.get("path")
@@ -382,9 +387,15 @@ class Delegation:
             hit_steps = any("Stopped after" in e for e in rec["errors"])
             cfg_steps = a.max_steps
             if hit_steps and not stopped:                 # out of steps: one last answer, no tools, with the report
-                a.final_only, a.max_steps = True, 1
+                a.final_only, a._no_tools, a.max_steps = True, True, 1   # tools stay listed; tool_choice "none"
                 reply = a.send("You have used all your steps. Stop working now and reply with your report: what "
-                               "you did, what you found, files you changed, and what is left undone.") or reply
+                               "you did, what you found, files you changed, and what is left undone." +
+                               (" Your reply must still be only JSON matching the output schema." if row["schema"]
+                                else "")) or reply
+                if row["schema"] and reply.strip():       # the report still answers to the output contract
+                    errs = self._check(reply, row["schema"])
+                    rec["schema_valid"], rec["schema_errors"] = not errs, errs
+                    rec.setdefault("schema_retries", 0)
                 stopped = a._stop or self.stopped or rec["stop"]
             if stopped:
                 rec["status"], rec["exit"] = "interrupted", "interrupted"
