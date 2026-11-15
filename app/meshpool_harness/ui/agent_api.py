@@ -25,6 +25,7 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "the next step if work remains. If you need the user to decide or provide something, ask, and leave the "
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
+GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|HTTP 0|HTTP 5\d\d", re.I)
 
@@ -672,11 +673,21 @@ class Session:
         acted = any(e.get("type") == "tool_end" for e in evs)
         failed = any(e.get("type") in ("error", "interrupted") for e in evs)
         net = [e for e in evs if e.get("type") == "error" and _NET_RE.search(e.get("text") or "")]
-        if failed and net and not any(e.get("type") == "interrupted" for e in evs) and getattr(self, "_goal_net", 0) < 2:
-            self._goal_net = getattr(self, "_goal_net", 0) + 1                      # an outage, not the task: the agent already waited for the
-                                                     # endpoint inside the turn; carry on rather than stop the goal
-            self.emit({"type": "status", "text": "Goal: the model connection failed. Picking the goal up again "
-                                                 f"({self._goal_net} of 2)."})
+        if failed and net and not any(e.get("type") == "interrupted" for e in evs):
+            # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
+            # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
+            # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
+            n = self._goal_net = getattr(self, "_goal_net", 0) + 1
+            wait = min(10 * GOAL_NET_WAIT_S, GOAL_NET_WAIT_S * 2 ** (n - 1))
+            self.emit({"type": "status", "text": f"Goal: the model connection failed. Picking the goal up again in "
+                                                 f"{wait:.0f} s (try {n}). Press Stop or clear the goal to end it."})
+            end = time.time() + wait
+            while time.time() < end:
+                if not self.goal or getattr(self, "_stop_req", False) or getattr(self.agent, "_stop", False):
+                    return None
+                if hasattr(self.agent, "has_steers") and self.agent.has_steers():
+                    break                            # the user wrote meanwhile: go now, their message goes along
+                time.sleep(min(0.5, max(0.0, end - time.time())))
             return (GOAL_NEXT, [])
         if not failed:
             self._goal_net = 0
