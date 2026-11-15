@@ -671,6 +671,10 @@ _TIE_STOP = {"of", "is", "at", "the", "a", "an", "and", "to", "on", "in", "its",
              "are", "be", "this", "that", "only", "about", "around", "just", "now", "still", "after-tax", "pre-tax"}
 
 
+PER_SHARE = {"dividend", "dividends", "payout", "price", "eps", "earnings", "buyback", "return", "distribution",
+             "book", "value", "cash"}
+
+
 def tie_checks(slides) -> dict[int, list[str]]:
     """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
     another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
@@ -686,16 +690,25 @@ def tie_checks(slides) -> dict[int, list[str]]:
         for _, t in _strings(normalize(sl)):
             for clause in re.split(r"[;:!?()\n]|[.,](?=\s|$)|\s[-–]\s|\bvs\.?\b|\bversus\b|\bagainst\b|\bbeats?\b|\bthan\b",
                                    re.sub(r"\*\*", "", t)):
-                for m in re.finditer(r"(-?\d+(?:\.\d+)?)%", clause):
-                    num = m.group(1)
+                hits = [(m, m.group(1), "%") for m in re.finditer(r"(-?\d+(?:\.\d+)?)%", clause)]
+                hits += [(m, m.group(1).replace(",", ""), " per share") for m in
+                         re.finditer(r"\$(\d[\d,]*(?:\.\d+)?)\s*(?:per|a)\s+share\b", clause)]
+                for m, num, unit in hits:
                     yr = " ".join(re.findall(r"\b(?:19|20)\d\d\b", clause))
                     def words(txt):
                         return [w for w in re.findall(r"[a-z][a-z'-]*", txt.lower()) if w not in _TIE_STOP]
                     keys = []
                     after, before = words(clause[m.end():])[:2], words(clause[:m.start()])[-2:]
-                    for ws in (after, before):
-                        if len(ws) == 2 and rate.search(" ".join(ws)):
-                            keys.append(" ".join(ws) + (f" {yr}" if yr else ""))
+                    if unit == "%":
+                        for ws in (after, before):
+                            if len(ws) == 2 and rate.search(" ".join(ws)):
+                                keys.append(" ".join(ws) + (f" {yr}" if yr else ""))
+                    else:                                  # "$2.26 per share": what is paid or priced per share
+                        near = words(clause[m.end():])[:3] + words(clause[:m.start()])[-3:][::-1]
+                        near = ["dividend" if w in ("pay", "pays", "paid", "paying") else w for w in near]
+                        what = [w for w in near if w in PER_SHARE][:1]
+                        if what:
+                            keys.append(f"{what[0]} per share" + (f" {yr}" if yr else ""))
                     dec = len(num.split(".")[1]) if "." in num else 0
                     v = float(num)
                     for key in keys:
@@ -705,7 +718,9 @@ def tie_checks(slides) -> dict[int, list[str]]:
                         v0, d0, n0, raw0 = seen[key]
                         d = min(dec, d0)
                         if n != n0 and round(v, d) != round(v0, d) and abs(v - v0) > 0.05:
-                            msg = (f"'{key}' is {num}% here but {raw0}% on slide {n0}: one metric, one value across "
+                            u = "%" if unit == "%" else ""
+                            num_, raw0_ = (num, raw0) if unit == "%" else (f"${num}", f"${raw0}")
+                            msg = (f"'{key}' is {num_}{u} here but {raw0_}{u} on slide {n0}: one metric, one value across "
                                    "the deck (use the same fact or calc; if it really changed, name what changed)")
                             if msg not in out.get(n, []):
                                 out.setdefault(n, []).append(msg)

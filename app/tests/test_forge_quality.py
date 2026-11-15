@@ -234,3 +234,13 @@ def test_arabic_slides_read_right_to_left_and_mirror(tmp_path):
     assert step_x(ar, "توسيع الطاقة") > step_x(ar, "رفع الهامش")          # step 1 on the right
     assert step_x(en, "Add capacity") < step_x(en, "Lift margin")
     assert 'flipH="1"' in ar._element.xml
+
+
+def test_tie_checks_flag_one_per_share_amount_with_two_values():
+    from engines.forge.build import tie_checks
+    cover = {"archetype": "cover", "title": "Ratify the $30 per share special dividend and the $4B buyback"}
+    body = {"archetype": "grid", "title": "Cash covers growth after the payout",
+            "items": [{"lead": "The company pays $2.26 per share on 443.1M shares, about $1.0B"}]}
+    price = {"archetype": "grid", "title": "At $1,106.21 a share the buyback retires 3.6M shares"}
+    got = tie_checks([cover, body, price])
+    assert list(got) == [2] and "$2.26" in got[2][0] and "$30" in got[2][0]
