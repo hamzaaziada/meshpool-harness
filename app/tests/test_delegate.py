@@ -1,6 +1,7 @@
 """delegate_task: Hermes-style sub-agents for Meshpool's own agent (agent/delegate.py). No network, no model: a fake
 model answers the chat and its sub-agents (told apart by the sub-agent block in their system prompt)."""
 import json
+import os
 import threading
 import time
 
@@ -693,16 +694,69 @@ def test_round_eight_steps_stay_bounded_and_no_stale_report(monkeypatch, _env):
     monkeypatch.setenv("MH_SUBAGENT_STEPS", "5")
     calls = []
 
-    def child(b):
+    def child(b):                              # prose exactly on its last step: no correction past the budget
         calls.append(b)
-        if "does not match the output schema" in str(b["messages"][-1]["content"]) or \
-                sum(1 for m in b["messages"] if m["role"] == "tool") < 4:
+        if sum(1 for m in b["messages"] if m["role"] == "tool") < 4:
             return _msg("Let me keep looking at more files.", [("glob", {"pattern": "*"})])
-        if "used all your steps" in b["messages"][-1]["content"]:
-            return _msg("", [("glob", {"pattern": "*"})])            # still no report
         return _msg("not json")
     fake(monkeypatch, child)
     out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the name", "output_schema": {"type": "object"}}]})
     r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
-    assert sum(1 for b in calls if b["tool_choice"] != "none") <= 5 + 1     # one budget, not two
-    assert "without writing a report" in out and r["schema_valid"] is False
+    assert len(calls) == 5 and r["exit_reason"] == "completed" and r["schema_valid"] is False
+
+    def looper(b):                             # out of steps, and still no report in the final call
+        if "used all your steps" in b["messages"][-1]["content"]:
+            return _msg("", [("glob", {"pattern": "*"})])
+        return _msg("Let me keep looking at more files.", [("glob", {"pattern": "*"})])
+    fake(monkeypatch, looper)
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the name", "output_schema": {"type": "object"}}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert "without writing a report" in out and r["schema_valid"] is False and r["exit_reason"] == "max_steps"
+
+
+def test_round_nine_json_schemas_nested_files_overflow_and_skills(monkeypatch, _env, tmp_path):
+    assert D._json_of('Here is the result:\n```json\n{"name": "Acme"}\n```\nDone.') == {"name": "Acme"}
+    assert D._json_of('```JSON\n{"a": 1}\n```') == {"a": 1}
+    with pytest.raises(ValueError):
+        D._json_of("[" * 20000 + "]" * 20000)
+    for bad in ('[{"type": "string"}]', '"object"', "names as a list"):
+        with pytest.raises(ValueError):
+            D.check_goals([{"goal": "Find the names", "output_schema": bad}])
+    # a grandchild's file shows in the top-level result
+    monkeypatch.setenv("MH_SUBAGENT_DEPTH", "2")
+
+    def child(b):
+        last = b["messages"][-1]
+        if last["role"] == "tool":
+            return _msg("wrote it")
+        if "Write the notes file" in _goal(b):
+            return _msg("", [("write_file", {"path": "notes.txt", "content": "x"})])
+        return _msg("", [("delegate_task", {"tasks": [{"goal": "Write the notes file please"}]})])
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Get the notes written"}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert any(f.endswith("notes.txt") for f in r["files_written"])
+    monkeypatch.delenv("MH_SUBAGENT_DEPTH")
+    # an overflow file the report points to survives the sub-agent
+    (_env / "big.txt").write_text("needle line\n" * 3000)
+
+    def grepper(b):
+        last = b["messages"][-1]
+        if last["role"] == "tool":
+            import re as _re
+            return _msg("See " + _re.search(r"full output in (\S+?)\]", last["content"]).group(1))
+        return _msg("", [("grep", {"pattern": "needle"})])
+    fake(monkeypatch, grepper)
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the needles"}]})
+    path = out.split("See ")[1].split()[0]
+    assert os.path.exists(path) and "needle" in open(path).read()
+    # a skill's own files can be read; other outside files cannot
+    from meshpool_harness import skills as SK
+    sk = tmp_path / "skills" / "demo"
+    sk.mkdir(parents=True)
+    (sk / "SKILL.md").write_text("x")
+    (sk / "CONNECTORS.md").write_text("y")
+    monkeypatch.setattr(SK, "enabled", lambda: [{"name": "demo", "path": str(sk / "SKILL.md"), "files": []}])
+    c = _bare_child(_agent(_env, mode="auto"))
+    assert c._permit("read_file", {"path": str(sk / "CONNECTORS.md")})[0] is True
+    assert c._permit("read_file", {"path": str(tmp_path / "other.txt")})[0] is False

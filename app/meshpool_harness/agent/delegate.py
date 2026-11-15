@@ -102,6 +102,17 @@ def _under(f, base) -> bool:
         return False
 
 
+def _skill_file(path) -> bool:
+    """A file inside an enabled skill's folder (use_skill tells the agent to read them by full path)."""
+    from pathlib import Path
+    from meshpool_harness import skills as SK
+    try:
+        q = Path(str(path or "")).expanduser().resolve()
+        return any(q.is_relative_to(Path(s["path"]).parent.resolve()) for s in SK.enabled())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _files_outside(root, args) -> bool:
     from pathlib import Path
     for f in args.get("files") or []:
@@ -171,8 +182,10 @@ def check_goals(tasks) -> list[dict]:
         if isinstance(t.get("output_schema"), str):     # sent as a JSON string: read it
             try:
                 t = {**t, "output_schema": json.loads(t["output_schema"])}
-            except ValueError:
+            except (ValueError, RecursionError):
                 raise ValueError("output_schema is not valid JSON. Give it as a JSON Schema object.")
+        if t.get("output_schema") is not None and not isinstance(t.get("output_schema"), dict):
+            raise ValueError("output_schema must be a JSON Schema object, like {\"type\": \"object\", ...}.")
         rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
                      "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
                      "title": str(t.get("title") or goal.splitlines()[0])[:80]})
@@ -212,15 +225,23 @@ def schema_errors(value, sch, path="$") -> list[str]:
 
 
 def _json_of(text: str):
+    """The JSON in a reply: plain (a string value may hold a ``` fence), the whole reply in one fence, or the first
+    fenced block with prose around it. ValueError when there is none."""
     t = (text or "").strip()
-    try:                                                  # plain JSON (a string value may hold a ``` fence)
-        return json.loads(t)
-    except ValueError:
-        pass
-    m = re.match(r"```(?:json)?\s*(.*)```\s*$", t, re.S)   # the whole reply in one fence
+    tries = [t]
+    m = re.match(r"```[A-Za-z]*\s*(.*)```\s*$", t, re.S)
     if m:
-        return json.loads(m.group(1).strip())
-    return json.loads(t)
+        tries.append(m.group(1).strip())
+    tries += [x.strip() for x in re.findall(r"```[A-Za-z]*\s*(.*?)```", t, re.S)]
+    err = None
+    for x in tries:
+        try:
+            return json.loads(x)
+        except RecursionError:                            # absurdly deep nesting: not usable JSON
+            err = ValueError("nested too deeply")
+        except ValueError as e:
+            err = err or e
+    raise err or ValueError("no JSON")
 
 
 # ---------- MCP tools a sub-agent may use -----------------------------------------------------------------------------
@@ -314,7 +335,8 @@ class Delegation:
                 if self.final_only:                      # out of steps: only the report is left
                     return False, "you are out of steps: no more tool calls; reply with your report now"
                 web = name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch")
-                if (self._outside(name, args) and not web) or \
+                skill = name == "read_file" and _skill_file(args.get("path"))   # a skill's own files, read only
+                if (self._outside(name, args) and not web and not skill) or \
                         (name == "office_task" and _files_outside(parent.root, args)) or \
                         (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
@@ -340,6 +362,7 @@ class Delegation:
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
                   sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
+        a._delegate_rec = rec                            # its own sub-agents' files count as its files
         a._delegate_depth = depth + 1
         a._delegate_top = top
         a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
@@ -390,10 +413,10 @@ class Delegation:
             if row["schema"] and reply.strip() and not (a._stop or self.stopped or rec["stop"]):
                 rec["schema_retries"] = 0
                 errs = self._check(reply, row["schema"])
-                if errs:                                  # one bounded correction, as in Hermes
+                used = sum(1 for m in a.messages if m.get("role") == "assistant")
+                if errs and used < cfg_steps0:            # one bounded correction, as in Hermes, within the budget
                     rec["schema_retries"] = 1
-                    used = sum(1 for m in a.messages if m.get("role") == "assistant")
-                    a.max_steps = max(1, cfg_steps0 - used)   # within the same step budget, not a fresh one
+                    a.max_steps = cfg_steps0 - used
                     reply = a.send("Your reply does not match the output schema: " + "; ".join(errs) +
                                    ". Reply again with only the JSON.") or reply
                     errs = self._check(reply, row["schema"])
@@ -440,6 +463,14 @@ class Delegation:
                        summary=f"This sub-agent failed: {type(e).__name__}: {e}")
         finally:
             if a is not None:
+                out_dir = str(a.ws.run_dir)                # a full tool output its report points to: keep it
+                if out_dir in str(rec.get("summary") or "") and a.ws.run_dir.is_dir():
+                    keep = self.parent.ws.run_dir / f"subagent-{sid}-output"
+                    try:
+                        shutil.copytree(a.ws.run_dir, keep, dirs_exist_ok=True)
+                        rec["summary"] = rec["summary"].replace(out_dir, str(keep))
+                    except OSError:
+                        pass
                 shutil.rmtree(a.dir, ignore_errors=True)
                 rec["steps"] = sum(1 for m in a.messages if m.get("role") == "assistant")
         return self._entry(sid, rec)
@@ -457,6 +488,8 @@ class Delegation:
 
     def _entry(self, sid: str, rec: dict) -> dict:
         p = self.parent
+        if isinstance(getattr(p, "_delegate_rec", None), dict):   # a sub-agent's sub-agent wrote these
+            p._delegate_rec["files"].update(rec["files"])
         turn = getattr(p, "_turn_usage", None)            # and in this turn's total
         with _USAGE_LOCK:                                 # children finish on several threads at once
             for k in ("in", "cached", "out", "calls"):    # the chat pays for its sub-agents: count it there
