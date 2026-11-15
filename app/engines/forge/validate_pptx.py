@@ -592,6 +592,28 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         if R["icons"]["forbid_emoji"] and s["emoji"]:
             failures.append(F("P9", "emoji", f"Slide {n}: remove {s['emoji']} emoji from the text.", slide=n))
 
+        # ---------------- P21 language lint (banned phrases, em dashes, exclamation marks, shouting)
+        L = R.get("language") or {}
+        if L:
+            ban = [b for b in L.get("banned_phrases") or [] if b]
+            ban_re = re.compile(r"(?i)(?<![\w-])(" + "|".join(re.escape(b) for b in ban) + r")(?![\w-])") if ban else None
+            for sh in texts:
+                t = sh["text"]
+                found = sorted({m.group(1).lower() for m in ban_re.finditer(t)}) if ban_re else []
+                if found:
+                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{'\", \"'.join(found)}\" "
+                                      "reads as machine-written; say it plainly.", slide=n, shape=sh["name"]))
+                if L.get("forbid_em_dash", True) and "\u2014" in t:
+                    failures.append(F("P21", "em_dash", f"Slide {n}, {sh['name']}: em dash; use a comma, colon or "
+                                      "two sentences.", slide=n, shape=sh["name"]))
+                if L.get("forbid_exclamation", True) and re.search(r"!(\s|$)", t):
+                    failures.append(F("P21", "exclamation", f"Slide {n}, {sh['name']}: exclamation mark; state it "
+                                      "plainly.", slide=n, shape=sh["name"]))
+                caps = int(L.get("max_caps_words", 2))
+                if re.search(r"(?:\b[A-Z]{6,}\b[\s,]+){" + str(caps) + r"}\b[A-Z]{6,}\b", t):
+                    failures.append(F("P21", "all_caps", f"Slide {n}, {sh['name']}: words in capitals for emphasis; "
+                                      "use sentence case.", slide=n, shape=sh["name"]))
+
         # ---------------- P10 density (caps per density mode: the slide's "density:<mode>" tag, or the call's)
         D = density_caps(R, slide_density(s, R, density))
         cap = (D.get("by_archetype") or {}).get(s["archetype"], D["max_body_words"])

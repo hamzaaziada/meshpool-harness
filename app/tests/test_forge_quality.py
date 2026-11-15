@@ -192,3 +192,18 @@ def test_tie_checks_flag_one_rate_with_two_values_across_slides():
     assert tie_checks([s2, same]) == {}
     other = {"archetype": "grid", "title": "Cash yield of 5.15% beats the 1.9% buyback yield"}
     assert tie_checks([s2, other]) == {}
+
+
+def test_p21_language_lint_flags_machine_written_words(tmp_path):
+    from pptx import Presentation
+    from pptx.util import Inches
+    from engines.forge.common import load_rules
+    from engines.forge.validate_pptx import validate
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[5])
+    s.shapes.title.text = "We leverage synergies to unlock growth — a game-changer!"
+    tb = s.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(1))
+    tb.text_frame.text = "REVENUE GROWTH ACCELERATES SHARPLY in 2025; EBITDA margin holds at 21%."
+    prs.save(tmp_path / "x.pptx")
+    got = {(f["rule"], f["check"]) for f in validate(str(tmp_path / "x.pptx"), load_rules(), render=False)["failures"]}
+    assert {("P21", "banned_phrase"), ("P21", "em_dash"), ("P21", "exclamation"), ("P21", "all_caps")} <= got

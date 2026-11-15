@@ -97,6 +97,15 @@ pptx:
     forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
     max_rule_weight_pt: 1.5
     forbid_emoji: true
+  language:                     # P21: words that mark a slide as machine-written, linted on every text frame
+    banned_phrases: ["in today's fast-paced", "fast-paced world", "leverage", "leveraging", "unlock", "unlocking",
+                     "game-changer", "game changer", "delve", "robust", "seamless", "seamlessly", "key takeaways",
+                     "it's important to note", "it is important to note", "synergies", "holistic", "cutting-edge",
+                     "best-in-class", "paradigm", "revolutionize", "revolutionise", "elevate", "empower",
+                     "navigate the landscape", "ever-evolving", "in conclusion", "moreover", "furthermore"]
+    forbid_em_dash: true
+    forbid_exclamation: true
+    max_caps_words: 2           # consecutive all-caps words longer than 5 letters (acronyms such as EBITDA pass)
   density:                      # P10. The keys below are the "read" caps (dense send-ahead deliverable); "modes" holds
                                 # the caps for the other density modes (engines/forge/density.py), merged over these.
                                 # A forge slide declares its mode in its name ("density:present"); a deck without one is
