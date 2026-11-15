@@ -84,7 +84,7 @@ SCHEMAS = {
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
     "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file. Fails if `old` is missing, "
-                        "not unique, or the file changed since you last read it.",
+                        "not unique, the same as `new`, or the file changed since you last read it.",
                 {"path": S, "old": S, "new": S}, ["path", "old", "new"]),
     "write_file": _fn("write_file", "Create or overwrite a file. Set append=true to add to the end (for large files written in parts).",
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
@@ -182,6 +182,7 @@ class Workspace:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.skills = skills or {}
         self.seen: dict[str, str] = {}        # path -> content hash the agent last saw/wrote
+        self.original: dict[str, str] = {}    # path -> content hash when the agent first saw it (revert check)
         self.commands: list[dict] = []        # executed commands with exit codes and edit counter
         self.edits = 0
         self.written: set[str] = set()
@@ -245,6 +246,7 @@ class Workspace:
         if self.container and not self.mounted:
             text = self._cread(path)
             self.seen[self._cpath(path)] = self._hash(text)
+            self.original.setdefault(self._cpath(path), self.seen[self._cpath(path)])
             lines = text.splitlines()
             s, e = max(1, start or 1), min(len(lines), end or len(lines))
             body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
@@ -262,6 +264,7 @@ class Workspace:
             return self._cap(docread.extract(p, pages=pages), "read")
         text = p.read_text(errors="replace")
         self.seen[str(p)] = self._hash(text)
+        self.original.setdefault(str(p), self.seen[str(p)])
         lines = text.splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
@@ -357,7 +360,12 @@ class Workspace:
             return where(int(m.group(1)), 1, msg) if m else msg
         return None
 
+    NOOP_EDIT = ("edit rejected: `new` is identical to `old`, so nothing would change and {path} is unchanged. Put "
+                 "the changed text in `new` (keep `old` exactly as it is in the file).")
+
     def edit(self, path, old, new):
+        if old == new:       # 22% of edits in a 12-run SWE-bench sample: reported as success, the model looped on them
+            raise ToolError(self.NOOP_EDIT.format(path=path))
         if self.container and not self.mounted:
             text, key = self._cread(path), self._cpath(path)
             if key not in self.seen:
@@ -403,6 +411,8 @@ class Workspace:
         if self.container and not self.mounted:
             if subprocess.run(["docker", "exec", self.container, "test", "-e", self._cpath(path)]).returncode != 0:
                 self.created.add(self._cpath(path))
+            elif self._cpath(path) not in self.original:
+                self.original[self._cpath(path)] = self._hash(self._cread(path))
             self._cwrite(path, content, append)
             self.seen[self._cpath(path)] = self._hash(self._cread(path))
             self.edits += 1
@@ -411,6 +421,8 @@ class Workspace:
         p = self._path(path, write=True)
         if not p.exists():
             self.created.add(str(p))
+        elif str(p) not in self.original and p.is_file():
+            self.original[str(p)] = self._hash(p.read_text(errors="replace"))
         p.parent.mkdir(parents=True, exist_ok=True)
         if append and p.exists():
             with p.open("a") as f:
@@ -466,7 +478,7 @@ class Workspace:
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True, raw=False):
+    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -511,7 +523,12 @@ class Workspace:
             pass
         if raw:                                  # probe/trace post-process the full text themselves
             return f"[exit {code}]\n{out}", code
-        return self._cap(f"[exit {code}]\n{out}", kind), code
+        return self._cap(f"[exit {code}]\n{out}", kind) + (self._where(out, code, command) if ctx else ""), code
+
+    def _where(self, out, code, command) -> str:
+        """MH_ERROR_CONTEXT: excerpts of the project code a failing command points to (core/errctx.py)."""
+        from . import errctx
+        return errctx.context(out, self, command) if code not in (0, 124) and errctx.enabled() else ""
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
@@ -525,11 +542,11 @@ class Workspace:
         def one(cmd):
             if self.should_stop and self.should_stop():
                 return f"$ {cmd}\n[not run: stopped by the user]"
-            out, code = self._run(cmd, timeout_s, "bash")
+            out, code = self._run(cmd, timeout_s, "bash", ctx=False)
             body = out.split("\n", 1)[1] if out.startswith("[exit ") else out
             if len(body) > 2500:
                 body = body[:1200] + f"\n... [{len(body) - 2400} chars cut; run it alone for the full output] ...\n" + body[-1200:]
-            return f"$ {cmd}\n[exit {code}]\n{body}"
+            return f"$ {cmd}\n[exit {code}]\n{body}" + self._where(out, code, cmd)
         if os.environ.get("MH_PARALLEL_MANY") == "1" and len(cmds) > 1 and all(read_only(c) for c in cmds):
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=min(4, len(cmds))) as ex:
@@ -541,8 +558,8 @@ class Workspace:
     def probe(self, command, timeout_s=None):
         """MH_OBSERVE: run a check and return a failure digest (core/observe.py). Recorded as a check."""
         from .observe import digest, probe_command
-        out, _ = self._run(probe_command(command), timeout_s, "check", raw=True)
-        return digest(out)
+        out, code = self._run(probe_command(command), timeout_s, "check", raw=True)
+        return digest(out) + self._where(out, code, command)
 
     def trace(self, command, timeout_s=None):
         """MH_OBSERVE: run a Python command under a project-only profiler (core/observe.py)."""
