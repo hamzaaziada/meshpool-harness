@@ -1136,8 +1136,25 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
         opening = ("these slides go into an existing deck after its own slides: NO cover, NO agenda, NO divider and "
                    "NO closing slide, only content slides (charts, tables, comparisons) that make the brief's points; ")
         closing = ""
+    # ---- stage 1b: the dossier. Research the company BEFORE planning: what changed in the business, the latest
+    # results, guidance, deals, news (engines/research/dossier.py). Its facts join the brief's; its list of structural
+    # changes and unanswered questions goes to the planner.
+    dossier = None
+    if not insert and os.environ.get("MH_DOSSIER", "1") != "0":
+        from engines.forge import critics as _CR, research as _RS
+        ok_, why_ = _RS.allowed(client, rules, brief, research)
+        if ok_:
+            from engines.research.dossier import build_dossier
+            dossier = build_dossier(brief, facts, client=client,
+                                    models=_CR.text_models(_CR.settings(rules)) or [MODEL], out_dir=str(out),
+                                    rules=rules, task_id=f"{task_id}-dossier")
+            facts.extend(dossier["facts"])
     fact_txt = "\n".join(f"{f['id']}: {f['text']}" for f in facts)
     calls = 0
+    findings = ""
+    if dossier:
+        from engines.research.dossier import brief_block
+        findings = brief_block(dossier)
 
     # ---- stage 2: storyline (ghost deck)
     story_sys = f"""You are an engagement manager at a top strategy firm. Plan the storyline
@@ -1159,8 +1176,8 @@ supports it. Choose varied archetypes that prove each title.
     story, why = {}, ""
     for budget in (8000, 16000):                 # once more with room when a reasoning model ran out of tokens
         try:
-            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}",
-                          task_id + "-story", budget)
+            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
+                          + (f"\n\n{findings}" if findings else ""), task_id + "-story", budget)
         except (RuntimeError, ValueError) as e:
             why = str(e)
         calls += 1

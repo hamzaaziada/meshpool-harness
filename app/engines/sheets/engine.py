@@ -729,6 +729,34 @@ class WorkbookReview:
             pass
 
 
+def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> str:
+    """Research the company before the first cell is written (engines/research/dossier.py): a model built from the
+    statements alone misses what changed since them (an asset-light shift, a disposal, new guidance). Returns the text
+    added to the task: the structural changes, the sourced findings and the open questions; '' when research is off
+    (MH_DOSSIER=0, MH_RESEARCH=0, an offline client, no network) or found nothing."""
+    if os.environ.get("MH_DOSSIER", "1") == "0":
+        return ""
+    try:
+        from engines.forge import research as RS
+        from engines.research.dossier import build_dossier, brief_block
+        ok, _ = RS.allowed(client, None, task, None)
+        if not ok:
+            return ""
+        d = build_dossier(task, [], client=client, models=[os.environ.get("MH_STORY_REVIEW_MODEL") or model],
+                          out_dir=workdir, task_id=f"{task_id}-dossier")
+    except Exception:  # noqa: BLE001 - research never costs the model
+        return ""
+    if not d.get("facts"):
+        return ""
+    found = "\n".join(f"- {f['id']}: {f['text']}" for f in d["facts"][:60])
+    return ("\n\nResearch dossier (dossier.md in this folder; read it before you plan the model). Build the model "
+            "for the business as it is NOW: where the findings show a structural change, the forecast follows it, "
+            "not the history (an asset-light shift changes capex, depreciation, leases and margins). Cite a finding "
+            "as each affected assumption's Source (its F id and URL); passages are in .research/ "
+            "(Corpus('.research').assumption_source('S3.p12')).\n"
+            + (brief_block(d) + "\n" if brief_block(d) else "") + "Findings:\n" + found)
+
+
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
@@ -740,6 +768,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
+    task += dossier_brief(task, workdir, client, model, task_id)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
         if review_enabled(client, review) else None
     if rv:

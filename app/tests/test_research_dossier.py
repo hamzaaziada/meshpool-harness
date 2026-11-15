@@ -1,0 +1,74 @@
+"""The dossier researches the company before a deck or model is planned (engines/research/dossier.py)."""
+import json
+import re
+
+from engines.research import dossier as D
+
+PAGE = ("Cleopatra Hospitals Group completed a sale and leaseback of three hospitals in March 2025 as part of its "
+        "asset-light strategy. Cleopatra Hospitals Group reported revenue of EGP 6.2 billion in 2025, up 31% on 2024. "
+        "Management expects capital expenditure to fall to EGP 400 million in 2026 under the asset-light model.")
+
+
+def search(q, n, recency="", region="", site=""):
+    return [{"url": "https://ir.cleopatrahospitals.example/2025-results", "title": "Cleopatra Hospitals Group results",
+             "snippet": "asset-light"}] if "cleopatra" in q.lower() else []
+
+
+def fetch(url):
+    return {"title": "Cleopatra Hospitals Group FY2025 results", "text": PAGE * 2, "url": url, "date": "2026-03-01"}
+
+
+class Model:
+    def __init__(self):
+        self.asked = []
+
+    def chat(self, *, model, messages, **kw):
+        sys_, user = messages[0]["content"], messages[-1]["content"]
+        self.asked.append(sys_[:40])
+        if "which companies it is about" in sys_:
+            out = {"companies": [{"name": "Cleopatra Hospitals Group S.A.E.", "short": "Cleopatra Hospitals Group",
+                                  "ticker": "CLHO", "exchange": "EGX", "country": "Egypt", "market_symbol": "",
+                                  "ir_site": ""}],
+                   "decision": "value the group", "questions": ["How many beds does the group operate?"]}
+        elif "extract sourced facts" in sys_:
+            pid = re.search(r"\[(S\d+\.p\d+)\]", user).group(1)
+            out = {"facts": [{"passage": pid, "text": "Cleopatra Hospitals Group completed a sale and leaseback of "
+                                                      "three hospitals in March 2025 as part of its asset-light strategy"},
+                             {"passage": pid, "text": "Management expects capital expenditure to fall to EGP 400 "
+                                                      "million in 2026 under the asset-light model"}]}
+        elif "structural changes" in sys_:
+            ids = re.findall(r"^(F\d+):", user, re.M)
+            out = {"changes": [{"change": "Asset-light shift: sale and leaseback of three hospitals", "when": "2025",
+                                "evidence": ids[:1], "affects": ["capex", "depreciation", "leases"],
+                                "so_what": "model rent, not depreciation, on the sold hospitals"},
+                               {"change": "Invented change", "when": "2026", "evidence": ["F999"], "affects": []}]}
+        else:
+            out = {}
+        return {"choices": [{"message": {"content": json.dumps(out)}}]}
+
+
+def test_dossier_researches_the_company_first_and_lists_what_changed(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_RESEARCH_EDGAR", "0")
+    facts = [{"id": "F1", "text": "Revenue EGP 4.7 billion in 2024"}]
+    d = D.build_dossier("Build a valuation model for Cleopatra Hospitals Group.", facts, client=Model(),
+                        models=["m"], out_dir=str(tmp_path), search_fn=search, fetch_fn=fetch, now="2026-11-15",
+                        max_questions=4)
+    assert d["identity"]["companies"][0]["exchange"] == "EGX"
+    assert d["questions"][0]["question"].startswith("What changed in Cleopatra Hospitals Group")
+    assert d["facts"] and all(f["id"].startswith("F") and f["id"] != "F1" for f in d["facts"])
+    assert any("asset-light" in f["text"] for f in d["facts"])
+    assert [c["change"][:17] for c in d["changes"]] == ["Asset-light shift"]       # the unsupported one is dropped
+    md = (tmp_path / "dossier.md").read_text()
+    assert "What changed" in md and "Asset-light shift" in md
+    assert "plan and model around it" in D.brief_block(d)
+
+
+def test_checklist_covers_the_analyst_basics_and_the_briefs_own_questions():
+    qs = D.questions_for({"companies": [{"short": "Acme", "country": "Egypt"}], "questions": ["Q from brief?"]},
+                         now="2026-01-01", limit=20)
+    kinds = [q["kind"] for q in qs]
+    for k in ("strategy", "results", "guidance", "deals", "financing", "capex", "news", "brief"):
+        assert k in kinds
+    assert next(q for q in qs if q["kind"] == "news")["recency"] == "month"
+    assert "since 2024" in next(q for q in qs if q["kind"] == "deals")["question"]
+    assert D._queries(dict(qs[0], company="Acme"), {"companies": [{}]})[0].startswith('"Acme"')

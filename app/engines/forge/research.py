@@ -500,7 +500,7 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
 
 def investigate(questions: list[dict | str], facts: list[dict], *, client=None, models: list[str] | None = None,
                 out_dir: str | None = None, rules: dict | None = None, task_id: str = "forge-research",
-                search_fn=None, fetch_fn=None) -> dict:
+                search_fn=None, fetch_fn=None, names: list[str] | None = None) -> dict:
     """Answer each question from the web (capped and timed). Returns {"facts": [new facts], "questions": [{question,
     why, status, facts, sources}], "seconds", "budget"}. New fact ids continue after the highest F id in `facts`."""
     from engines.research.library import Corpus
@@ -515,8 +515,9 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
 
     edgar_ok = search_fn is None and os.environ.get("MH_RESEARCH_EDGAR", "1") != "0"   # tests stub the web
     dead0: set = set()
-    mq = _queries_model([q["question"] for q in qs], client, models, task_id, dead0) if qs else None
-    for i, q in enumerate(qs):                         # short queries a search engine can use, not the sentence
+    need = [q for q in qs if not q.get("queries")]       # a caller (the dossier) may bring its own queries
+    mq = _queries_model([q["question"] for q in need], client, models, task_id, dead0) if need else None
+    for i, q in enumerate(need):                         # short queries a search engine can use, not the sentence
         q["queries"] = [x for x in ((mq[i] if mq else []) + [_keywords(q["question"])]) if x.strip()][:3]
 
     def gather(q):                                     # search + read in parallel across questions
@@ -524,7 +525,7 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
             return q, None, "skipped: time budget used"
         try:
             got = corpus.search_and_read(q["queries"], per_query=max(4, n_src + 2), max_new=n_src,
-                                         workers=n_src)
+                                         workers=n_src, recency=q.get("recency") or "")
             if edgar_ok:                                # primary filings: the place a banker checks first
                 names = [w for w in _keywords(q["question"], 6).split() if w[:1].isupper() and len(w) > 2][:2]
                 if names:
@@ -543,8 +544,8 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
         gathered = list(ex.map(gather, qs))
     new_facts: list[dict] = []
     if edgar_ok:                                     # reported figures for every company the questions name
-        names = []
-        for q in qs:
+        names = list(names or [])
+        for q in qs if not names else []:
             names += [w for w in _keywords(q["question"], 8).split() if w[:1].isupper() and len(w) > 2
                       and not re.match(r"^(EV|NTM|GW|DCF|WACC|EPS|IC|CEO|CFO|FY\d*|Q\d)$", w)][:3]
         known0 = {re.sub(r"\W+", "", f.get("text", "").lower())[:200]: f for f in facts}

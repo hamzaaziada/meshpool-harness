@@ -173,6 +173,24 @@ def _strip(s: str) -> str:
 
 # ---------- search -------------------------------------------------------------------------------------------------
 
+def _ddgs(q: str, n: int, recency: str = "", region: str = "") -> list[dict]:
+    """The free metasearch library (DuckDuckGo first, then the other engines it rotates through): sturdier against
+    bot checks than one scraped page. Optional: without the package installed this backend is skipped."""
+    try:
+        from ddgs import DDGS
+    except ImportError as e:
+        raise WebError("ddgs is not installed") from e
+    kw = {"max_results": n, "region": region or "wt-wt", "backend": "auto"}
+    if recency in RECENCY:
+        kw["timelimit"] = RECENCY[recency][0]
+    try:
+        rows = DDGS(timeout=12).text(q, **kw) or []
+    except Exception as e:  # noqa: BLE001 - the library raises its own types for blocks and empty answers
+        raise WebError(f"free metasearch: {str(e)[:120]}") from e
+    return [{"title": _strip(r.get("title", "")), "url": r.get("href") or r.get("url", ""),
+             "snippet": _strip(r.get("body", ""))} for r in rows if (r.get("href") or r.get("url"))][:n]
+
+
 def _ddg(q: str, n: int, recency: str = "", region: str = "") -> list[dict]:
     form = {"q": q, "kl": region or "wt-wt"}
     if recency in RECENCY:
@@ -263,11 +281,20 @@ def _brave_html(q: str, n: int, recency: str = "", region: str = "") -> list[dic
 
 def _relevant(rows: list[dict], q: str) -> list[dict]:
     """Drop a result set that does not match the query (some engines serve unrelated results to automated clients)."""
-    terms = [w for w in re.findall(r"[^\W_]{3,}", q.lower()) if w not in ("site", "the", "and", "for", "with")]
+    q = re.sub(r"\bsite:\S+", " ", q.lower())
+    phrases = [p for p in re.findall(r'"([^"]+)"', q) if p.strip()]
+    terms = [w for w in re.findall(r"[^\W_]{3,}", q) if w not in ("the", "and", "for", "with", "from", "into")]
     if not rows or not terms:
         return rows
-    ok = [r for r in rows if any(t in (r["title"] + " " + r["snippet"] + " " + r["url"]).lower() for t in terms)]
-    return ok if len(ok) >= max(1, len(rows) // 2) else []
+
+    def hit(r):
+        blob = re.sub(r"[^\w%$.]+", " ", (r["title"] + " " + r["snippet"] + " " + r["url"]).lower())
+        if phrases and not all(re.sub(r"[^\w%$.]+", " ", p).strip() in blob for p in phrases):
+            return False                                      # a quoted name must appear as written
+        need = 1 if len(terms) <= 2 else max(2, (len(terms) + 2) // 3)
+        return sum(t in blob for t in set(terms)) >= need     # one shared word is not a match ("Cleopatra")
+    ok = [r for r in rows if hit(r)]
+    return ok if len(ok) >= max(1, len(rows) // 3) else []
 
 
 def _api_backends() -> list:
@@ -361,6 +388,13 @@ def search(query: str, n: int = 8, recency: str = "", region: str = "", site: st
                     break
             except (WebError, ValueError) as e:
                 errors.append(f"{name}: {e}")
+    if len(lists) == 0 or sum(len(x) for x in lists) < n:
+        try:                                                   # the free metasearch library first
+            rows = _relevant(_try("metasearch", _ddgs, query, n, recency, region), query)
+            if rows:
+                lists.append(rows)
+        except (WebError, ValueError) as e:
+            errors.append(f"metasearch: {e}")
     if len(lists) == 0 or sum(len(x) for x in lists) < n:
         with ThreadPoolExecutor(2) as ex:
             futs = {ex.submit(_try, name, fn, query, n, recency, region): name
