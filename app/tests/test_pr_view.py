@@ -6,7 +6,7 @@ from meshpool_harness.ui import workbench as W
 
 PR = {"number": 7, "title": "Add totals", "html_url": "https://github.com/o/r/pull/7", "state": "open", "draft": False,
       "merged_at": None, "head": {"ref": "feat", "sha": "abc1234def", "repo": {"full_name": "o/r"}},
-      "base": {"ref": "main"}, "user": {"login": "meshpool"}, "updated_at": "2026-11-15T09:00:00Z",
+      "base": {"ref": "main", "sha": "base999"}, "user": {"login": "meshpool"}, "updated_at": "2026-11-15T09:00:00Z",
       "created_at": "2026-11-15T08:00:00Z", "node_id": "PR_x", "body": "Adds totals", "additions": 12, "deletions": 3,
       "changed_files": 2, "commits": 1, "mergeable": True, "mergeable_state": "clean"}
 
@@ -100,3 +100,22 @@ def test_comments_show_and_post_to_github(repo, monkeypatch):
     assert ("POST", "/repos/o/r/issues/7/comments", {"body": "Ship it"}) in calls
     with pytest.raises(ValueError, match="Write a comment"):
         W.pr_action(repo, {"action": "comment", "pr": 7, "body": "  "})
+
+
+def test_file_preview_fetches_before_and_after_and_only_safe_kinds(repo, monkeypatch):
+    import base64
+    seen = []
+    base = fake()
+
+    def api(path, token, method="GET", body=None):
+        if "/contents/" in path:
+            seen.append(path)
+            return {"type": "file", "size": 4, "content": base64.b64encode(b"# Hi").decode()}
+        return base(path, token, method, body)
+    monkeypatch.setattr(W, "_gh_api", api)
+    data, ctype = W.pr_file(repo, 7, "docs/a.md", "head")
+    assert data == b"# Hi" and ctype.startswith("text/plain")          # Markdown and HTML come back as plain text
+    W.pr_file(repo, 7, "docs/a.md", "base")
+    assert "ref=abc1234def" in seen[0] and "ref=abc1234def" not in seen[1]
+    with pytest.raises(ValueError, match="No preview"):
+        W.pr_file(repo, 7, "app/run.py", "head")

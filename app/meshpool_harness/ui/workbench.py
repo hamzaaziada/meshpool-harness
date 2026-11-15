@@ -798,6 +798,7 @@ def _pr_row(p: dict) -> dict:
     return {"number": p["number"], "title": p["title"], "url": p["html_url"],
             "state": "merged" if p.get("merged_at") else p["state"], "draft": bool(p.get("draft")),
             "head": p["head"]["ref"], "base": p["base"]["ref"], "sha": p["head"]["sha"],
+            "base_sha": p["base"].get("sha", ""),
             "author": (p.get("user") or {}).get("login", ""), "updated": p.get("updated_at"),
             "created": p.get("created_at"), "merged": p.get("merged_at"), "node": p.get("node_id")}
 
@@ -884,10 +885,45 @@ def pr_detail(root: str, number: int) -> dict:
                             "created": c.get("created_at"), "url": c.get("html_url")} for c in cm[-30:]]
     except ValueError:
         out["comments"] = []
+    # a preview of the change: a deployment's address, else a preview link a check posted (Vercel, Netlify, ...)
+    out["preview_url"] = next((d["url"] for d in out["deployments"] if d.get("url")), "") or next(
+        (c["url"] for c in out["checks"] if c.get("url") and re.search(r"(?i)preview|vercel|netlify|pages|deploy", c["name"] + c.get("app", ""))
+         and not re.search(r"github\.com/.+/(actions|runs)/", c["url"])), "")
     # merging from the view: only an open pull request whose checks pass and that GitHub says can merge
     out["can_merge"] = (out["state"] == "open" and not out["draft"] and out["verdict"] in ("passing", "none")
                         and out["mergeable"] is True and bool(token))
     return out
+
+
+PREVIEW_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                 ".webp": "image/webp", ".svg": "image/svg+xml", ".md": "text/plain; charset=utf-8",
+                 ".markdown": "text/plain; charset=utf-8", ".html": "text/plain; charset=utf-8",
+                 ".htm": "text/plain; charset=utf-8"}
+
+
+def pr_file(root: str, number: int, path: str, side: str = "head") -> tuple[bytes, str]:
+    """One file of a pull request as it is after the change (head) or before it (base), for the preview: images,
+    Markdown and HTML only, at most 5 MB. HTML and Markdown come back as plain text; the page shows them sandboxed."""
+    import base64
+    ext = Path(path).suffix.lower()
+    if ext not in PREVIEW_TYPES:
+        raise ValueError("No preview for this kind of file.")
+    slug, token = _repo(root)
+    p = _gh_api(f"/repos/{slug}/pulls/{int(number)}", token)
+    repo, ref = ((p["head"].get("repo") or {}).get("full_name") or slug, p["head"]["sha"]) if side == "head" \
+        else (slug, p["base"]["sha"])
+    meta = _gh_api(f"/repos/{repo}/contents/{urllib.parse.quote(path)}?ref={ref}", token)
+    if not isinstance(meta, dict) or meta.get("type") != "file":
+        raise ValueError("That file is not in this version.")
+    if meta.get("size", 0) > 5 * 1024 * 1024:
+        raise ValueError("Too large to preview here. Open it on GitHub.")
+    if meta.get("content"):
+        data = base64.b64decode(meta["content"])
+    else:                                                  # over 1 MB: GitHub sends a download address instead
+        h = {"User-Agent": "Meshpool", **({"Authorization": f"Bearer {token}"} if token else {})}
+        with urllib.request.urlopen(urllib.request.Request(meta["download_url"], headers=h), timeout=30) as r:
+            data = r.read(5 * 1024 * 1024 + 1)
+    return data[:5 * 1024 * 1024], PREVIEW_TYPES[ext]
 
 
 def pr_action(root: str, body: dict) -> dict:

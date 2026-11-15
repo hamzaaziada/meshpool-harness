@@ -743,3 +743,10 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .prv-cm{border:1px solid var(--line);border-radius:var(--r-m);padding:10px 12px;margin-bottom:8px;background:var(--surface)}
 .prv-cmb{white-space:pre-wrap;margin-top:4px;max-height:240px;overflow:auto;word-break:break-word}
 .prv-cmnew{display:flex;flex-direction:column;gap:8px;align-items:flex-end}.prv-cmnew textarea{width:100%}
+.prv-pvb{flex:none;font-size:var(--fs-xs)}
+.prv-img{display:flex;gap:16px;padding:14px;flex-wrap:wrap;background:repeating-conic-gradient(var(--side) 0 25%,var(--bg) 0 50%) 0 0/16px 16px}
+.prv-img figure{margin:0;flex:1;min-width:200px}.prv-img figcaption{font-size:var(--fs-xs);color:var(--ink-2);margin-bottom:6px;font-weight:600}
+.prv-img img{max-width:100%;max-height:60vh;display:block;border:1px solid var(--line);background:var(--bg)}
+.prv-md{padding:14px 18px}
+.prv-html{width:100%;height:60vh;border:0;background:#fff;display:block}
+.prv-pvbar{padding:6px 12px;border-top:1px solid var(--line-2);background:var(--side)}

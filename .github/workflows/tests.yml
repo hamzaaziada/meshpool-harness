@@ -30,6 +30,15 @@ jobs:
           python -m pip install --upgrade pip
           # the same packages the app ships with (install.sh and the desktop builds use this file)
           pip install -r packaging/requirements-cli.txt playwright pytest
+      - name: Chromium for browser use (the app installs it with meshpool install-browser)
+        run: python -m playwright install --with-deps chromium
+      - name: Segoe UI's stand-in for rendering (decks are measured with the bundled Selawik, as on a user's computer)
+        run: |
+          mkdir -p ~/.local/share/fonts ~/.config/fontconfig
+          cp app/engines/forge/fonts/Selawik-*.ttf ~/.local/share/fonts/
+          printf '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><alias><family>Segoe UI</family><prefer><family>Selawik</family></prefer></alias></fontconfig>\n' > ~/.config/fontconfig/fonts.conf
+          fc-cache -f >/dev/null
+          fc-match "Segoe UI"
       - name: Tests
         working-directory: app
         run: python -m pytest -q -p no:cacheprovider tests

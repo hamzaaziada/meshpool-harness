@@ -2411,6 +2411,8 @@ async function prDetail() {
       <div class="prv-title">${prStateBadge(p)}<h2>${esc(p.title)} <span class="stat">#${p.number}</span></h2></div>
       <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${ago(p.updated)}</div>
       <div class="prv-acts"><a class="btn" href="${esc(p.url)}" target="_blank" rel="noopener">Open on GitHub</a>
+        ${p.preview_url ? `<button class="btn" id="prvPrev" title="${esc(p.preview_url)}">Preview</button>` : ""}
+        <button class="btn" id="prvRev">Review with the agent</button>
         ${p.state === "open" && p.draft && p.connected ? `<button class="btn" id="prvReady">Ready for review</button>` : ""}
         ${p.state === "open" ? `<button class="btn primary" id="prvMerge" ${p.can_merge ? "" : `disabled title="${esc(why)}"`}>Squash and merge</button>${why ? `<span class="stat">${esc(why)}</span>` : ""}` : ""}</div>
     </header>
@@ -2430,7 +2432,8 @@ async function prDetail() {
       ${p.connected ? `<div class="prv-cmnew"><textarea id="prvCm" rows="3" placeholder="Comment on GitHub"></textarea><button class="btn" id="prvCmGo">Comment</button></div>` : `<div class="stat">Connect GitHub to comment.</div>`}</section>
     <section class="prv-sec"><h4>Files changed <span class="stat">${p.files.length}${p.files.length < p.changed_files ? ` of ${p.changed_files}` : ""}</span><span class="sp"></span><button class="linkbtn" id="prvAll">Expand all</button></h4>
       ${p.files.map((f, i) => { const [cl, w] = CH_BADGE[f.status === "removed" ? "deleted" : f.status === "modified" ? "changed" : f.status] || CH_BADGE.changed;
-        return `<details class="prv-file" data-i="${i}"><summary><span class="badge ${cl}">${w}</span><span class="cn">${esc(f.from ? f.from + " → " + f.path : f.path)}</span><span class="nw"><span class="plus">+${f.added}</span> <span class="minus">−${f.removed}</span></span></summary><div class="prv-fb"></div></details>`; }).join("")}
+        const pv = PRV_KIND(f.path) && f.status !== "removed";
+        return `<details class="prv-file" data-i="${i}"><summary><span class="badge ${cl}">${w}</span><span class="cn">${esc(f.from ? f.from + " → " + f.path : f.path)}</span>${pv ? `<button class="linkbtn prv-pvb" data-pv="${i}">Preview</button>` : ""}<span class="nw"><span class="plus">+${f.added}</span> <span class="minus">−${f.removed}</span></span></summary><div class="prv-fb"></div></details>`; }).join("")}
     </section>`;
   $$(".prv-file", M).forEach(d => d.addEventListener("toggle", () => {   // a file's diff is drawn when it is opened
     const fb = $(".prv-fb", d); if (!d.open || fb.dataset.done) return; fb.dataset.done = 1;
@@ -2438,6 +2441,9 @@ async function prDetail() {
     fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">${f.binary ? "A binary file: no text to show." : "Too large to show here. Open it on GitHub."}</div>`;
   }));
   if (p.files.length && p.files.length <= 4) $$(".prv-file", M).forEach(d => d.open = true);
+  $$("[data-pv]", M).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); prPreview(p, +b.dataset.pv, b.closest(".prv-file")); });
+  $("#prvPrev")?.addEventListener("click", () => { store("preview", p.preview_url); closePRView(); togglePanel("preview", true); });
+  $("#prvRev").onclick = () => { closePRView(); sendCmd(`Review pull request #${p.number} (${p.url}): ${p.head} into ${p.base}. Read its diff (git fetch, then git diff origin/${p.base}...origin/${p.head}, or the GitHub tools) and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.`); };
   $("#prvAll").onclick = () => $$(".prv-file", M).forEach(d => d.open = true);
   $("#prvMerge")?.addEventListener("click", async () => {
     if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. Its checks passed.`, ok: "Merge"})) return;
@@ -2456,4 +2462,30 @@ async function prDetail() {
   });
   // keep it live while anything is still running
   if (p.verdict === "running" || p.runs.some(r => r.status !== "completed")) PRV.timer = setTimeout(() => { if ($(".prv-scrim")) prDetail(); }, 20000);
+}
+
+/* File previews in a pull request: images before and after, Markdown rendered, HTML in a sandbox (no scripts). */
+const PRV_KIND = path => /\.(png|jpe?g|gif|webp|svg)$/i.test(path) ? "image" : /\.(md|markdown)$/i.test(path) ? "md" : /\.html?$/i.test(path) ? "html" : "";
+async function prFile(p, path, side) {
+  const r = await fetch(`/api/git/pr/file?root=${encodeURIComponent(PRV.root)}&n=${p.number}&side=${side}&path=${encodeURIComponent(path)}`, {headers: {"X-Meshpool-Token": MP.token}});
+  if (!r.ok) { let m = `Could not load ${side === "head" ? "the new" : "the old"} version.`; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+  return r;
+}
+async function prPreview(p, i, det) {
+  const f = p.files[i], kind = PRV_KIND(f.path), fb = $(".prv-fb", det);
+  det.open = true; fb.dataset.done = 1;
+  fb.innerHTML = `<div class="stat" style="padding:10px">Loading the preview...</div>`;
+  try {
+    if (kind === "image") {
+      const sides = [["base", "Before"], ["head", "After"]].filter(([sd]) => !(sd === "base" && f.status === "added"));
+      const urls = await Promise.all(sides.map(async ([sd]) => URL.createObjectURL(await (await prFile(p, sd === "base" && f.from ? f.from : f.path, sd)).blob())));
+      fb.innerHTML = `<div class="prv-img">${sides.map(([, lb], k) => `<figure><figcaption>${lb}</figcaption><img src="${urls[k]}" alt="${esc(lb + " " + f.path)}"></figure>`).join("")}</div>`;
+    } else {
+      const text = await (await prFile(p, f.path, "head")).text();
+      if (kind === "md") fb.innerHTML = `<div class="prv-md md">${md(text)}</div>`;
+      else { fb.innerHTML = `<iframe class="prv-html" sandbox title="${esc(f.path)}"></iframe>`; $(".prv-html", fb).srcdoc = text; }
+    }
+    fb.insertAdjacentHTML("beforeend", `<div class="prv-pvbar"><button class="linkbtn" data-diff="1">Show the diff</button></div>`);
+    $("[data-diff]", fb).onclick = () => { fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">No text diff.</div>`; };
+  } catch (e) { fb.innerHTML = `<div class="stat" style="padding:10px">${esc(e.message)}</div>`; }
 }

@@ -363,6 +363,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.git_ci(parse_qs(u.query).get("root", [""])[0]))
             if u.path == "/api/git/prs":
                 return self._send(200, W.pr_list(parse_qs(u.query).get("root", [""])[0]))
+            if u.path == "/api/git/pr/file":                # file previews: served sandboxed, never run as a page
+                q = parse_qs(u.query)
+                data, ctype = W.pr_file(q.get("root", [""])[0], int(q.get("n", ["0"])[0] or 0), q.get("path", [""])[0],
+                                        q.get("side", ["head"])[0])
+                return self._send(200, data, ctype, {"Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'"})
             if u.path == "/api/git/pr":
                 q = parse_qs(u.query)
                 return self._send(200, W.pr_detail(q.get("root", [""])[0], int(q.get("n", ["0"])[0] or 0)))
