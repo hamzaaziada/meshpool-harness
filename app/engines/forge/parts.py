@@ -987,8 +987,8 @@ def words_only_to_argument(s: dict) -> dict | None:
     layout, which marks every block with figures, process steps or an icon by its meaning (compose.py), the
     callout becoming its so-what band. None when the grid has a visual part."""
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
-    if not parts or any(p.get("type") not in WORD_PARTS for p in parts):
-        return None
+    if not parts or any(p.get("type") not in WORD_PARTS for p in parts) or s.get("_condensed"):
+        return None                                      # a presenting-density matrix keeps its bold row panels
     blocks, band = [], []
     for p in parts:
         if p.get("type") == "callout":
