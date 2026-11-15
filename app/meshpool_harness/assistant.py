@@ -482,13 +482,51 @@ def search_chats(query: str, limit: int = 8) -> str:
 
 # ---------- parallel sub-agents -------------------------------------------------------------------------------------
 
-def run_subtasks(items: list, folder: str = "", max_parallel: int = 4, max_steps: int = 30) -> str:
-    """Run independent research or reading tasks in parallel with Meshpool's own agent (read-only plus web tools)."""
+def subagent_settings() -> dict:
+    """Sub-agent settings from Settings, Advanced (meshpool.config), with safe bounds."""
+    import os
+    try:
+        saved = C.read()                                     # the file, not this process's start-up copy of it
+    except Exception:  # noqa: BLE001
+        saved = {}
+
+    def get(key):
+        return saved.get(key) or os.environ.get(key) or ""
+
+    def num(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(float(get(key) or default))))
+        except ValueError:
+            return default
+    return {"on": (get("MH_SUBAGENTS") or "1").strip().lower() not in ("0", "off", "false", "no"),
+            "model": get("MH_SUBAGENT_MODEL").strip(),
+            "access": "edit" if get("MH_SUBAGENT_ACCESS").strip().lower() == "edit" else "read",
+            "parallel": num("MH_SUBAGENT_PARALLEL", 4, 1, 6),
+            "steps": num("MH_SUBAGENT_STEPS", 30, 5, 200),
+            "minutes": num("MH_SUBAGENT_MINUTES", 20, 1, 25)}     # under the tool's 30 min timeout (mcp.json)
+
+
+READ_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
+EDIT_TOOLS = READ_TOOLS + ["write_file", "edit"]
+
+
+def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps: int = 0,
+                 parent: dict | None = None) -> str:
+    """Run independent parts of a job in parallel with Meshpool's own agent.
+
+    Settings (Settings, Advanced): on or off, the model (empty: the parent chat's model), read-only or edit access,
+    how many at once, steps per sub-agent and a time limit for the whole call. `parent` comes from the chat that
+    calls the tool, not from the model: its model, its permission mode and a stop file that appears when the user
+    presses Stop. At the time limit or on Stop every sub-agent stops and the parts report what they have."""
     import os
     import shutil
     from concurrent.futures import ThreadPoolExecutor
     from meshpool_harness.agent import core as K
     C.load_into_env(override=False)
+    cfg = subagent_settings()
+    parent = parent if isinstance(parent, dict) else {}
+    if not cfg["on"]:
+        raise ValueError("Sub-agents are off in Settings, Advanced. Do the parts one after another yourself.")
     rows = []
     for it in items or []:
         if isinstance(it, str):
@@ -499,9 +537,19 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 4, max_steps
         raise ValueError("Give at least one task with a prompt.")
     rows = rows[:12]
     root = folder or os.environ.get("MESHPOOL_PROJECT") or ""
-    if not root or not Path(root).is_dir():                  # no project: an empty folder, never the home folder
+    has_project = bool(root) and Path(root).is_dir()
+    if not has_project:                                      # no project: an empty folder, never the home folder
         root = tempfile.mkdtemp(prefix="meshpool-sub-")
-    tools = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
+    # Edits only where the parent chat itself may edit without asking (sub-agents cannot ask), and in a project.
+    edit = cfg["access"] == "edit" and has_project and parent.get("mode") in ("edits", "auto")
+    tools = EDIT_TOOLS if edit else READ_TOOLS
+    model = cfg["model"] or str(parent.get("model") or "")
+    steps = int(max_steps or cfg["steps"])
+    workers = max(1, min(int(max_parallel or cfg["parallel"]), cfg["parallel"], 6))
+    deadline = time.time() + cfg["minutes"] * 60
+    stop_file = str(parent.get("stop_file") or "")
+    live: list = []
+    halted = {"why": ""}
 
     class Sub(K.Agent):
         def _tool_names(self):
@@ -511,26 +559,61 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 4, max_steps
             # Sub-agents run unattended, so what would need a yes in Supervised (a read outside the project, an
             # address carrying data out) is refused instead of allowed: run_subtasks itself runs without asking.
             risky = self._outside(name, args)
-            return (False, "Sub-agents only read inside the project. Ask the user to attach the file.") if risky \
-                else (True, "")
+            if risky:
+                return False, "Sub-agents only read inside the project. Ask the user to attach the file."
+            if name in ("write_file", "edit") and not edit:
+                return False, "Sub-agents cannot change files here."
+            return True, ""
+
+    def watch():                                             # the time limit and the parent's Stop
+        while live is not None and not halted.get("done"):
+            why = ("the time limit" if time.time() >= deadline else
+                   "Stop" if stop_file and os.path.exists(stop_file) else "")
+            if why:
+                halted["why"] = why
+                for a in list(live):
+                    a.stop()
+                return
+            time.sleep(0.5)
 
     def one(r):
         a = None
         t0 = time.time()
+        if halted["why"]:
+            return f"## {r['title']}\n\nNot started: the sub-agents were stopped ({halted['why']})."
         try:
-            a = Sub(root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=max_steps, profile="work")
-            a.messages[0]["content"] += ("\n\nYou are a sub-agent working on one part of a larger job. You can read "
-                                         "files and the web but not change anything. Do the task fully, then reply "
-                                         "with a complete, self-contained report: findings first, with a link or "
-                                         "file path for every fact, and say what you could not find.")
-            out = a.send(r["prompt"]) or "(no reply)"
+            a = Sub(root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=steps, profile="work")
+            if model:
+                a.model = model
+            a.messages[0]["content"] += (
+                "\n\nYou are a sub-agent working on one part of a larger job; other sub-agents work on the other parts "
+                "at the same time. " + ("You can read files and the web, and create or edit files in the project: "
+                                        "change only the files your task is about. " if edit else
+                                        "You can read files and the web but not change anything. ")
+                + "Do the task fully, then reply with a complete, self-contained report: findings first, with a link "
+                "or file path for every fact, and say what you could not find.")
+            live.append(a)
+            out = a.send(r["prompt"]) or ""
+            if not out.strip():                              # stopped: keep what it had written so far
+                out = next((m.get("content") for m in reversed(a.messages) if m.get("role") == "assistant"
+                            and isinstance(m.get("content"), str) and m["content"].strip()), "") or "(no reply)"
+            if halted["why"] and getattr(a, "_stop", False):
+                out = f"(Stopped by {halted['why']} before it finished; this is what it had.)\n\n" + out
         except Exception as e:                                # noqa: BLE001 - one failed part must not sink the rest
             out = f"This part failed: {e}"
         finally:
             if a is not None:
+                with contextlib.suppress(ValueError):
+                    live.remove(a)
                 shutil.rmtree(a.dir, ignore_errors=True)
         return f"## {r['title']}\n({round(time.time() - t0)} s)\n\n{out.strip()}"
 
-    with ThreadPoolExecutor(max(1, min(int(max_parallel or 4), 6))) as ex:
-        res = list(ex.map(one, rows))
-    return f"{len(rows)} parts finished.\n\n" + "\n\n".join(res)
+    threading.Thread(target=watch, daemon=True).start()
+    try:
+        with ThreadPoolExecutor(workers) as ex:
+            res = list(ex.map(one, rows))
+    finally:
+        halted["done"] = True
+    head = f"{len(rows)} parts finished." if not halted["why"] else \
+        f"{len(rows)} parts; the sub-agents were stopped by {halted['why']}, so some parts are incomplete."
+    return head + "\n\n" + "\n\n".join(res)

@@ -51,9 +51,9 @@ def search_chats(query: str) -> str:
     return A.search_chats(query)
 
 
-def run_subtasks(tasks: list, max_parallel: int = 4) -> str:
+def run_subtasks(tasks: list, max_parallel: int = 0, parent: dict | None = None) -> str:
     import os
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel)
+    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, parent=parent)
 
 
 TOOLS = {
@@ -84,13 +84,14 @@ TOOLS = {
                          "chats with a snippet. Use it when the user refers to something from a past chat.",
                          {"query": {"type": "string"}}, ["query"]),
     "run_subtasks": Tool(_wrap(run_subtasks), "Run independent parts of a big job in parallel with sub-agents. Each "
-                         "part gets its own agent that can search and read the web and read files (it cannot change "
-                         "anything) and returns a sourced report. Use it to research many companies or people, "
+                         "part gets its own agent that can search and read the web and read files (it changes files only "
+                         "when Settings allow sub-agents to edit) and returns a sourced report. Use it to research many companies or people, "
                          "compare many options, or review many documents at once. Give each part a complete, "
                          "standalone prompt. Up to 12 parts.",
                          {"tasks": {"type": "array", "items": {"type": "object", "properties": {
                              "title": {"type": "string"}, "prompt": {"type": "string"}}, "required": ["prompt"]}},
-                          "max_parallel": {"type": "integer", "description": "1 to 6, default 4"}}, ["tasks"]),
+                          "max_parallel": {"type": "integer", "description": "1 to 6; at most the number set in "
+                                                                          "Settings (default 4)"}}, ["tasks"]),
 }
 
 if __name__ == "__main__":

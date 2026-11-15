@@ -27,6 +27,20 @@ FIELDS = [
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
      "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
      "uses that plan's limits). Off: Auto stays on the provider you chose."),
+    ("MH_SUBAGENTS", "Sub-agents", "1", "On: an agent can split a big job into parts that run at the same time, "
+     "each with its own agent. Off: it works through the parts itself."),
+    ("MH_SUBAGENT_MODEL", "Sub-agent model", "", "The model sub-agents run on. Empty: the same model as the chat that "
+     "starts them."),
+    ("MH_SUBAGENT_ACCESS", "What sub-agents may do", "read", "Read and research: files and the web, nothing changed. "
+     "Read and edit: they may also create and edit files in the project, when the chat itself may edit without "
+     "asking (Auto-accept edits or Full access). They never run commands."),
+    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 6."),
+    ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "30", "The most tool steps one sub-agent takes before it reports "
+     "(5 to 200)."),
+    ("MH_SUBAGENT_MINUTES", "Sub-agent time limit (minutes)", "20", "All sub-agents of one job stop at this and "
+     "report what they have (1 to 25)."),
+    ("MH_MAX_INFLIGHT", "Model calls at the same time", "4", "Per key, across all chats and sub-agents. While the "
+     "endpoint is recovering from an outage, calls go one at a time."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),
