@@ -207,3 +207,30 @@ def test_p21_language_lint_flags_machine_written_words(tmp_path):
     prs.save(tmp_path / "x.pptx")
     got = {(f["rule"], f["check"]) for f in validate(str(tmp_path / "x.pptx"), load_rules(), render=False)["failures"]}
     assert {("P21", "banned_phrase"), ("P21", "em_dash"), ("P21", "exclamation"), ("P21", "all_caps")} <= got
+
+
+def test_arabic_slides_read_right_to_left_and_mirror(tmp_path):
+    from pptx import Presentation
+    from engines.forge.common import is_rtl, text_width_in
+    from engines.forge.render import render
+    assert is_rtl("ارتفعت الإيرادات بنسبة 31% في 2025") and not is_rtl("Revenue grew 31% in 2025")
+    assert 1.5 < text_width_in("ارتفعت الإيرادات بنسبة 31% في 2025", 14, None) < 4.5       # shaped, measured
+    sl = [{"id": "S1", "node": "1.1", "archetype": "grid", "title": "ثلاث أولويات للإدارة في 2026 لدعم النمو",
+           "title_prov": ["F1"], "parts": [{"type": "process", "heading": "الخطوات", "steps": [
+               {"title": "توسيع الطاقة", "text": "إضافة 200 سرير"}, {"title": "خفض النفقات", "text": "400 مليون جنيه"},
+               {"title": "رفع الهامش", "text": "تحسين الهامش"}]}], "source": {"text": "عرض المستثمرين 2025", "prov": ["F1"]}},
+          {"id": "S2", "node": "1.2", "archetype": "grid", "title": "Three priorities for 2026 support growth",
+           "title_prov": ["F1"], "parts": [{"type": "process", "heading": "Steps", "steps": [
+               {"title": "Add capacity", "text": "200 beds"}, {"title": "Cut capex", "text": "EGP 400m"},
+               {"title": "Lift margin", "text": "EBITDA margin"}]}], "source": {"text": "Investor deck 2025", "prov": ["F1"]}}]
+    render(sl, str(tmp_path / "ar.pptx"), carry=False, density="balanced")
+    prs = Presentation(str(tmp_path / "ar.pptx"))
+    ar, en = prs.slides[0], prs.slides[1]
+    assert 'rtl="1"' in ar._element.xml and 'lang="ar-SA"' in ar._element.xml and "المصدر: " in ar._element.xml
+    assert 'rtl="1"' not in en._element.xml
+
+    def step_x(slide, word):
+        return next(sh.left for sh in slide.shapes if sh.has_text_frame and word in sh.text_frame.text)
+    assert step_x(ar, "توسيع الطاقة") > step_x(ar, "رفع الهامش")          # step 1 on the right
+    assert step_x(en, "Add capacity") < step_x(en, "Lift margin")
+    assert 'flipH="1"' in ar._element.xml

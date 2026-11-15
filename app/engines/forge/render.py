@@ -661,7 +661,9 @@ def _footer(ctx, s, sl, n):
     src = s.get("source") or {}
     if src.get("text"):
         _rule(sl, LEFT, FOOT_RULE_Y, RIGHT - LEFT, TC.TEXT_1, 0.5, "SourceRule")
-        t = src["text"] if re.match(r"(?i)^(source|note)", src["text"]) else "Source: " + src["text"]
+        from .common import is_rtl as _rtl
+        t = (src["text"] if re.match(r"(?i)^(source|note|المصدر|ملاحظة)", src["text"].strip()) else
+             ("المصدر: " if _rtl(src["text"]) else "Source: ") + src["text"])
         sx, sw = span(0, 9)
         _write(_box(sl, sx, SRC_Y, sw, 0.34, "Source"), [{"text": t, "size": T["src"], "numbers": False}])
     edges = [colx24(i) + CW for i in range(COLS)]
@@ -3029,6 +3031,69 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
+RTL_FONT = "Arial"           # the complex-script face: ships Arabic glyphs on Windows and macOS
+DIRECTIONAL = {"homePlate", "chevron", "rightArrow", "leftArrow", "notchedRightArrow", "stripedRightArrow",
+               "rightArrowCallout", "leftArrowCallout", "pentagon", "triangle", "rtTriangle", "curvedRightArrow"}
+
+
+def apply_rtl(prs) -> int:
+    """Every paragraph that is mostly Arabic reads right to left: rtl on the paragraph, right alignment (a centred
+    paragraph stays centred), the Arabic language tag and a complex-script face on each run. Deterministic, after
+    layout, so any model's Arabic text renders correctly. Returns the number of paragraphs changed."""
+    from .common import is_rtl
+    A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    n = 0
+    W = prs.slide_width
+    for sl in prs.slides:                    # a slide whose title reads right to left is mirrored as a whole: the
+        title = next((sh for sh in sl.shapes if sh.is_placeholder and sh.placeholder_format.type in (1, 3)), None)
+        ttext = title.text_frame.text if title is not None and title.has_text_frame else ""
+        if not ttext:                        # first column, step 1 and the panel order start on the right
+            ttext = " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame)[:400]
+        if is_rtl(ttext) and not any((sh.name or "").startswith("rtl:mirrored") for sh in sl.shapes):
+            for sh in sl.shapes:
+                if sh.left is not None and sh.width is not None:
+                    sh.left = int(W - sh.left - sh.width)
+                geom = sh._element.find(f".//{A}prstGeom")
+                if geom is not None and geom.get("prst") in DIRECTIONAL:     # arrows and chevrons point the other way
+                    xfrm = sh._element.find(f".//{A}xfrm")
+                    if xfrm is not None:
+                        if xfrm.get("flipH") == "1":
+                            del xfrm.attrib["flipH"]
+                        else:
+                            xfrm.set("flipH", "1")
+            mark = sl.shapes[0] if len(sl.shapes) else None
+            if mark is not None:
+                mark.name = "rtl:mirrored " + (mark.name or "")
+    for sl in prs.slides:
+        for p in sl._element.iter(f"{A}p"):
+            text = "".join(t.text or "" for t in p.iter(f"{A}t"))
+            if not is_rtl(text):
+                continue
+            ppr = p.find(f"{A}pPr")
+            if ppr is None:
+                ppr = p.makeelement(f"{A}pPr", {})
+                p.insert(0, ppr)
+            ppr.set("rtl", "1")
+            if ppr.get("algn") in (None, "l", "just"):
+                ppr.set("algn", "r")
+            for r in p.iter(f"{A}r", f"{A}fld"):
+                rpr = r.find(f"{A}rPr")
+                if rpr is None:
+                    rpr = r.makeelement(f"{A}rPr", {})
+                    r.insert(0, rpr)
+                rpr.set("lang", rpr.get("lang") if (rpr.get("lang") or "").startswith("ar") else "ar-SA")
+                cs = rpr.find(f"{A}cs")
+                if cs is None:
+                    cs = rpr.makeelement(f"{A}cs", {})
+                    order = ["ln", "noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "effectLst",
+                             "effectDag", "highlight", "uLnTx", "uLn", "uFillTx", "uFill", "latin", "ea"]
+                    after = [c for c in rpr if c.tag.split("}")[-1] in order]
+                    (after[-1].addnext(cs) if after else rpr.insert(0, cs))
+                cs.set("typeface", RTL_FONT)
+            n += 1
+    return n
+
+
 def render(slides: list[dict], out_path: str, template: str | None = None, fix_labels: bool = True,
            carry: bool = True, theme=None, density: str | None = None, brand: dict | None = None,
            icon_set: str | None = None) -> dict:
@@ -3220,6 +3285,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
             errors.append(f"slide {n}: rows carried to a continuation slide (content longer than one slide); "
                           f"{len(left)} rows left out because the slide count is fixed")
     errors += ctx.overflow
+    apply_rtl(prs)
     prs.save(out_path)
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
