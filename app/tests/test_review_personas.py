@@ -67,3 +67,15 @@ def test_panel_needs_both_and_merges_duplicate_issues():
     assert not nr["signed_off"] and nr["not_run"] == ["md", "partner"]
     assert P.slide_of("Slide 12, chart") == 12 and P.slide_of("DCF!C14") is None
     assert "senior partner 9.0/10 (signs off)" in P.summary(P.panel(Stub({"partner": good_p, "md": good_m}), "deck", "m", "m"))
+
+
+def test_a_review_cut_off_mid_json_keeps_its_scores_and_complete_issues():
+    """Seen live: the MD's long workbook review hit the token limit and was thrown away as unparsed."""
+    text = ('```json\n{"persona": "md", "target": "workbook", "scores": {"integrity": 1, "assumptions": 3, '
+            '"valuation": 1, "structure": 3, "outputs": 1}, "headline": "This file cannot leave the desk", '
+            '"verdict": "revise", "issues": [{"severity": "blocking", "scope": "logic", "where": "Model!C5", '
+            '"issue": "C5 references itself", "fix": "link C5 to Inputs"}, {"severity": "blocking", "scope": "valua')
+    r = P.parse_review(text, "md", "workbook")
+    assert r["status"] == "ok" and r["verdict"] == "revise" and r["overall"] < 2
+    assert len(r["issues"]) == 1 and r["issues"][0]["where"] == "Model!C5"
+    assert r["headline"] == "This file cannot leave the desk"

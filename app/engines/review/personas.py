@@ -200,6 +200,30 @@ Return ONLY JSON:
  "research_requests": [{{"question": "...", "why": "..."}}]{', "cut_or_merge": [{"action": "cut|merge|add", "slides": [n], "title": "..."}]' if target == "storyboard" else ""}}}"""
 
 
+def _salvage(t: str):
+    """A reply cut off mid-JSON (long reviews hit the token limit): keep what is complete. The scores and headline
+    by pattern, and every issue object that closed."""
+    m = re.search(r'"scores"\s*:\s*(\{[^{}]*\})', t)
+    if not m:
+        return None
+    try:
+        out = {"scores": json.loads(m.group(1)), "truncated": True}
+    except ValueError:
+        return None
+    h = re.search(r'"headline"\s*:\s*"((?:[^"\\]|\\.)*)"', t)
+    if h:
+        out["headline"] = json.loads('"' + h.group(1) + '"')
+    issues, i = [], t.find('"issues"')
+    if i >= 0:
+        for mm in re.finditer(r'\{[^{}]*"issue"\s*:[^{}]*\}', t[i:]):
+            try:
+                issues.append(json.loads(mm.group(0)))
+            except ValueError:
+                continue
+    out["issues"] = issues
+    return out
+
+
 def _loads(text: str):
     if not text:
         return None
@@ -211,7 +235,7 @@ def _loads(text: str):
             return json.loads(re.sub(r",\s*([}\]])", r"\1", cand))
         except (ValueError, TypeError):
             continue
-    return None
+    return _salvage(t)
 
 
 def overall(persona: str, target: str, scores: dict) -> float | None:
@@ -256,7 +280,7 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
 
 
 def review(client, persona: str, target: str, material: list | str, model: str, task_id: str = "review",
-           bar: dict | None = None, max_tokens: int = 6000) -> dict:
+           bar: dict | None = None, max_tokens: int = 8000) -> dict:
     """One reviewer, one target. `material` is the user message: text, or OpenAI-style content parts (text and
     image_url parts for a rendered deck). Never raises: a failed call is status "not_run"."""
     try:
