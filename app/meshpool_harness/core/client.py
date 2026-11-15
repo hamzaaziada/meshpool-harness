@@ -64,7 +64,8 @@ def classify_error(msg: str) -> str:
         return "auth"
     if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
             r"(?:invalid|unknown|unsupported|no such|not a valid) model|model[ _-]?not[ _-]?found|model\b[^.\n]{0,80}?"
-            r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)", m, re.I):
+            r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)"
+            r"|key_model_access_denied", m, re.I):
         return "model_missing"                      # an old chat on a model the endpoint no longer serves
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow

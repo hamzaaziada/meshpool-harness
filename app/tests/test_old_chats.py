@@ -124,3 +124,14 @@ def test_old_screenshots_stay_in_the_chat_but_not_in_each_request(agent):
     kept = sum(1 for m in agent.messages if isinstance(m.get("content"), list)
                for p in m["content"] if p.get("type") == "image_url")
     assert sent == 4 and kept == 10
+
+
+def test_the_real_gateways_answers_are_read_right():
+    """Bodies measured on llm.meshpool.ai (2026-11-15)."""
+    gone = ('HTTP 404: {"error":{"message":"The model `foo` does not exist or you do not have access to it. '
+            '(reference: 383be86b2fb1)","type":"key_model_access_denied","param":"model","code":"404"}}')
+    assert classify_error(gone) == "model_missing"
+    too_long = ('HTTP 400: {"error":{"message":"prompt is too long: 1001984 tokens > 1000000 maximum. This model\'s '
+                'maximum context length is 1000000 tokens. Reduce the length of the messages."}}')
+    assert classify_error(too_long) == "context"                  # trimmed and retried, not a plain bad request
+    assert classify_error("HTTP 502: upstream request failed") == "transient"   # plain-text 502: retried
