@@ -124,6 +124,11 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - Short text: phrases inside exhibits, bullets of one line where possible. Sentence case everywhere, no capitals for
   emphasis, no em dashes, no jargon, no filler ("leverage", "robust", "holistic", "synergies").
 - Steps, options, drivers and pillars get a one-word "icon" meaning so the renderer can draw a line icon.
+- A money decision shows its economics: when the reader must invest, return cash, buy or sell, set the returns side
+  by side as calcs from the facts (return on capital = operating income after tax / (equity + debt); a buyback's
+  return = EPS / share price; idle cash earns the Treasury yield), and any score in a grid follows from numbers shown
+  on the page, never asserted. One recommendation, the same amount on every slide.
+- Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
 - Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
 
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
@@ -654,6 +659,10 @@ def prose_checks(slides) -> dict[int, list[str]]:
                 out.setdefault(n, []).append(f"{where}: sentence breaks off ('...{t.strip()[-40:]}'); finish it or cut it")
             if re.search(r"[,;:]\s*[.!?]|\bTBD\b|\bXX+\b|lorem|\[\s*\]|\{\w+\}", t, re.I):
                 out.setdefault(n, []).append(f"{where}: broken or placeholder text ('{t.strip()[:60]}')")
+            ids = re.findall(r"\b(?:S\d+[OC]\d+|S\d{3,}|[FW]\d{1,3})\b", t)
+            if ids:                                            # the board cannot look up the deck's working ids
+                out.setdefault(n, []).append(f"{where}: internal reference {', '.join(dict.fromkeys(ids))} in the "
+                                             "text; name the figure or its source instead (ids belong in prov only)")
     return out
 
 

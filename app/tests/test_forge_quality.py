@@ -169,3 +169,13 @@ def test_options_let_a_recommendation_be_sized_without_inventing_facts():
     s2 = {"archetype": "argument_only", "title": "t", "calcs": [{"id": "C1", "value": "$15.21B",
           "formula": "20.21 - 5", "from": ["F5"]}]}
     assert verify_calcs([s2], facts, rules)[1]          # without the declared option, 5 is an invented number
+
+
+def test_prose_checks_flag_internal_ids_in_visible_text():
+    from engines.forge.build import prose_checks
+    s = {"archetype": "executive_summary", "title": "Return $8B to owners",
+         "items": [{"lead": "The size is a board choice (options S201, S2O1)", "text": "Cash covers it (F5)"}]}
+    got = " ".join(prose_checks([s]).get(1, []))
+    assert "S2O1" in got and "F5" in got and "internal reference" in got
+    ok = {"archetype": "executive_summary", "title": "Return $8B to owners", "items": [{"lead": "FY2026 cash of $20B"}]}
+    assert not prose_checks([ok])

@@ -276,7 +276,11 @@ XBRL_LINES = [("dei", "EntityCommonStockSharesOutstanding", "shares", "shares ou
               ("us-gaap", "LongTermDebtNoncurrent", "USD", "long-term debt (non-current)"),
               ("us-gaap", "OperatingLeaseLiability", "USD", "operating lease liabilities"),
               ("us-gaap", "CommonStockDividendsPerShareDeclared", "USD/shares", "dividends declared per share"),
-              ("us-gaap", "EarningsPerShareDiluted", "USD/shares", "diluted EPS")]
+              ("us-gaap", "EarningsPerShareDiluted", "USD/shares", "diluted EPS"),
+              ("us-gaap", "OperatingIncomeLoss", "USD", "operating income"),       # return on capital: operating
+              ("us-gaap", "StockholdersEquity", "USD", "shareholders' equity"),    # income against equity + debt
+              ("us-gaap", "PropertyPlantAndEquipmentNet", "USD", "net property and equipment"),
+              ("us-gaap", "IncomeTaxExpenseBenefit", "USD", "income tax expense")]
 
 
 def _money(v: float, unit: str) -> str:
