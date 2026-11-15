@@ -274,13 +274,20 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
 def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
     """Shorten user messages over `keep` characters to their start and end, with a note in the middle. A message too
     big for the endpoint otherwise goes with every later request too and the chat cannot recover. True if cut."""
+    def shorten(c: str) -> str:
+        return (c[:keep * 3 // 4] + f"\n\n[... {len(c) - keep} characters left out: the message was too large for "
+                "the endpoint ...]\n\n" + c[-keep // 4:])
     cut = False
     for m in messages:
         c = m.get("content")
-        if m.get("role") == "user" and isinstance(c, str) and len(c) > keep:
-            m["content"] = (c[:keep * 3 // 4] + f"\n\n[... {len(c) - keep} characters left out: the message was too "
-                            "large for the endpoint ...]\n\n" + c[-keep // 4:])
-            cut = True
+        if m.get("role") != "user":
+            continue
+        if isinstance(c, str) and len(c) > keep:
+            m["content"], cut = shorten(c), True
+        elif isinstance(c, list):                       # text sent along with an image
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "text" and len(str(p.get("text") or "")) > keep:
+                    p["text"], cut = shorten(str(p["text"])), True
     return cut
 
 
@@ -762,8 +769,8 @@ class Agent:
             self._repair()
             msg = raw = str(e)
             if "endpoint could not take this request" in msg:
-                head, _, detail = msg.rpartition(" (")   # already says what to do; keep only the status
-                code = re.search(r"HTTP \d+", detail)
+                head = msg.split(" (HTTP", 1)[0]         # already says what to do; keep only the status
+                code = re.search(r"HTTP \d+", msg)
                 msg = raw = head + (f" ({code.group(0)})" if code else "")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
@@ -1012,18 +1019,20 @@ class Agent:
                         lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
                         if len(json.dumps(self._body())) > lim:
                             _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
+                        if len(json.dumps(self._body())) > lim and _cut_long_user_text(self.messages):
+                            self.emit({"type": "status", "text": "Your message was too large for the endpoint, so "
+                                                                 "its middle was left out. Attach long text as a "
+                                                                 "file to keep all of it."})
                         if len(json.dumps(self._body())) > lim:
-                            if _has_images(self.messages):
+                            without = [dict(m) if isinstance(m.get("content"), list) else m for m in self.messages]
+                            _drop_images(without, keep=0)
+                            saved, self.messages = self.messages, without
+                            fits_without = len(json.dumps(self._body())) <= lim
+                            self.messages = saved
+                            if fits_without:             # the newest image alone is too big: say so, keep it
                                 raise RuntimeError("The endpoint could not take this request: the attached image "
                                                    "is too large. Attach a smaller one (a screenshot of part of the "
                                                    "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
-                            if _cut_long_user_text(self.messages) and len(json.dumps(self._body())) <= lim:
-                                body = self._body()          # a pasted wall of text: keep its start and end
-                                body["model"] = PV.split(body["model"])[1]
-                                self.emit({"type": "status", "text": "Your message was too large for the endpoint, "
-                                                                     "so its middle was left out. Attach long text "
-                                                                     "as a file to keep all of it."})
-                                continue
                             raise RuntimeError("The endpoint could not take this request: the conversation is too "
                                                "large even after it was shortened. Start a new chat to carry on. ("
                                                + msg[:120] + ")")
