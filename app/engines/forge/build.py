@@ -271,7 +271,33 @@ def _call(client, model, system, user, task_id, max_tokens=12000) -> dict:
     if "{" not in txt:                  # a reasoning model can spend the whole budget thinking: say so, never "{}"
         raise RuntimeError(f"{model} returned no JSON (finish_reason {ch.get('finish_reason')!r}, "
                            f"{len(txt)} chars of content)")
-    return json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+    return _flat_ids(json.loads(txt[txt.find("{"): txt.rfind("}") + 1]))
+
+
+ID_LISTS = ("prov", "title_prov", "evidence", "from", "highlight_categories", "highlight_rows")
+
+
+def _flat_ids(x):
+    """Lists of ids or names come back nested from some models ([["F1"], "F2"]): flatten them, keep scalars only, so
+    every later set() or 'in' test works (a nested list crashed a GLM-written build with 'unhashable type: list')."""
+    if isinstance(x, dict):
+        out = {}
+        for k, v in x.items():
+            if k in ID_LISTS and isinstance(v, list):
+                flat, stack = [], list(v)
+                while stack:
+                    e = stack.pop(0)
+                    if isinstance(e, list):
+                        stack[:0] = e
+                    elif isinstance(e, (str, int, float)) and not isinstance(e, bool):
+                        flat.append(e)
+                out[k] = flat
+            else:
+                out[k] = _flat_ids(v)
+        return out
+    if isinstance(x, list):
+        return [_flat_ids(e) for e in x]
+    return x
 
 
 def facts_from_brief(text: str) -> list[dict]:

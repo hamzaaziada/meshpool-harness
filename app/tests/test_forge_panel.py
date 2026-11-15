@@ -469,3 +469,12 @@ def test_a_model_that_returns_no_json_never_becomes_a_blank_deck(tmp_path):
         B.build("Board briefing\nFacts\n- Revenue $10M in 2025", str(tmp_path), slides_wanted=4, client=Thinker())
     with pytest.raises(RuntimeError, match="returned no JSON"):
         B._call(Thinker(), "m", "s", "u", "t")
+
+
+def test_nested_id_lists_from_a_model_are_flattened():
+    import engines.forge.build as B
+    got = B._flat_ids({"slides": [{"title_prov": [["F1"], "F2", None, [["F3"]]], "items": [{"prov": [["F4", "F5"]]}],
+                                   "title": "x", "evidence": "F9"}]})
+    s = got["slides"][0]
+    assert s["title_prov"] == ["F1", "F2", "F3"] and s["items"][0]["prov"] == ["F4", "F5"]
+    assert s["evidence"] == "F9" and s["title"] == "x"

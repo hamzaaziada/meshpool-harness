@@ -93,8 +93,10 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                 os.environ.setdefault(k, v)
         try:
             res = _engine(name).solve(task, workdir=wd, task_id=f"{task_id}-{name}", client=client, **kw)
-        except Exception as e:   # one clean message instead of a traceback
-            res = {"ok": False, "answer": "", "reason": f"{type(e).__name__}: {e}", "artifacts": []}
+        except Exception as e:   # one clean message instead of a traceback (kept, short, for whoever debugs it)
+            import traceback
+            res = {"ok": False, "answer": "", "reason": f"{type(e).__name__}: {e}", "artifacts": [],
+                   "trace": traceback.format_exc()[-3000:]}
         finally:
             os.environ.clear()
             os.environ.update(saved)              # office engines keep their own tested settings
