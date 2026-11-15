@@ -151,3 +151,31 @@ def test_libreoffice_draws_segoe_ui_with_the_bundled_selawik(tmp_path):
     pdf = soffice_convert(str(tmp_path / "t.pptx"), "pdf", str(tmp_path))
     fonts = set(_re.findall(rb"/BaseFont\s*/([A-Za-z+\-]+)", pdf.read_bytes()))
     assert any(b"Selawik" in f for f in fonts), fonts
+
+
+def test_options_let_a_recommendation_be_sized_without_inventing_facts():
+    """Reviewers kept failing decks that 'never size anything': a buyback size is a choice, not a fact. Options are
+    declared, labelled, and usable in calcs with the facts."""
+    from engines.forge.build import number_checks, verify_calcs
+    facts = [{"id": "F5", "text": "Cash and cash equivalents $20.21B at 2026-08-30"}]
+    rules = load_rules()
+    s = {"archetype": "argument_only", "title": "A $5B buyback leaves $15.21B of cash", "title_prov": ["O1", "C1"],
+         "options": [{"id": "O1", "value": "$5B", "label": "buyback size proposed"}],
+         "calcs": [{"id": "C1", "value": "$15.21B", "formula": "20.21 - 5", "from": ["F5", "O1"]}],
+         "bullets": [{"text": "Option: a **$5B** buyback leaves **$15.21B** of cash.", "prov": ["O1", "C1"]}]}
+    ok, bad = verify_calcs([s], facts, rules)
+    assert not bad and [f["id"] for f in ok[1]] == ["S1O1", "S1C1"] and ok[1][0]["option"]
+    assert number_checks([s], facts + ok[1], rules) == {}
+    s2 = {"archetype": "argument_only", "title": "t", "calcs": [{"id": "C1", "value": "$15.21B",
+          "formula": "20.21 - 5", "from": ["F5"]}]}
+    assert verify_calcs([s2], facts, rules)[1]          # without the declared option, 5 is an invented number
+
+
+def test_prose_checks_flag_internal_ids_in_visible_text():
+    from engines.forge.build import prose_checks
+    s = {"archetype": "executive_summary", "title": "Return $8B to owners",
+         "items": [{"lead": "The size is a board choice (options S201, S2O1)", "text": "Cash covers it (F5)"}]}
+    got = " ".join(prose_checks([s]).get(1, []))
+    assert "S2O1" in got and "F5" in got and "internal reference" in got
+    ok = {"archetype": "executive_summary", "title": "Return $8B to owners", "items": [{"lead": "FY2026 cash of $20B"}]}
+    assert not prose_checks([ok])

@@ -1372,6 +1372,11 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         return out
     while size_ > 10 and sum(row_heights(size_, row_min(size_))) + head_h(size_) > h:
         size_ -= 1
+    base_size = T["cell"]
+    if not t.get("_fixed_size") and size_ >= base_size:            # a short table in a tall box: a step or two up
+        while (size_ < base_size + 3 and sum(row_heights(size_ + 1, row_min(size_ + 1))) + head_h(size_ + 1)
+               + 0.18 * len(rows) <= h * 0.92):                     # the type, so the page has no empty band
+            size_ += 1
     t["size"] = size_
     hs = row_heights(size_, row_min(size_))
     if sum(hs) + head_h(size_) > h + 0.01 and len(rows) > 3:     # still too tall: carry rows to a continuation
@@ -1391,7 +1396,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     hs = row_heights(size_, row_min(size_))
     room = h - head_h(size_) - sum(hs)                            # rows stretch to fill the space they have,
     if room > 0:                                                  # a little air per row, never stretched rows:
-        pad = t.get("_pad", 0.08)                                 # a short table gets a different composition
+        pad = t.get("_pad", 0.08 if room < 0.35 * h else 0.18)    # a short table gets a different composition
         hs = [hv + min(pad, room / len(hs)) for hv in hs]
     if dry:
         return float("inf") if ctx.carry_rows else sum(hs) + head_h(size_)
