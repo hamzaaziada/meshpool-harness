@@ -1,9 +1,11 @@
 """Paired A/B of the code engine on SWE-bench Verified: same tasks, same model, same hour; arms differ only in env flags.
 
     python testkit/swe_ab.py --arm base:MH_ERROR_CONTEXT=0 --arm ctx:MH_ERROR_CONTEXT=1 --n 30 --out /tmp/ab
+    python testkit/swe_ab.py --arm main:MH_AB_APP=/path/to/main-checkout/app --arm new:MH_ERROR_CONTEXT=1 ...
 
 Per task: pull the task's image, run every arm at the same time, each in its own container (engines/code/engine.py
-solve, the same entry point as the benchmark runs), take the patch, grade it in a fresh container with the task's own
+solve, the same entry point as the benchmark runs; MH_AB_APP=<checkout>/app runs an arm on another version of the code),
+take the patch, grade it in a fresh container with the task's own
 eval script and SWE-bench's log parser, then remove the image. Each arm runs in its own process, so flags never leak
 between arms. Results go to OUT/results.jsonl (one row per task and arm, resumable); --report prints the paired
 summary: solves, tasks only one arm solved (exact McNemar p), time, model calls, tokens and cost per solved task.
@@ -43,7 +45,7 @@ def load(ids=None):
 
 # ---------- one arm on one task (runs in a child process with the arm's env) ---------------------------------------
 def run_one(inst_path: str, arm: str, out_path: str, model: str, max_turns: int):
-    sys.path.insert(0, str(APP))
+    sys.path.insert(0, os.environ.get("MH_AB_APP") or str(APP))
     from engines.code.engine import solve
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.core.metrics import cached_tokens
@@ -158,7 +160,7 @@ def task(inst: dict, arms: list[tuple[str, dict]], args, out: Path, done: set):
     (tmp / "inst.json").write_text(json.dumps(inst))
     procs = []
     for arm, env in todo:
-        e = dict(os.environ, **env, PYTHONPATH=str(APP), MH_FAILURES_LOG="off", MH_CACHE_KEY="1",
+        e = dict(os.environ, **env, PYTHONPATH=env.get("MH_AB_APP") or str(APP), MH_FAILURES_LOG="off", MH_CACHE_KEY="1",
                  MH_AB_LOGDIR=str(out / "logs"))
         e.setdefault("MESHPOOL_API_KEY", "sk-placeholder")
         procs.append((arm, tmp / f"{arm}.json", subprocess.Popen(
