@@ -35,6 +35,7 @@ _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placehold
 # office_task counts as a command for sub-agents: its engines run model-written code
 NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
+_USAGE_LOCK = threading.Lock()
 
 
 # ---------- settings ----------------------------------------------------------------------------------------------
@@ -73,7 +74,7 @@ def settings() -> dict:
 # Meshpool's office server reads local files and runs without asking; other servers' "path" is often remote (a repo,
 # a bucket, an API) and they need a yes from a sub-agent anyway (and in Full access it has bash)
 OFFICE_MCP = "mcp__meshpool_office__"
-PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to")
+PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to", "deck")
 
 
 def _mcp_paths_outside(root, args) -> bool:
@@ -167,6 +168,11 @@ def check_goals(tasks) -> list[dict]:
             raise ValueError(f"The goal {goal[:60]!r} is a placeholder. Write out what the sub-agent should do.")
         if len(tasks) > 1 and len(goal) < 10:
             raise ValueError(f"The goal {goal!r} is too short to work on alone. Make each goal self-contained.")
+        if isinstance(t.get("output_schema"), str):     # sent as a JSON string: read it
+            try:
+                t = {**t, "output_schema": json.loads(t["output_schema"])}
+            except ValueError:
+                raise ValueError("output_schema is not valid JSON. Give it as a JSON Schema object.")
         rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
                      "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
                      "title": str(t.get("title") or goal.splitlines()[0])[:80]})
@@ -207,9 +213,13 @@ def schema_errors(value, sch, path="$") -> list[str]:
 
 def _json_of(text: str):
     t = (text or "").strip()
-    m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
+    try:                                                  # plain JSON (a string value may hold a ``` fence)
+        return json.loads(t)
+    except ValueError:
+        pass
+    m = re.match(r"```(?:json)?\s*(.*)```\s*$", t, re.S)   # the whole reply in one fence
     if m:
-        t = m.group(1).strip()
+        return json.loads(m.group(1).strip())
     return json.loads(t)
 
 
@@ -303,7 +313,9 @@ class Delegation:
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
                 if self.final_only:                      # out of steps: only the report is left
                     return False, "you are out of steps: no more tool calls; reply with your report now"
-                if self._outside(name, args) or (name == "office_task" and _files_outside(parent.root, args)) or \
+                web = name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch")
+                if (self._outside(name, args) and not web) or \
+                        (name == "office_task" and _files_outside(parent.root, args)) or \
                         (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
@@ -373,30 +385,40 @@ class Delegation:
         a = None
         try:
             a = rec["agent"] = self._child(sid, index, rec)
+            cfg_steps0 = a.max_steps
             reply = a.send(row["goal"]) or ""
             if row["schema"] and reply.strip() and not (a._stop or self.stopped or rec["stop"]):
                 rec["schema_retries"] = 0
                 errs = self._check(reply, row["schema"])
                 if errs:                                  # one bounded correction, as in Hermes
                     rec["schema_retries"] = 1
+                    used = sum(1 for m in a.messages if m.get("role") == "assistant")
+                    a.max_steps = max(1, cfg_steps0 - used)   # within the same step budget, not a fresh one
                     reply = a.send("Your reply does not match the output schema: " + "; ".join(errs) +
                                    ". Reply again with only the JSON.") or reply
                     errs = self._check(reply, row["schema"])
                 rec["schema_valid"], rec["schema_errors"] = not errs, errs
             stopped = a._stop or self.stopped or rec["stop"]
             hit_steps = any("Stopped after" in e for e in rec["errors"])
-            cfg_steps = a.max_steps
             if hit_steps and not stopped:                 # out of steps: one last answer, no tools, with the report
                 a.final_only, a._no_tools, a.max_steps = True, True, 1   # tools stay listed; tool_choice "none"
-                reply = a.send("You have used all your steps. Stop working now and reply with your report: what "
+                final = a.send("You have used all your steps. Stop working now and reply with your report: what "
                                "you did, what you found, files you changed, and what is left undone." +
                                (" Your reply must still be only JSON matching the output schema." if row["schema"]
-                                else "")) or reply
-                if row["schema"] and reply.strip():       # the report still answers to the output contract
+                                else "")) or ""
+                stopped = a._stop or self.stopped or rec["stop"]
+                if final.strip() or stopped:
+                    reply = final
+                else:                                     # no report even then: say so, never stale narration
+                    last = next((m.get("content") for m in reversed(a.messages) if m.get("role") == "assistant"
+                                 and isinstance(m.get("content"), str) and m["content"].strip()), "")
+                    reply = (f"This sub-agent used all {cfg_steps0} of its steps without writing a report. Its last "
+                             "actions: " + ", ".join(f"{t['tool']}({t['target'][:40]})" for t in rec["trace"][-5:])
+                             + (f"\n\nIts last note: {last.strip()[:1000]}" if last.strip() else ""))
+                if row["schema"]:                         # the report still answers to the output contract
                     errs = self._check(reply, row["schema"])
                     rec["schema_valid"], rec["schema_errors"] = not errs, errs
                     rec.setdefault("schema_retries", 0)
-                stopped = a._stop or self.stopped or rec["stop"]
             if stopped:
                 rec["status"], rec["exit"] = "interrupted", "interrupted"
             elif hit_steps:
@@ -412,9 +434,6 @@ class Delegation:
                     rec["error"] = rec["errors"][-1]
                     reply = (f"Error: {rec['error']}" + (f"\n\nWritten before it failed:\n{reply.strip()}"
                                                          if reply.strip() else ""))
-            if hit_steps and not stopped and not reply.strip():
-                reply = (f"This sub-agent used all {cfg_steps} of its steps without writing a report. Its last "
-                         "actions: " + ", ".join(f"{t['tool']}({t['target'][:40]})" for t in rec["trace"][-5:]))
             rec["summary"] = reply.strip() or (rec["errors"][-1] if rec["errors"] else "(no report)")
         except Exception as e:  # noqa: BLE001 - one failed part must not sink the rest
             rec.update(status="error", exit="error", error=f"{type(e).__name__}: {e}"[:300],
@@ -439,10 +458,11 @@ class Delegation:
     def _entry(self, sid: str, rec: dict) -> dict:
         p = self.parent
         turn = getattr(p, "_turn_usage", None)            # and in this turn's total
-        for k in ("in", "cached", "out", "calls"):        # the chat pays for its sub-agents: count it there
-            p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
-            if isinstance(turn, dict):
-                turn[k] = turn.get(k, 0) + rec["usage"][k]
+        with _USAGE_LOCK:                                 # children finish on several threads at once
+            for k in ("in", "cached", "out", "calls"):    # the chat pays for its sub-agents: count it there
+                p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
+                if isinstance(turn, dict):
+                    turn[k] = turn.get(k, 0) + rec["usage"][k]
         if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
             p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
         summary = str(rec.get("summary") or "")

@@ -671,3 +671,38 @@ def test_only_the_office_server_has_its_paths_fenced_and_parallel_children_keep_
         assert sum(ex.map(one, ["a", "b", "c", "d"])) == 0
     out = m.call("mcp__b__shot", {"who": "chat"})                   # the chat's own path is unchanged
     assert out == ("[image attached]", False) and m.last_images[0]["data"] == "chat"
+
+
+def test_round_eight_fence_json_and_web_fetch(monkeypatch, _env, tmp_path):
+    c = _bare_child(_agent(_env, mode="auto", profile="work"))
+    for deck in (str(tmp_path / "board.pptx"), "~/Documents/x.pptx"):
+        assert c._permit("mcp__meshpool-office__add_slides", {"deck": deck, "request": "x"})[0] is False
+    url = "https://www.google.com/search?q=" + "a" * 300
+    assert c._permit("fetch_url", {"url": url})[0] is True            # auto mode: like the chat
+    ok, why = _bare_child(_agent(_env, mode="ask"))._permit("fetch_url", {"url": url})
+    assert ok is False and "cannot ask" in why and "inside the project" not in why
+    a = _agent(_env, mode="ask")
+    assert a._permit("mcp__meshpool-web__web_fetch", {"url": url})[0] is False   # the real (hyphen) name asks
+    assert D._json_of('{"fix": "Replace with:\\n```python\\nprint(1)\\n```"}')["fix"].startswith("Replace")
+    assert D._json_of('```json\n{"a": 1}\n```') == {"a": 1}
+    rows = D.check_goals([{"goal": "Find the name", "output_schema": '{"type": "object", "required": ["n"]}'}])
+    assert rows[0]["schema"] == {"type": "object", "required": ["n"]}
+
+
+def test_round_eight_steps_stay_bounded_and_no_stale_report(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_STEPS", "5")
+    calls = []
+
+    def child(b):
+        calls.append(b)
+        if "does not match the output schema" in str(b["messages"][-1]["content"]) or \
+                sum(1 for m in b["messages"] if m["role"] == "tool") < 4:
+            return _msg("Let me keep looking at more files.", [("glob", {"pattern": "*"})])
+        if "used all your steps" in b["messages"][-1]["content"]:
+            return _msg("", [("glob", {"pattern": "*"})])            # still no report
+        return _msg("not json")
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find the name", "output_schema": {"type": "object"}}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert sum(1 for b in calls if b["tool_choice"] != "none") <= 5 + 1     # one budget, not two
+    assert "without writing a report" in out and r["schema_valid"] is False

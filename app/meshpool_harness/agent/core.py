@@ -1299,7 +1299,7 @@ class Agent:
             pat = str(args.get("pattern") or "").replace("\\", "/")
             return ("" if not (pat.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", pat) or ".." in pat.split("/"))
                     else f"List files outside the project ({pat[:80]})?")
-        elif name in ("fetch_url", "mcp__meshpool_web__web_fetch"):
+        elif name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch"):   # the server is meshpool-web
             from urllib.parse import urlparse
             u = urlparse(str(args.get("url") or ""))
             host = u.hostname or ""
