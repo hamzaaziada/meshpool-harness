@@ -298,3 +298,23 @@ def test_p20_thin_flags_a_page_that_ends_high(tmp_path):
     res = validate(str(out), render=True, density="balanced")
     msgs = [f for f in res["failures"] if f["rule"] == "P20" and "thin" in f["message"] and f["status"] == "fail"]
     assert msgs and msgs[0]["fix_scope"] == "content" and res["stats"]["bottom_blank_by_slide"][0] > 0.15
+
+
+def test_a_words_only_grid_is_composed_with_a_visual_per_block(tmp_path):
+    """A grid of text and callout parts only (no chart, table, figures or diagram) once rendered as words; it is now
+    composed as an argument with an icon or figure per block and the callout as its band."""
+    from pptx import Presentation
+    from engines.forge.parts import words_only_to_argument
+    from engines.forge.render import render
+    s = {"archetype": "grid", "title": "CoreWeave's growth is real but funded with debt", "parts": [
+        {"type": "text", "heading": "Evidence", "bullets": [
+            {"text": "Revenue grew 168% to $3.66B in the quarter"}, {"text": "Debt is approaching $47B"},
+            {"text": "Interest expense was $846M in the quarter"}]},
+        {"type": "callout", "text": "Growth is bought with leverage"}]}
+    arg = words_only_to_argument(s)
+    assert arg["archetype"] == "argument_only" and arg["callout"]["bullets"][0]["text"] == "Growth is bought with leverage"
+    assert words_only_to_argument({"archetype": "grid", "parts": [{"type": "chart"}, {"type": "text"}]}) is None
+    out = tmp_path / "w.pptx"
+    render([s], str(out), carry=False, density="balanced")
+    names = [sh.name for sh in Presentation(str(out)).slides[0].shapes]
+    assert any(n.startswith(("ov_Icon", "ov_Fig", "ov_Step", "ov_Mark", "ov_Badge")) for n in names), names

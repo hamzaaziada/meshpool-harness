@@ -979,7 +979,43 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
     return best[2]
 
 
+WORD_PARTS = ("text", "callout", "quote")
+
+
+def words_only_to_argument(s: dict) -> dict | None:
+    """A grid of nothing but words (text, callout, quote parts) has no visual: it becomes the composed argument
+    layout, which marks every block with figures, process steps or an icon by its meaning (compose.py), the
+    callout becoming its so-what band. None when the grid has a visual part."""
+    parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
+    if not parts or any(p.get("type") not in WORD_PARTS for p in parts):
+        return None
+    blocks, band = [], []
+    for p in parts:
+        if p.get("type") == "callout":
+            band += [b if isinstance(b, dict) else {"text": str(b)} for b in p.get("bullets") or []]
+            if p.get("text") or p.get("lead"):
+                band.insert(0, {"text": _txt(p.get("lead") or p.get("text")), "prov": p.get("prov")})
+            continue
+        lead = p.get("lead") or p.get("heading") or p.get("title") or ""
+        bullets = [b if isinstance(b, dict) else {"text": str(b)} for b in p.get("bullets") or []]
+        if p.get("text"):
+            bullets.insert(0, {"text": _txt(p["text"]), "prov": p.get("prov")})
+        if lead or bullets:
+            blocks.append({"text": f"**{_txt(lead)}**" if lead and not str(lead).startswith("**") else _txt(lead),
+                           "bullets": bullets, "prov": p.get("prov")})
+    out = {k: v for k, v in s.items() if k not in ("parts", "layout", "look")}
+    out.update(archetype="argument_only", blocks=blocks or [{"text": "", "bullets": band}])
+    if band and blocks:
+        out["callout"] = {"bullets": band}
+    return out
+
+
 def a_grid(ctx, s, sl, n):
+    arg = words_only_to_argument(s)
+    if arg is not None:                                  # never a words-only slide: compose it with a visual per block
+        _note(s, "grid had no visual part; composed as an argument with a visual per block")
+        s.update(arg)
+        return R.a_argument_only(ctx, s, sl, n)
     R._header(ctx, s, sl, n)
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
     look = s.get("look") or "editorial"
