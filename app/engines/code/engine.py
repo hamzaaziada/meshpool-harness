@@ -58,7 +58,10 @@ def _worktree_tree(workdir: str) -> str | None:
         real = _git(workdir, "rev-parse", "--git-path", "index").stdout.decode().strip()
         real_p = Path(workdir, real) if real else None
         if real_p and real_p.is_file():
-            shutil.copyfile(real_p, tmp)
+            # copy2 keeps the index's own timestamp. git trusts a cached entry only when the file is older than the
+            # index; a fresh timestamp on the copy made every entry look safe, so a same-size edit made in the same
+            # second as the index (a - b to a * b) was missed and the snapshot or restore came out wrong.
+            shutil.copy2(real_p, tmp)
         else:
             os.remove(tmp)
         env = dict(os.environ, GIT_INDEX_FILE=tmp)

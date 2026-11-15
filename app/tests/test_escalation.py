@@ -74,3 +74,30 @@ def test_snapshot_restore_round_trip(tmp_path, monkeypatch):
     assert restore(str(d), snap)
     assert not (d / "new_dir" / "n.py").exists()
     _user_state_kept(d)
+
+
+def test_snapshot_sees_a_same_size_edit_made_in_the_same_second(tmp_path):
+    """The snapshot copies git's index for its stat cache. A fresh timestamp on the copy made git trust every cached
+    entry, so "a - b" changed to "a * b" with the same size and mtime looked unchanged (the CI flake behind
+    test_empty_second_attempt_restores_attempt_one). Deterministic: the edit keeps the file's exact mtime."""
+    import os
+    import subprocess
+    from engines.code.engine import snapshot
+    d = tmp_path / "r"
+    d.mkdir()
+    g = lambda *a: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=d, check=True,  # noqa: E731
+                                  capture_output=True)
+    g("init", "-q")
+    f = d / "calc.py"
+    f.write_text("def add(a, b):\n    return a - b\n")
+    g("add", "-A")
+    g("commit", "-qm", "base")
+    t = 1_700_000_000
+    os.utime(f, (t, t))
+    g("update-index", "--refresh")
+    os.utime(d / ".git" / "index", (t, t))             # file and index stamped in the same second
+    before = snapshot(str(d))
+    f.write_text("def add(a, b):\n    return a * b\n")   # same size
+    os.utime(f, (t, t))
+    after = snapshot(str(d))
+    assert before and after and before[0] != after[0]
