@@ -417,7 +417,7 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
             tn = get("^TNX", "5d", "1d")
             cl = [(t, c) for t, c in zip(tn.get("timestamp") or [], tn["indicators"]["quote"][0].get("close") or []) if c]
             if cl:
-                add(f"US 10-year Treasury yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance ^TNX; "
+                add(f"US 10-year Treasury yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance, US 10-year Treasury yield index; "
                     "https://finance.yahoo.com/quote/%5ETNX)", "https://finance.yahoo.com/quote/%5ETNX",
                     label="treasury yield", value=float(cl[-1][1]))
         except Exception:  # noqa: BLE001

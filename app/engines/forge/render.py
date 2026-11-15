@@ -14,6 +14,7 @@ Theme colours and theme fonts only; native charts and tables. Writes <out>.pptx 
 from __future__ import annotations
 
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -131,7 +132,7 @@ def _segments(text: str, numbers: bool, base: str = "plain"):
             whole = numbers and re.search(r"\d|[¼½¾]", inner)    # a bold phrase carrying a number is an emphasis
             out += _segments(inner, False, "num" if whole else "bold")
             continue
-        for chunk in re.split(r"(\^\w+)", part):
+        for chunk in re.split(r"(\^\d{1,2}\b|\^[a-z]\b)", part):     # footnote marks only (^1, ^a), not ^TNX
             if not chunk:
                 continue
             if chunk.startswith("^"):
@@ -161,8 +162,11 @@ def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=Fals
         r.text = seg
         sup = st.startswith("sup_")
         st = st[4:] if sup else st
-        if st == "num":
-            _set_font(r, size, TC.ACCENT_1, True, italic, heading, sup)
+        if st == "num":       # numbers are plain text: a deck where every figure is blue or bold reads as machine-made;
+            if NUMBER_ACCENT:  # emphasis is the one **phrase** the writer marks
+                _set_font(r, size, TC.ACCENT_1, True, italic, heading, sup)
+            else:
+                _set_font(r, size, color, bold, italic, heading, sup)
         elif st == "bold":
             _set_font(r, size, color, True, italic, heading, sup)
         else:
@@ -2079,6 +2083,14 @@ def a_cover(ctx, s, sl, n):
     lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
     th = lines * _pitch(size, 1.05) / 72 + 0.3
     ty = 3.35 - th                                         # title block ends on a fixed line, whatever its length
+    logo = BRAND.get("logo")                               # full-bleed navy: the title owns the page, no empty white;
+    dark = COVER_DARK and not (logo and Path(logo).exists())   # a company logo drawn for white paper keeps the white cover
+    ink, soft = (TC.BACKGROUND_1, TC.BACKGROUND_2) if dark else (TC.TEXT_1, TC.TEXT_2)
+    if dark:
+        bg = _fill(sl, 0, 0, 13.333, 7.5, TC.TEXT_2, "ov_CoverField")
+        sp = bg._element
+        sp.getparent().remove(sp)
+        sl.shapes._spTree.insert(2, sp)                    # behind everything else on the page
     _fill(sl, x, ty - 0.32, 0.9, 0.06, TC.ACCENT_1, "CoverBar")
     t = sl.shapes.title
     t.left, t.top, t.width, t.height = Inches(x), Inches(ty), Inches(w + 0.5), Inches(th)   # slack past the wrap width
@@ -2091,29 +2103,34 @@ def a_cover(ctx, s, sl, n):
         p.alignment = PP_ALIGN.LEFT
         p.line_spacing = Pt(_pitch(size, 1.05))
         for r in p.runs:
-            _set_font(r, size, TC.TEXT_1, True, heading=True)
+            _set_font(r, size, ink, True, heading=True)
+    sub = clean(s.get("subtitle"))
+    tw, sw_ = set(re.findall(r"[a-z0-9$.]+", clean(s["title"]).lower())), re.findall(r"[a-z0-9$.]+", sub.lower())
+    if sw_ and sum(w_ in tw for w_ in sw_) / len(sw_) > 0.6:
+        sub = ""                                           # a subtitle that only repeats the title is dropped
     for ph in list(sl.placeholders):
         if ph.placeholder_format.idx == 1:
-            if s.get("subtitle"):
+            if sub:
                 ph.left, ph.top, ph.width, ph.height = Inches(x), Inches(3.5), Inches(w), Inches(1.0)
                 ph.text_frame.word_wrap = True
                 ph.text_frame.vertical_anchor = MSO_ANCHOR.TOP
                 ph.text_frame.margin_left = Inches(0)
-                ph.text = clean(s["subtitle"])
+                ph.text = sub
                 for p in ph.text_frame.paragraphs:
                     p.alignment = PP_ALIGN.LEFT
                     for r in p.runs:
-                        _set_font(r, 16, TC.TEXT_2)
+                        _set_font(r, 16, soft)
             else:
                 ph._element.getparent().remove(ph._element)
-    _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_5, 0.5, "CoverRule")
+    _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, "CoverRule")
     if s.get("date"):
         _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
-                                                         "color": TC.TEXT_2}])
-    _logo(sl, RIGHT, 0.5, 0.55, 2.6, "ov_Logo", x_left=LEFT)
+                                                         "color": soft}])
+    if not dark:                                           # a logo drawn for white paper stays off the dark field
+        _logo(sl, RIGHT, 0.5, 0.55, 2.6, "ov_Logo", x_left=LEFT)
     _write(_box(sl, colx(9), 6.65, RIGHT - colx(9), 0.3, "Firm"),
            [{"text": s.get("firm") or BRAND.get("firm") or FIRM, "size": 11, "bold": True, "numbers": False,
-             "align": PP_ALIGN.RIGHT}])
+             "align": PP_ALIGN.RIGHT, "color": ink}])
 
 
 def a_closing(ctx, s, sl, n):
@@ -2280,8 +2297,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_title_Right", MSO_ANCHOR.BOTTOM),
-           [{"text": tr, "size": _title_size(tr, rw) or 20, "bold": True, "heading": True, "numbers": False,
-             "line_spacing": 1.0}])
+           [{"text": tr, "size": min(_title_size(tr, rw) or 20, T["head"] + 4), "bold": True, "heading": True,
+             "numbers": False, "line_spacing": 1.0}])      # the argument's lead, a step under the slide title
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
@@ -3031,6 +3048,8 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
+COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
+NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
 RTL_FONT = "Arial"           # the complex-script face: ships Arabic glyphs on Windows and macOS
 DIRECTIONAL = {"homePlate", "chevron", "rightArrow", "leftArrow", "notchedRightArrow", "stripedRightArrow",
                "rightArrowCallout", "leftArrowCallout", "pentagon", "triangle", "rtTriangle", "curvedRightArrow"}
