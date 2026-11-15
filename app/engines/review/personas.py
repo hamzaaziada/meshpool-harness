@@ -174,7 +174,14 @@ What you look for:
 You particularly dislike: {', '.join(p['red_flags'])}.
 
 Score each dimension from 1 to 10 (10 = you would send it as is; 8 = minor polish; 6 = needs real work; 4 or less =
-start again on that dimension):
+start again on that dimension).
+Calibration: 8 is the standard of published work from the best firms, the material that goes out every day: a
+bulge-bracket bank's board discussion materials or fairness book as filed with the SEC (Goldman Sachs, Morgan
+Stanley), a published McKinsey or BCG report exhibit. Work at that standard scores 8; 9-10 is better than it. Grade
+against that standard, not against an ideal no published deck meets. The other house's conventions are not faults:
+banking back-up pages carry label titles and dense tables of figures; consulting pages carry action titles and one
+message per page. Judge each page by what its kind of page needs, and the whole by whether it answers the question.
+Dimensions:
 {chr(10).join(f'- {k}: {lab} (weight {w:.2f})' for k, lab, w in dims)}
 
 You sign off only if the weighted score is at least {b['overall']}, no dimension is below {b['floor']} and nothing
@@ -246,6 +253,24 @@ def overall(persona: str, target: str, scores: dict) -> float | None:
     return round(sum(s * w for s, w in got) / sum(w for _, w in got), 2)
 
 
+def passes(persona: str, target: str, scores: dict, ov, issues: list, bar: dict | None = None) -> tuple[bool, float | None]:
+    """(signed off, calibrated overall). A bar with a calibration ({persona: offset}) shifts every score by the amount
+    that puts published work from the best firms at 8 on this reviewer's scale (measured: the same reviewer scoring a
+    Goldman Sachs board book filed with the SEC; docs/stack/reviewer-calibration.md). Raw scores are always kept.
+    With a calibration, blocking issues are reported but do not by themselves stop sign-off: the reference draws
+    them too."""
+    b = dict(BAR, **(bar or {}))
+    off = float((b.get("calibration") or {}).get(persona, 0.0))
+    if ov is None:
+        return False, None
+    cal = round(min(10.0, ov + off), 2)
+    dims = [k for k, _, _ in dimensions(persona, target)]
+    ok = cal >= b["overall"] and all(min(10.0, scores.get(k, 0) + off) >= b["floor"] for k in dims)
+    if not off:
+        ok = ok and sum(1 for i in issues if i["severity"] == "blocking") <= b["blocking"]
+    return ok, cal
+
+
 def parse_review(text: str, persona: str, target: str, bar: dict | None = None) -> dict:
     """The reviewer's reply, normalised; the verdict is recomputed from the bar (a reviewer cannot sign off below it,
     and a reply that scores above it with a blocker is a revise)."""
@@ -267,10 +292,8 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
                        "where": str(it.get("where") or ""), "issue": str(it["issue"]).strip(),
                        "fix": str(it.get("fix") or "").strip(), "persona": persona})
     ov = overall(persona, target, scores)
-    dims = [k for k, _, _ in dimensions(persona, target)]
-    ok = (ov is not None and ov >= b["overall"] and all(scores.get(k, 0) >= b["floor"] for k in dims)
-          and sum(1 for i in issues if i["severity"] == "blocking") <= b["blocking"])
-    out = {"persona": persona, "target": target, "status": "ok", "scores": scores, "overall": ov,
+    ok, cal = passes(persona, target, scores, ov, issues, b)
+    out = {"persona": persona, "target": target, "status": "ok", "scores": scores, "overall": ov, "calibrated": cal,
            "verdict": "sign_off" if ok else "revise", "headline": str(d.get("headline") or ""), "issues": issues,
            "research_requests": [r for r in d.get("research_requests") or [] if isinstance(r, dict)
                                  and str(r.get("question") or "").strip()]}

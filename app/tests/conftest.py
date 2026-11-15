@@ -32,6 +32,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness.core import gateway as GW
     GW.reset()
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
+    monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
     yield
     GW.reset()

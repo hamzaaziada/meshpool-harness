@@ -318,7 +318,10 @@ review:
   personas:                     # the senior partner and the MD (engines/review/personas.py, engines/forge/critics.py)
     enabled: true               # off: the single generic partner review above runs instead (MH_PERSONAS=0 too)
     who: [partner, md]
-    bar: {overall: 8.0, floor: 7, blocking: 0}   # sign-off: weighted score >= 8, no dimension below 7, no blocker
+    bar: {overall: 8.0, floor: 7, blocking: 0,   # sign-off: weighted score >= 8, no dimension below 7, no blocker,
+          calibration: {partner: 3.2, md: 2.3}}  # after shifting each reviewer so published top-bank work scores 8:
+                                # the same reviewers gave a Goldman Sachs board book filed with the SEC partner ~4.8,
+                                # MD ~5.7 (docs/stack/reviewer-calibration.md); {} grades raw
     max_storyboard_rounds: 3    # storyboard reviews before any slide is written (review, research, re-plan, review)
     max_review_rounds: 3        # deck reviews (review, fix, review, fix, review); stops early on sign-off or no gain
     batch: 6                    # pages per reviewer message (vision models limit images per call)

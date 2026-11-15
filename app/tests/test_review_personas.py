@@ -79,3 +79,23 @@ def test_a_review_cut_off_mid_json_keeps_its_scores_and_complete_issues():
     assert r["status"] == "ok" and r["verdict"] == "revise" and r["overall"] < 2
     assert len(r["issues"]) == 1 and r["issues"][0]["where"] == "Model!C5"
     assert r["headline"] == "This file cannot leave the desk"
+
+
+def test_calibration_puts_published_work_at_the_bar(monkeypatch):
+    """The same reviewers gave a Goldman Sachs board book filed with the SEC about 4.8 (partner) and 5.7 (MD); the
+    calibration shifts each reviewer so that work scores 8, and blocking issues no longer gate on their own."""
+    from engines.review import personas as P
+    bar = {"overall": 8.0, "floor": 7, "blocking": 0, "calibration": {"partner": 3.2, "md": 2.3}}
+    dims = [k for k, _, _ in P.dimensions("md", "deck")]
+    ref = {k: 5.8 for k in dims}
+    blocker = [{"severity": "blocking", "issue": "no football field"}]
+    ok, cal = P.passes("md", "deck", ref, P.overall("md", "deck", ref), blocker, bar)
+    assert ok and cal == 8.1                                   # reference-grade work signs off, blocker or not
+    weak = {k: 5.0 for k in dims}
+    assert P.passes("md", "deck", weak, P.overall("md", "deck", weak), [], bar)[0] is False
+    raw = dict(bar, calibration={})
+    assert P.passes("md", "deck", ref, P.overall("md", "deck", ref), blocker, raw)[0] is False
+    monkeypatch.setenv("MH_REVIEW_CALIBRATION", "1")
+    from engines.forge import critics
+    from engines.forge.common import load_rules
+    assert critics.settings(load_rules())["bar"]["calibration"] == {"partner": 3.2, "md": 2.3}
