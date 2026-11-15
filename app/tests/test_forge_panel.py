@@ -364,3 +364,35 @@ def test_only_the_facts_given_still_allows_sourced_research_when_the_brief_says_
     from engines.forge.research import NO_RESEARCH_RE as R
     assert not R.search("Use only the facts given and any sourced research.")
     assert R.search("Use only the facts given.") and R.search("Do not research.")
+
+
+def test_review_revisions_go_to_the_whole_deck_in_one_pass_and_keep_numbers_tied(live, tmp_path):
+    """Per-slide fixes broke what tied across pages and every live round scored lower; the reviewers' revisions now
+    go to one call that rewrites the whole deck, and the per-slide writer is used only as a fallback."""
+    def reviewer(who, target, text, n):
+        if target == "storyboard" or n >= 2:
+            return _signoff(who, target, text, n)
+        return {"scores": _scores(who, target, 7), "issues": [
+            {"severity": "blocking", "scope": "data", "where": "slide 2", "issue": "the $120m is not dated",
+             "fix": "say 2025 on every slide that uses it"}]}
+    seen = []
+
+    class WholeDeck(Stub):
+        def chat(self, *, model, messages, **kw):
+            if "revising a whole consulting deck" in messages[0]["content"]:
+                user = messages[-1]["content"]
+                seen.append(user)
+                deck = json.loads(user.split("Deck:\n", 1)[1].split("\n\nFacts:", 1)[0])
+                for s in deck[1:]:
+                    s["footnotes"] = list(s.get("footnotes") or []) + ["All figures are for 2025"]
+                return {"choices": [{"message": {"content": json.dumps({"slides": deck})}}]}
+            return super().chat(model=model, messages=messages, **kw)
+    stub = WholeDeck(reviewer)
+    B.build(BRIEF, str(tmp_path), slides_wanted=4, client=stub, rules=live, task_id="t")
+    rv = json.loads((tmp_path / "review.json").read_text())
+    act = rv["rounds"][0]["actions"]
+    assert act["revision"] == "whole deck" and act["rewritten"] == [2, 3, 4]
+    assert not any("[review]" in f for f in stub.fixes)                  # no review issue went slide by slide
+    assert "the $120m is not dated" in seen[0]
+    slides = json.loads((tmp_path / "slides.json").read_text())
+    assert all("All figures are for 2025" in (s.get("footnotes") or []) for s in slides[1:]) and len(slides) == 4

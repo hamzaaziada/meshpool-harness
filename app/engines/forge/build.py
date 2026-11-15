@@ -1382,8 +1382,56 @@ choice or the number of items; never layout. Keep node and keep the point of the
             for n in asks:                                     # with the slide's open rule failures, fixed together
                 asks[n] += [m for m in fails.get(n, []) if m not in asks[n]]
             act["to_writer"] = sorted(asks)
-            act["rewritten"] = sorted(i + 1 for i in repair(asks, tag)) if asks else []
+            whole = revise_deck(asks, tag) if asks and os.environ.get("MH_DECK_REVISE", "1") != "0" else None
+            if whole is not None:                         # one pass over the whole deck keeps numbers and story tied
+                act["rewritten"], act["revision"] = whole, "whole deck"
+            else:
+                act["rewritten"] = sorted(i + 1 for i in repair(asks, tag)) if asks else []
+                act["revision"] = "per slide"
             return act
+
+        def revise_deck(asks: dict, tag: str) -> list[int] | None:
+            """The reviewers' revisions applied to the whole deck in one call: slide-by-slide fixes broke what tied
+            across pages (cash on slide 2 vs slide 5, a recommendation hedged on one page and sized on another),
+            and every live review round scored lower than the one before. Returns the slides changed, or None to
+            fall back to per-slide repair (unreadable reply, wrong count, a computed page touched)."""
+            nonlocal calls
+            deck = [{k: v for k, v in s.items() if k != "notes"} for s in slides]
+            notes = "\n".join(f"Slide {n}:\n- " + "\n- ".join(m) for n, m in sorted(asks.items()))
+            try:
+                got = _call(client, MODEL, f"""You are revising a whole consulting deck after a senior partner's and a
+bank MD's review. Apply every revision below, then make the deck consistent as one document: every number that
+appears on more than one slide ties (same value, same basis, reconciled when it changes, e.g. cash before and after a
+payout); the recommendation is stated once, sized and unhedged, and every slide supports it; titles read top to bottom
+as the storyline. Keep the slide count, each slide's node and order, and leave slides marked "fixed" exactly as they
+are. Change words, numbers (only from the facts, calcs and options), archetype choice or items; never layout.
+Return ONLY JSON: {{"slides": [the full slide JSON for every slide, in order]}}.
+{CONSULTING}
+{WRITE[density]}
+{SLIDE_SHAPE}
+{help_}""", "Revisions:\n" + notes + "\n\nDeck:\n" + json.dumps(deck) + "\n\nFacts:\n" +
+                    "\n".join(f"{f['id']}: {f['text']}" for f in facts), f"{task_id}-revise-{tag}", 16000)
+                calls += 1
+            except Exception:  # noqa: BLE001
+                return None
+            new = got.get("slides") if isinstance(got, dict) else None
+            if not isinstance(new, list) or len(new) != len(slides):
+                return None
+            changed = []
+            for i, (old_s, new_s) in enumerate(zip(slides, new)):
+                if is_fixed(i) or not isinstance(new_s, dict) or new_s.get("archetype") not in ARCHETYPES:
+                    continue                              # a computed page is never rewritten; a bad slide is skipped
+                for k in ("section", "section_icon", "notes"):
+                    if old_s.get(k) and not new_s.get(k):
+                        new_s[k] = old_s[k]
+                if new_s != old_s:
+                    slides[i] = new_s
+                    changed.append(i + 1)
+            if changed:
+                clear.append(clarity.review(slides, client, only={c - 1 for c in changed}, main_model=MODEL,
+                                            task_id=f"{task_id}-clarity-{tag}"))
+                calls += 1
+            return changed
 
         best = None
         stall = 0
