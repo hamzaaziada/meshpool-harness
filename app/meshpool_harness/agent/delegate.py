@@ -33,6 +33,7 @@ BLOCKED_MCP = ("memory_save", "memory_forget", "schedule_task", "delete_schedule
 _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
                           re.I)
 NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests"}
+REPORTS_BUDGET = 60000
 
 
 # ---------- settings ----------------------------------------------------------------------------------------------
@@ -235,7 +236,8 @@ class Delegation:
                 if self._outside(name, args):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 self.mode = top.mode                     # the chat's mode now: the user may have tightened it
-                if getattr(top, "plan", False) and name not in K.READ_ONLY:
+                if getattr(top, "plan", False) and name not in K.PLAN_TOOLS and \
+                        name.replace("-", "_") not in K.PLAN_MCP:   # what the chat itself may do in plan mode
                     return False, "the chat is in plan mode now: nothing may change"
                 return super()._permit(name, args)
 
@@ -244,8 +246,10 @@ class Delegation:
                     raise K.Interrupted()
                 super()._check_stop()
 
+        import tempfile
         a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
+                  sessions_dir=os.path.join(tempfile.gettempdir(), "meshpool-subagents"),   # not a chat
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_depth = depth + 1
         a._delegate_top = top
@@ -334,7 +338,9 @@ class Delegation:
         if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
             p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
         summary = str(rec.get("summary") or "")
-        cap = self.cfg["summary_chars"]
+        # every report of one call shares a budget (about 60k characters) so the result fits the chat's context;
+        # a report cut to fit is kept in full in a file the model can read
+        cap = min(self.cfg["summary_chars"], max(3000, REPORTS_BUDGET // max(1, len(self.rows))))
         truncated = len(summary) > cap
         if truncated:                                      # head and tail; the full report goes to a file
             f = p.ws.run_dir / f"subagent-{sid}.txt"
@@ -374,11 +380,22 @@ class Delegation:
                     self.stop_all("the time limit" if deadline and time.time() > deadline else "Stop")
                 time.sleep(0.25)
         threading.Thread(target=watch, daemon=True).start()
+        ex = ThreadPoolExecutor(max(1, min(self.cfg["parallel"], len(self.rows))))
+        futs = [ex.submit(self._one, i) for i in range(len(self.rows))]
         try:
-            with ThreadPoolExecutor(max(1, min(self.cfg["parallel"], len(self.rows)))) as ex:
-                results = list(ex.map(self._one, range(len(self.rows))))
+            results = [f.result() for f in futs]
+        except BaseException:                            # Ctrl+C in the terminal agent: stop them all, wait, go on
+            self.stop_all("Stop")
+            while True:
+                try:
+                    ex.shutdown(wait=True)
+                    break
+                except BaseException:  # noqa: BLE001 - a second Ctrl+C while they stop: keep waiting (about 1 s)
+                    continue
+            raise
         finally:
             done.set()
+            ex.shutdown(wait=False)
         out = {"delegation_id": self.id, "results": sorted(results, key=lambda r: r["task_index"]),
                "total_duration_seconds": round(time.time() - self.t0, 1)}
         if getattr(self, "why", ""):
@@ -408,7 +425,7 @@ def report(result: dict) -> str:
         head += " " + result["note"]
     return head + "\n\n" + "\n\n".join(lines) + "\n\n```json\n" + json.dumps(
         {**result, "results": [{k: v for k, v in r.items() if k != "summary"} for r in result["results"]]},
-        ensure_ascii=False)[:20000] + "\n```"
+        ensure_ascii=False)[:8000] + "\n```"
 
 
 def run_tool(parent, args: dict) -> tuple[str, bool]:

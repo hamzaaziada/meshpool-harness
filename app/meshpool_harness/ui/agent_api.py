@@ -1007,6 +1007,8 @@ def search(q: str) -> list:
         return []
     hits = []
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
+        if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
+            continue
         try:
             raw = p.read_text(encoding="utf-8")
         except OSError:

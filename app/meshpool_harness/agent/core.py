@@ -1675,6 +1675,8 @@ class Agent:
         best = None
         if SESSIONS.exists():
             for p in SESSIONS.glob("*/session.json"):
+                if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
+                    continue
                 try:
                     d = json.loads(p.read_text(encoding="utf-8"))
                 except (OSError, ValueError):

@@ -302,3 +302,62 @@ def test_progress_steps_are_live_only_and_do_not_crowd_the_saved_transcript(tmp_
     saved = json.loads((tmp_path / "keep-test" / "transcript.json").read_text())["events"]
     assert saved[0]["text"] == "hi" and len(saved) == 2 and saved[-1]["kind"] == "done"
 
+
+
+def test_ctrl_c_in_the_terminal_stops_the_sub_agents_before_it_goes_on(monkeypatch, _env):
+    import _thread
+    calls = []
+
+    def child(b):
+        calls.append(time.time())
+        time.sleep(0.15)
+        return _msg("", [("glob", {"pattern": "*"})])               # never finishes on its own
+    fake(monkeypatch, child)
+    a = _agent(_env)
+    threading.Timer(0.6, _thread.interrupt_main).start()            # Ctrl+C, in the main thread as in a terminal
+    with pytest.raises(KeyboardInterrupt):
+        D.run_tool(a, {"tasks": [{"goal": "List files again and again"}, {"goal": "List files once more, slowly"}]})
+    t_back = time.time()
+    time.sleep(1.0)
+    assert not [c for c in calls if c > t_back + 0.2]               # nothing runs on after Ctrl+C
+
+
+def test_sub_agent_sessions_are_never_a_chat_to_resume_or_search(monkeypatch, _env, tmp_path):
+    seen_dirs = []
+
+    def child(b):
+        return _msg("ok")
+    fake(monkeypatch, child)
+    real = K.Agent.__init__
+
+    def spy(self, *a, **k):
+        real(self, *a, **k)
+        seen_dirs.append(self.dir)
+    monkeypatch.setattr(K.Agent, "__init__", spy)
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Look at the project files"}]})
+    child_dir = [d for d in seen_dirs if d.name.startswith("sub-")][0]
+    assert K.SESSIONS not in child_dir.parents                     # outside the chat list
+    orphan = K.SESSIONS / "sub-sa-0-dead"                          # one left by an older version or a crash
+    orphan.mkdir(parents=True)
+    (orphan / "session.json").write_text(json.dumps({"id": "sub-sa-0-dead", "workdir": str(_env.resolve()),
+                                                     "updated": time.time() + 99, "messages": []}))
+    assert K.Agent.resume(str(_env)) is None or K.Agent.resume(str(_env)).id != "sub-sa-0-dead"
+
+
+def test_plan_mode_mid_run_holds_children_to_what_the_chat_may_do_in_plan_mode(monkeypatch, _env):
+    a = _agent(_env, mode="auto", profile="work")
+    a.plan = True
+    child = D.Delegation(a, D.check_goals([{"goal": "Make the deck"}]), D.settings(), 0)._child(
+        "sa-x", 0, {"trace": [], "files": set(), "errors": [], "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}})
+    assert child._permit("office_task", {"request": "deck"})[0] is False
+    assert child._permit("write_file", {"path": "x.txt", "content": "x"})[0] is False
+    assert child._permit("read_file", {"path": "x.txt"})[0] is True
+
+
+def test_many_reports_share_one_budget_and_are_kept_in_full_in_files(monkeypatch, _env):
+    fake(monkeypatch, lambda b: _msg("R" * 14000 + "END"))
+    out, _ = D.run_tool(_agent(_env), {"tasks": [{"goal": f"Write report number {i} in full"} for i in range(8)]})
+    assert len(out) < D.REPORTS_BUDGET + 20000                      # fits the chat's context
+    assert out.count("The full report is in ") == 8
+    path = out.split("The full report is in ")[1].split(" (read it")[0]
+    assert open(path).read().endswith("END")
