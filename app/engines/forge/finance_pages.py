@@ -276,10 +276,24 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
     loc = bk.names.get(f"{prefix}per_share")
     ws = bk.v[loc[0]]
     lab = {}
+    raw = {}
     for r in range(1, ws.max_row + 1):
         v = ws.cell(row=r, column=1).value
-        if isinstance(v, str) and v not in lab:
-            lab[v] = _num(ws.cell(row=r, column=2).value)
+        if isinstance(v, str) and v not in raw:
+            raw[v] = _num(ws.cell(row=r, column=2).value)
+    canon = ["Sum of PV of free cash flow ($m)", "PV of terminal value ($m)", "Enterprise value ($m)",
+             "Less: total debt ($m)", "Plus: cash ($m)", "Less: minorities and preferred ($m)", "Equity value ($m)",
+             "Diluted shares (m)", "Value per share ($)", "Value per share, exit multiple ($)",
+             "Implied exit multiple from Gordon value (x)"]
+    stem = lambda s: re.sub(r"\s*\(.*$|,.*$", "", s).strip().lower()  # noqa: E731  labels carry years, units, notes
+    for c in canon:                                  # "Sum of PV of free cash flow, 2027E-2031E ($m)" is the same row
+        hit = next((k for k in raw if k == c), None) or next((k for k in raw if stem(k) == stem(c)), None)
+        if hit is not None:
+            lab[c] = raw[hit]
+    lab.update({k: v for k, v in raw.items() if k not in lab})
+    for c, nm in (("Sum of PV of free cash flow ($m)", "sum_pv"), ("PV of terminal value ($m)", "pv_tv")):
+        if lab.get(c) is None and _num(bk.name(f"{prefix}{nm}")) is not None:
+            lab[c] = _num(bk.name(f"{prefix}{nm}"))   # the named output when the label differs
     bridge = [("Sum of PV of free cash flow ($m)", "PV of free cash flow, forecast years", _usd),
               ("PV of terminal value ($m)", "PV of terminal value (Gordon growth)", _usd),
               ("Enterprise value ($m)", "Enterprise value", _usd),
@@ -304,6 +318,8 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
                     f"terminal value {_pct(g['tv_share'])} of EV", f"{prefix}per_share, {prefix}per_share_exit")]
     if None in vals:
         return None
+    if abs(sum(vals[:-1]) - vals[-1]) > max(1.0, 0.01 * abs(vals[-1])):
+        return None                                  # a bridge that does not add up is never drawn
     return {"archetype": "waterfall_bridge", "fixed": True,
             "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at {wacc}",
             "title_prov": prov,
