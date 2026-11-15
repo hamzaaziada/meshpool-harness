@@ -1404,13 +1404,19 @@ class Designer:
             return f"time budget spent ({self.cfg['time_budget_s']}s)"
         return None
 
-    def _one(self, i: int, s: dict, layout: str, recent: list[str] | None = None) -> dict:
-        v = view(s, self.density)
-        rec = {"node": s.get("node"), "layout_asked": layout, "status": "not_run"}
+    def _reserve(self) -> str:
+        """Take one image from the caps, or say why none is left ("" when one was taken)."""
         with self.lock:
             why = self.budget_left()
             if not why:
                 self.used += 1
+        return why or ""
+
+    def _one(self, i: int, s: dict, layout: str, recent: list[str] | None = None, why: str | None = None) -> dict:
+        v = view(s, self.density)
+        rec = {"node": s.get("node"), "layout_asked": layout, "status": "not_run"}
+        if why is None:
+            why = self._reserve()
         if why:
             rec["why"] = why
             return rec
@@ -1457,9 +1463,11 @@ class Designer:
                 recent.append(layout)
             else:
                 recent.append((rec.get("spec") or {}).get("layout") or rec.get("layout_asked") or "")
-        if todo:
+        if todo:                                   # the caps go to slides in deck order, not to the fastest thread
+            todo = [t + (self._reserve(),) for t in todo]
             with ThreadPoolExecutor(max(1, int(self.cfg["workers"]))) as ex:
-                for (i, s, d, _, _r), rec in zip(todo, ex.map(lambda t: self._one(t[0], t[1], t[3], t[4]), todo)):
+                for (i, s, d, _, _r, _w), rec in zip(todo, ex.map(lambda t: self._one(t[0], t[1], t[3], t[4], t[5]),
+                                                                  todo)):
                     if rec["status"] == "not_run" and s.get("node") in self.by_node and \
                             not coverage(self.by_node[s["node"]]["spec"], view(s, self.density)):
                         rec = dict(self.by_node[s["node"]], rebound=True)   # same structure, new words: rebind
