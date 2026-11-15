@@ -456,16 +456,28 @@ def main(argv=None):
         # Its own session (POSIX) or process group with no console (Windows): Ctrl+C or closing the terminal that
         # started a task must not take the browser with it.
         detach = ({"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True})
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", outdir], stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, **detach)
-        for _ in range(60):
+        log = state_path().with_name("daemon.log")         # why it failed, when it does
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "w", encoding="utf-8") as errf:
+            proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_serve", outdir],
+                                    stdout=subprocess.DEVNULL, stderr=errf, stdin=subprocess.DEVNULL, **detach)
+        for _ in range(90):
             try:
                 call("snapshot")
                 print("browser started")
                 return 0
             except Exception:
+                if proc.poll() is not None:                  # the daemon exited: no point waiting
+                    break
                 time.sleep(0.5)
-        print("ERROR: browser did not start")
+        why = ""
+        try:
+            lines = [x for x in log.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
+            why = next((x.strip() for x in reversed(lines) if "Error" in x or "error" in x), lines[-1].strip() if lines else "")
+        except OSError:
+            pass
+        print("ERROR: browser did not start" + (f": {why[:400]}" if why else "") +
+              ("\nRun: meshpool install-browser" if "Executable doesn't exist" in why or "install" in why.lower() else ""))
         return 1
     if a[0] == "_serve":
         _serve(a[1] if len(a) > 1 else None)

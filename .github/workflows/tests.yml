@@ -1,0 +1,47 @@
+# Tests on every pull request and on main: the checks the pull request view (and GitHub) show for each change.
+name: tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # one place for Chromium: the install step and the app under test (which only sets a default) both use it
+      PLAYWRIGHT_BROWSERS_PATH: /home/runner/pw-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-cli.txt
+      - name: LibreOffice and fonts (decks and workbooks are rendered and recalculated in the tests)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libreoffice-calc libreoffice-impress libreoffice-writer fonts-crosextra-carlito fonts-dejavu poppler-utils
+      - name: Python packages
+        run: |
+          python -m pip install --upgrade pip
+          # the same packages the app ships with (install.sh and the desktop builds use this file)
+          pip install -r packaging/requirements-cli.txt playwright pytest
+      - name: Chromium for browser use (the app installs it with meshpool install-browser)
+        run: python -m playwright install --with-deps chromium
+      - name: Segoe UI's stand-in for rendering (decks are measured with the bundled Selawik, as on a user's computer)
+        run: |
+          mkdir -p ~/.local/share/fonts ~/.config/fontconfig
+          cp app/engines/forge/fonts/Selawik-*.ttf ~/.local/share/fonts/
+          printf '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><alias><family>Segoe UI</family><prefer><family>Selawik</family></prefer></alias></fontconfig>\n' > ~/.config/fontconfig/fonts.conf
+          fc-cache -f >/dev/null
+          fc-match "Segoe UI"
+      - name: Tests
+        working-directory: app
+        run: python -m pytest -q -p no:cacheprovider tests
