@@ -169,7 +169,14 @@ def argument_layout(ctx, s, sl, n):
         y += ih + 0.15
     avail = bottom - y - (band_h + 0.3 if band_h else 0)
     mode = plan_markers(items)
-    if 2 <= len(items) <= 4:
+    last = getattr(ctx, "last_arg", (-9, ""))              # composition variety: two text-led slides in a row never
+    form = "columns" if 2 <= len(items) <= 4 else "rows"    # share a form (columns of icons, then rows; or back)
+    if last[0] == n - 1 and last[1] == form and form == "columns" and mode not in ("process", "figures"):
+        form = "rows"
+    elif last[0] == n - 1 and last[1] == "rows" and form == "rows" and 2 <= len(items) <= 4:
+        form = "columns"
+    ctx.last_arg = (n, form)
+    if form == "columns":
         used = _columns(ctx, s, sl, n, items, mode, y, avail)
     else:
         used = _rows(ctx, s, sl, n, items, y, avail)

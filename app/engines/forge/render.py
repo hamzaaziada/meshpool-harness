@@ -566,6 +566,7 @@ class Ctx:
         self.prov = prov
         self.overflow = []
         self.last_side = -9          # last slide whose chart had its text in a side panel (composition variety)
+        self.last_arg = (-9, "")      # last text-led slide and its form (columns or rows): neighbours never share one
 
     def miss(self, n, where, words):
         self.overflow.append(f"slide {n}: {where} does not fit at the minimum size; cut about {words} words")

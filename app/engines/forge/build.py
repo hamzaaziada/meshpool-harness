@@ -639,6 +639,41 @@ def prose_checks(slides) -> dict[int, list[str]]:
     return out
 
 
+WORDS_LED = {"argument_only"}
+NO_VARIETY = {"cover", "section_divider", "agenda", "executive_summary", "closing", "next_steps", "end"}
+
+
+def _form(s: dict) -> str:
+    """The slide's visual form, for variety: its archetype, with a grid of only words counted as text-led."""
+    a = s.get("archetype") or ""
+    if a == "grid":
+        kinds = sorted({p.get("type") for p in s.get("parts") or [] if isinstance(p, dict)})
+        return "argument_only" if kinds and set(kinds) <= {"text", "callout", "quote"} else "grid:" + "+".join(kinds)
+    return a
+
+
+def variety_checks(slides) -> dict[int, list[str]]:
+    """What a partner sends back first: pages that all look the same. Two content slides in a row with the same
+    form, or more than a third of the content slides led by words, each go back to the writer with the forms to
+    choose from (chart from the facts, table, figures, 2x2, options vs criteria, process, timeline)."""
+    out: dict[int, list[str]] = {}
+    body = [(i, s) for i, s in enumerate(slides, 1) if isinstance(s, dict) and s.get("archetype") not in NO_VARIETY
+            and not s.get("fixed")]
+    forms = [_form(s) for _, s in body]
+    ask = ("make this slide a different exhibit than its neighbours: a chart of the numeric facts (bar_takeaway, "
+           "column_trend, waterfall_bridge), a table (table_focus), big figures beside a chart (grid with stats + "
+           "chart), a 2x2 or options vs criteria (grid matrix2x2 / harvey), a process or timeline, or a benchmark")
+    for k in range(1, len(body)):
+        if forms[k] == forms[k - 1]:
+            out.setdefault(body[k][0], []).append(
+                f"slides {body[k - 1][0]} and {body[k][0]} use the same layout ({forms[k]}); {ask}")
+    words = [i for (i, _), f in zip(body, forms) if f in WORDS_LED]
+    if body and len(words) > max(1, len(body) // 3):
+        for i in words[max(1, len(body) // 3):]:
+            out.setdefault(i, []).append(f"{len(words)} of {len(body)} content slides are words with icons; {ask}")
+    return out
+
+
 def _chart_unit(c: dict) -> str:
     u = str(c.get("unit") or "")
     if "%" in u:
@@ -1109,6 +1144,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
         for n, msgs in prose_checks(slides).items():
             fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
+        for n, msgs in variety_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
             if m and int(m.group(1)) - 1 < len(slides):
@@ -1143,7 +1180,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             s = slides[n - 1]
             ev = set(next((x.get("evidence", []) for x in story.get("slides", []) if x.get("node") == s.get("node")), []))
             rel = [f for f in facts if f["id"] in ev] or facts
-            if any(m.startswith(("[P20]", "[fill]", "[schema]", "[review]")) for m in msgs):
+            if any(m.startswith(("[P20]", "[fill]", "[schema]", "[review]", "[variety]")) for m in msgs):
                 rel = facts                                  # a thin slide needs the whole evidence base to fill
             if any(m.startswith(THIN_TAGS) for m in msgs):   # ... and to know which of it is still unused
                 msgs = list(msgs) + [substance_hint(slides, facts)]
