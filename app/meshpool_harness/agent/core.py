@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import copy
 import difflib
 import http.client
 import itertools
@@ -1019,23 +1020,36 @@ class Agent:
                         lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
                         if len(json.dumps(self._body())) > lim:
                             _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
-                        if len(json.dumps(self._body())) > lim and _cut_long_user_text(self.messages):
-                            self.emit({"type": "status", "text": "Your message was too large for the endpoint, so "
-                                                                 "its middle was left out. Attach long text as a "
-                                                                 "file to keep all of it."})
-                        if len(json.dumps(self._body())) > lim:
-                            without = [dict(m) if isinstance(m.get("content"), list) else m for m in self.messages]
-                            _drop_images(without, keep=0)
-                            saved, self.messages = self.messages, without
-                            fits_without = len(json.dumps(self._body())) <= lim
-                            self.messages = saved
-                            if fits_without:             # the newest image alone is too big: say so, keep it
+                        if self._size_with(self.messages) > lim:
+                            # Try each remedy on a copy and apply only one that makes the request fit: never cut
+                            # the user's text when an image is the problem, or the other way round.
+                            cut = copy.deepcopy(self.messages)
+                            did_cut = _cut_long_user_text(cut)
+                            noimg = copy.deepcopy(self.messages)
+                            _drop_images(noimg, keep=0)
+                            both = copy.deepcopy(cut)
+                            _drop_images(both, keep=0)
+                            has_img = _has_images(self.messages)
+                            if did_cut and self._size_with(cut) <= lim:
+                                self.messages[:] = cut
+                                self.emit({"type": "status", "text": "Your message was too large for the endpoint, "
+                                                                     "so its middle was left out. Attach long text "
+                                                                     "as a file to keep all of it."})
+                            elif has_img and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # gone from the chat, so the next message works
                                 raise RuntimeError("The endpoint could not take this request: the attached image "
-                                                   "is too large. Attach a smaller one (a screenshot of part of the "
-                                                   "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
-                            raise RuntimeError("The endpoint could not take this request: the conversation is too "
-                                               "large even after it was shortened. Start a new chat to carry on. ("
-                                               + msg[:120] + ")")
+                                                   "was too large, so it was removed from the chat. Attach a "
+                                                   "smaller one (a screenshot of part of the screen, or a JPEG) "
+                                                   "and send it again. (" + msg[:120] + ")")
+                            elif did_cut and has_img and self._size_with(both) <= lim:
+                                self.messages[:] = both
+                                self.emit({"type": "status", "text": "Your message and its image were too large for "
+                                                                     "the endpoint: the middle of the text and the "
+                                                                     "image were left out."})
+                            else:
+                                raise RuntimeError("The endpoint could not take this request: the conversation is "
+                                                   "too large even after it was shortened. Start a new chat to "
+                                                   "carry on. (" + msg[:120] + ")")
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         self.emit({"type": "status", "text": "The request was too large for the endpoint; older "
@@ -1087,6 +1101,15 @@ class Agent:
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
+
+    def _size_with(self, messages: list) -> int:
+        """How big the request would be with these messages (the body _post sends)."""
+        saved = self.messages
+        self.messages = messages
+        try:
+            return len(json.dumps(self._body()))
+        finally:
+            self.messages = saved
 
     def route_id(self) -> str:
         """The id the endpoint sees for this chat (cache affinity, gateway session). Changes after a stuck route."""
