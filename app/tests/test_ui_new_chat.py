@@ -132,8 +132,10 @@ def test_new_chat_from_an_open_chat_starts_a_new_one_in_the_same_folder(page, ap
 
     page.fill("#input", "Say hello again")
     page.press("#input", "Enter")
-    page.wait_for_function("id => S.cur && S.cur.id && S.cur.id !== id", arg=first, timeout=60000)
-    assert page.evaluate("S.cur.view ? S.cur.view.workdir : S.draft.project") == workdir
+    # the new chat's view starts as a placeholder; its folder arrives with the first poll of the server
+    page.wait_for_function("id => S.cur && S.cur.id && S.cur.id !== id && S.cur.view && S.cur.view.workdir", arg=first,
+                           timeout=60000)
+    assert page.evaluate("S.cur.view.workdir") == workdir
     assert page.errors == [], page.errors
 
 
