@@ -224,6 +224,8 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .planbox ol{margin:0;padding-left:20px;font-size:var(--fs-s)}
 .planbox li.completed{color:var(--ink-3);text-decoration:line-through}
 .planbox li.in_progress{color:var(--ink);font-weight:500}
+.planbox li.failed{color:var(--del)}
+.planbox li.stopped{color:var(--ink-3)}
 .think{color:var(--ink-3);font-size:var(--fs-s);margin:8px 0}
 .think summary{cursor:pointer}
 .think div{white-space:pre-wrap;margin-top:8px;border-left:1px solid var(--line);padding-left:12px;max-height:240px;overflow:auto}

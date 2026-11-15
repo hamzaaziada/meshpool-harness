@@ -1083,7 +1083,7 @@ function diffLines(d) { return String(d || "").split("\n").map(l => { const c = 
 
 /* ---------- events ---------- */
 const TOOL_ICON = n => /bash|run|exec|command|terminal/.test(n) ? ICON.run : /edit|write|patch/.test(n) ? ICON.edit : /read|grep|glob|search|fetch|snapshot|list/.test(n) ? ICON.read : /skill/.test(n) ? ICON.skill : ICON.tool;
-const TOOL_RUN = {bash: "Running", bash_many: "Running", read_file: "Reading", write_file: "Writing", edit: "Editing", grep: "Searching", glob: "Listing", fetch_url: "Reading a page", web_search: "Searching the web", web_research: "Researching", mcp__meshpool_web__web_search: "Searching the web", mcp__meshpool_web__web_fetch: "Reading a page", mcp__meshpool_web__web_research: "Researching", todo_write: "Updating the plan", use_skill: "Loading a skill", office_task: "Working on the file", make_document: "Making a Word document", make_pdf: "Making a PDF", make_spreadsheet: "Building a spreadsheet", make_deck: "Making a deck", analyze_data: "Analysing data", convert_document: "Converting", read_document: "Reading a document"};
+const TOOL_RUN = {delegate_task: "Handing off to sub-agents", bash: "Running", bash_many: "Running", read_file: "Reading", write_file: "Writing", edit: "Editing", grep: "Searching", glob: "Listing", fetch_url: "Reading a page", web_search: "Searching the web", web_research: "Researching", mcp__meshpool_web__web_search: "Searching the web", mcp__meshpool_web__web_fetch: "Reading a page", mcp__meshpool_web__web_research: "Researching", todo_write: "Updating the plan", use_skill: "Loading a skill", office_task: "Working on the file", make_document: "Making a Word document", make_pdf: "Making a PDF", make_spreadsheet: "Building a spreadsheet", make_deck: "Making a deck", analyze_data: "Analysing data", convert_document: "Converting", read_document: "Reading a document"};
 const TOOL_BASE = {bash: "Run", bash_many: "Run", write_file: "Write", edit: "Edit", make_document: "Make a Word document", make_pdf: "Make a PDF", make_spreadsheet: "Build a spreadsheet", make_deck: "Make a deck"};
 const TOOL_DONE = {make_document: "Made a Word document", make_pdf: "Made a PDF", make_spreadsheet: "Built a spreadsheet", make_deck: "Made a deck", analyze_data: "Analysed data", convert_document: "Converted", read_document: "Read a document", fetch_url: "Read a page", mcp__meshpool_web__web_fetch: "Read a page"};
 // What a step is about, in words: a file name, a query or a command; never raw JSON.
@@ -1093,7 +1093,7 @@ function stepSummary(name, ev) {
   try { const a = JSON.parse(s); return String(a.filename || a.path || a.query || a.question || a.url || a.title || a.request || a.expression || "").split("\n")[0].slice(0, 120); }
   catch (e) { return ""; }
 }
-const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
+const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
 function workGroup() {
   const cur = S.cur;
   if (cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild) return cur.group;
@@ -1146,7 +1146,7 @@ function applyEv(ev) {
     case "tool_end": {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
-      const out = String(ev.output || ""), stopped = !ev.ok && /not run: stopped by the user|^\[exit 130\]|stopped by the user/i.test(out);
+      const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
@@ -1183,6 +1183,19 @@ function applyEv(ev) {
     case "plan": {
       const html = `<b>Plan</b><ol>${(ev.entries || []).map(e => `<li class="${esc(e.status)}">${esc(e.content)}</li>`).join("")}</ol>`;
       if (cur.plan && cur.plan.isConnected) cur.plan.innerHTML = html; else { closeGroup(); cur.plan = add(html, "planbox"); }
+      break; }
+    case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
+      cur.subs = cur.subs || {};
+      let box = cur.subs[ev.delegation];
+      if (!box || !box.isConnected) box = document.getElementById("sub-" + ev.delegation);
+      if (!box) { closeGroup(); box = add(`<b>Sub-agents</b><ol></ol>`, "planbox"); box.id = "sub-" + ev.delegation; }   // the chat's Stop stops them
+      cur.subs[ev.delegation] = box;
+      let li = box.querySelector(`[data-sid="${CSS.escape(String(ev.sid || ""))}"]`);
+      if (!li) { li = document.createElement("li"); li.dataset.sid = ev.sid || ""; li.innerHTML = `<span class="sg"></span> <small class="sn"></small>`; $("ol", box).appendChild(li); $(".sg", li).textContent = ev.title || ""; li.className = "in_progress"; }
+      const tl = ev.tool ? (TOOL_RUN[ev.tool] || TOOL_LABEL[ev.tool] || String(ev.tool).replace(/_/g, " ")) : "";
+      if (ev.kind === "tool") $(".sn", li).textContent = "· " + tl + (ev.text ? " " + ev.text : "");
+      if (ev.kind === "done") { $(".sn", li).textContent = "· " + (ev.text || ev.status || ""); li.className = ev.status === "completed" ? "completed" : ev.status === "interrupted" ? "stopped" : "failed"; }
+      cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
     case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
@@ -1939,7 +1952,7 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["read", "Read and research"], ["edit", "Read and edit files"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>

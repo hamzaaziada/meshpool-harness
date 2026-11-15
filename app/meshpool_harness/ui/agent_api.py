@@ -384,7 +384,8 @@ class Session:
             d = SESSIONS / sid
             d.mkdir(parents=True, exist_ok=True)
             with self.lock:
-                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP][-3000:]
+                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP
+                       and not (e.get("type") == "subagent" and e.get("kind") == "tool")][-3000:]   # live only
             run = bool(getattr(self, "_turn_open", False)) if running is None else running
             tmp = d / "transcript.json.tmp"
             tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
@@ -1002,6 +1003,8 @@ def search(q: str) -> list:
         return []
     hits = []
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
+        if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
+            continue
         try:
             raw = p.read_text(encoding="utf-8")
         except OSError:

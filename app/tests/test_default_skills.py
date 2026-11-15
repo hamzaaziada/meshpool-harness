@@ -9,7 +9,7 @@ from meshpool_harness import skills as SK  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULTS = ROOT / "defaults" / "skills"
 TOOLS = {"make_document", "make_pdf", "make_spreadsheet", "make_deck", "web_search", "web_research", "fetch_url",
-         "schedule_task", "run_subtasks", "memory_save", "ask_user", "use_skill"}
+         "schedule_task", "run_subtasks", "delegate_task", "memory_save", "ask_user", "use_skill"}
 
 
 def _office_tools() -> set:
@@ -36,7 +36,7 @@ def test_everyday_skills_name_only_real_tools():
                 "project-plan", "sop", "deck-from-document", "debug-issue", "write-tests", "project-docs"]
     for name in everyday:
         text = (DEFAULTS / name / "SKILL.md").read_text(encoding="utf-8")
-        used = set(re.findall(r"\b(make_[a-z_]+|web_[a-z_]+|fetch_url|schedule_task|run_subtasks|memory_save)\b", text))
+        used = set(re.findall(r"\b(make_[a-z_]+|web_[a-z_]+|fetch_url|schedule_task|run_subtasks|delegate_task|memory_save)\b", text))
         assert used <= TOOLS, (name, used - TOOLS)
         assert "Draft, never send" in text
 

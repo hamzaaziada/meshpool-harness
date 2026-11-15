@@ -737,8 +737,13 @@ class Server:
         self.close()
 
     def call(self, tool: str, args: dict) -> tuple[str, bool]:
+        out, self.images = self.call_with_images(tool, args)
+        return out
+
+    def call_with_images(self, tool: str, args: dict):
+        """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
-        self.images = []
+        images: list[dict] = []
         parts = []
         for c in r.get("content") or []:
             t = c.get("type")
@@ -750,13 +755,13 @@ class Server:
             elif t == "resource_link":
                 parts.append(f"[link {c.get('name', '')}: {c.get('uri', '')}]")
             elif t == "image" and c.get("data"):
-                self.images.append({"mime": c.get("mimeType") or "image/png", "data": c["data"]})
+                images.append({"mime": c.get("mimeType") or "image/png", "data": c["data"]})
                 parts.append("[image attached]")
             elif t in ("image", "audio"):
                 parts.append(f"[{t} returned, {c.get('mimeType', '')}; not shown to the model]")
         if not parts and r.get("structuredContent") is not None:
             parts.append(json.dumps(r["structuredContent"], indent=1))
-        return "\n".join(parts) or "(no content)", bool(r.get("isError"))
+        return ("\n".join(parts) or "(no content)", bool(r.get("isError"))), images
 
     def close(self):
         self.closed = True
@@ -860,17 +865,19 @@ class Manager:
 
     def call(self, name: str, args: dict) -> tuple[str, bool]:
         """Run a tool. Images it returned are left in self.last_images for the agent to show the model."""
+        out, self.last_images = self.call_with_images(name, args)
+        return out
+
+    def call_with_images(self, name: str, args: dict):
+        """call() without the shared last_images: ((text, failed), images), safe from several threads."""
         sname, tool = self.map[name]
         s = self.servers[sname]
-        self.last_images = []
         if s.status != "connected":
-            return f"MCP server '{sname}' is not connected: {s.error}", True
+            return (f"MCP server '{sname}' is not connected: {s.error}", True), []
         try:
-            out = s.call(tool, args)
-            self.last_images = list(s.images)
-            return out
+            return s.call_with_images(tool, args)
         except MCPError as e:
-            return f"MCP error from '{sname}': {redact(e)}", True
+            return (f"MCP error from '{sname}': {redact(e)}", True), []
 
     def status(self) -> list[dict]:
         rows = [{"name": s.name, "status": s.status, "tools": [t["name"] for t in s.tools], "error": s.error,

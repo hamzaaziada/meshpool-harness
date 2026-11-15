@@ -306,6 +306,14 @@ def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
     return cut
 
 
+def _subagents_on() -> bool:
+    try:
+        from meshpool_harness import assistant as AS
+        return AS.subagent_settings()["on"]
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _lighten(messages: list) -> None:
     """After an outage: elide older tool outputs only when the conversation is very large (over 150k characters),
     keeping the last eight verbatim. Smaller conversations are left whole, so a long task keeps its context."""
@@ -563,9 +571,13 @@ class Agent:
     def tool_schemas(self) -> list:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
-        return T.schemas(self._tool_names()) + ([x for x in self.mcp.schemas()
-                                                 if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")]
-                                                if self.mcp else [])
+        names = self._tool_names()
+        if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
+            names = names + ["delegate_task"]
+        return T.schemas(names) + ([x for x in self.mcp.schemas()
+                                    if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
+                                    and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
+                                   if self.mcp else [])
 
     def _tool_names(self) -> list:
         return PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
@@ -577,6 +589,9 @@ class Agent:
     def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
+        if getattr(self, "_delegations", None):          # the sub-agents it is running
+            from meshpool_harness.agent import delegate as DL
+            DL.stop_all(self)
 
     def _run_subtasks(self, name: str, args: dict):
         """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
@@ -690,7 +705,7 @@ class Agent:
         return self._turn()
 
     def _turn(self) -> str:
-        turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
@@ -1284,7 +1299,7 @@ class Agent:
             pat = str(args.get("pattern") or "").replace("\\", "/")
             return ("" if not (pat.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", pat) or ".." in pat.split("/"))
                     else f"List files outside the project ({pat[:80]})?")
-        elif name in ("fetch_url", "mcp__meshpool_web__web_fetch"):
+        elif name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch"):   # the server is meshpool-web
             from urllib.parse import urlparse
             u = urlparse(str(args.get("url") or ""))
             host = u.hostname or ""
@@ -1327,6 +1342,8 @@ class Agent:
                 "values in an existing workbook, openpyxl.load_workbook is fine.")
 
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
+        if name == "delegate_task":
+            return True, ""                    # its sub-agents' own actions are checked against this chat's mode
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
@@ -1429,7 +1446,9 @@ class Agent:
                             "smaller edits.")
         elif not is_mcp:
             try:
-                args = validate(name, raw, self._tool_names())
+                args = validate(name, raw, self._tool_names() + (
+                    ["delegate_task"] if name == "delegate_task" and getattr(self, "_delegate_depth", 0) == 0
+                    and not self.plan and _subagents_on() else []))
             except ToolError as e:
                 bad = e
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
@@ -1449,6 +1468,9 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+            elif name == "delegate_task":
+                from meshpool_harness.agent import delegate as DL
+                out, ok = DL.run_tool(self, args)      # not _wait: on Stop it returns the finished reports
             elif is_mcp and name.endswith("run_subtasks"):
                 out, err = self._run_subtasks(name, args)
                 ok = not err
@@ -1629,8 +1651,10 @@ class Agent:
                 have = {x.get("tool_call_id") for x in self.messages[i + 1:] if x.get("role") == "tool"}
                 for c in m["tool_calls"]:
                     if c["id"] not in have:
+                        partial = (self.__dict__.pop("_delegate_partial", None)
+                                   if (c.get("function") or {}).get("name") == "delegate_task" else None)
                         self.messages.append({"role": "tool", "tool_call_id": c["id"],
-                                              "content": "Not run: the user stopped the agent."})
+                                              "content": partial or "Not run: the user stopped the agent."})
                 break
             if m.get("role") == "user":
                 break
@@ -1656,6 +1680,8 @@ class Agent:
         best = None
         if SESSIONS.exists():
             for p in SESSIONS.glob("*/session.json"):
+                if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
+                    continue
                 try:
                     d = json.loads(p.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
