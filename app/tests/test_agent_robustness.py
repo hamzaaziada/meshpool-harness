@@ -57,7 +57,7 @@ def test_incomplete_read_is_a_retryable_connection_error(tmp_path, monkeypatch):
 
     def urlopen(*a_, **k):
         raise http.client.IncompleteRead(b"partial")
-    monkeypatch.setattr(core.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(core, "_urlopen", lambda req, timeout, sink: urlopen())
     with pytest.raises(RuntimeError, match="HTTP 0"):
         a._post("http://x", "k", {"model": "m", "messages": []}, True)
     assert classify_error("HTTP 0: connection problem (IncompleteRead)") == "transient"
@@ -267,6 +267,7 @@ def _ok():
 
 def test_a_stuck_gateway_is_waited_out_without_blind_retries(tmp_path, monkeypatch):
     monkeypatch.setenv("MH_RECOVER_MIN", "30")
+    monkeypatch.setattr(core.GW, "BACKOFF_S", 0.01)
     a = Agent(str(tmp_path), mode="auto")
     monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
     _big(a)
@@ -324,10 +325,11 @@ def test_an_endpoint_that_answers_small_calls_but_not_this_one_is_reported(tmp_p
     assert "answers small" not in str(e.value)
 
 
-def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers():
+def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeypatch):
     import threading
     import time
     from meshpool_harness.core import gateway as GW
+    monkeypatch.setattr(GW, "BACKOFF_S", 0.1)
     h = GW.health("http://x/v1", "key-12345678")
     assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 4
     assert h.check(lambda: "HTTP 0: timed out") == "down" and h.limit == 1
@@ -389,3 +391,127 @@ def test_stop_closes_the_model_stream_at_once(tmp_path, monkeypatch):
         a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
     assert time.time() - t0 < 3 and a._live is None              # the socket was shut, not left to hang
     srv.shutdown()
+
+
+def test_with_recovery_off_a_past_outage_does_not_block_the_app_forever(tmp_path, monkeypatch):
+    from meshpool_harness import providers as PV
+    a = Agent(str(tmp_path), mode="auto")
+    base, key = PV.endpoint("key")
+    core.GW.health(base, key).check(lambda: "HTTP 0")              # marked down earlier; MH_RECOVER_MIN is 0 here
+    a._probe = lambda b, k, m: "ok"                                # it is back now
+    a._post = lambda b, k, body, stream: _ok()
+    assert a._chat(_turn())[0]["content"] == "ok" and not core.GW.health(base, key).is_down()
+
+
+def _silent_server(log):
+    """Takes the request and never answers; records when the client closes the connection."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+
+    def run():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+
+            def hold(c=c):
+                c.settimeout(20)
+                try:
+                    while c.recv(65536):
+                        pass
+                    log.append("closed")
+                except OSError:
+                    log.append("closed")
+            threading.Thread(target=hold, daemon=True).start()
+    threading.Thread(target=run, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.getsockname()[1]}"
+
+
+def test_stop_closes_a_call_still_waiting_for_its_first_byte(tmp_path, monkeypatch):
+    import threading
+    import time
+    monkeypatch.setenv("MH_AGENT_FIRST_BYTE_S", "60")
+    a = Agent(str(tmp_path), mode="auto")
+    log = []
+    srv, base = _silent_server(log)
+    threading.Timer(0.5, lambda: setattr(a, "_stop", True)).start()
+    with pytest.raises(core.Interrupted):
+        a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
+    t0 = time.time()
+    while not log and time.time() - t0 < 3:
+        time.sleep(0.05)
+    assert log == ["closed"]                                       # the gateway sees the disconnect at once
+    srv.close()
+
+
+def test_a_chat_started_during_an_outage_waits_once_not_twice(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_RECOVER_MIN", "0.02")                  # about a second
+    monkeypatch.setattr(core.GW, "BACKOFF_S", 0.2)
+    from meshpool_harness import providers as PV
+    a = Agent(str(tmp_path), mode="auto")
+    base, key = PV.endpoint("key")
+    core.GW.health(base, key).check(lambda: "HTTP 0")
+    probes = []
+    a._probe = lambda b, k, m: probes.append(1) or "HTTP 0: still down"
+    a._post = lambda *x: pytest.fail("no request while the endpoint is down")
+    import time
+    t0 = time.time()
+    with pytest.raises(RuntimeError, match="did not come back"):
+        a._chat(_turn())
+    assert time.time() - t0 < 2.5 and len(probes) <= 6
+
+
+def test_a_non_streamed_reply_that_streams_anyway_is_read(tmp_path, monkeypatch):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.end_headers()
+            body = "/html/" in self.path and b"<html>oops</html>" or (
+                b'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    a = Agent(str(tmp_path), mode="auto")
+    resp, _ = a._post(base, "k", {"model": "m", "messages": []}, False)
+    assert resp["choices"][0]["message"]["content"] == "hi"
+    with pytest.raises(RuntimeError, match="HTTP 0: the endpoint sent an unreadable reply"):
+        a._post(base + "/html", "k", {"model": "m", "messages": []}, False)
+    srv.shutdown()
+
+
+def test_a_stale_down_probe_does_not_undo_a_recovery(monkeypatch):
+    from meshpool_harness.core import gateway as GW
+    h = GW.health("http://y/v1", "k-1")
+
+    def slow_down():                                               # this probe started while it was down...
+        with h.cond:
+            h._mark_up()                                           # ...and it came back meanwhile
+        return "HTTP 0"
+    assert h.check(slow_down) == "up" and not h.is_down()
+    h.last_probe = (0.0, "")
+    h.check(lambda: "HTTP 0")                                      # down for real
+    assert h.check(lambda: pytest.fail("no probe while marked down")) == "down"
+
+
+def test_a_500_from_one_model_is_an_answer_not_an_outage(monkeypatch):
+    import urllib.error
+
+    def answer(code):
+        def fake(req, timeout):
+            raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
+        return fake
+    for code, want in ((500, "ok"), (429, "ok"), (401, "auth"), (502, "HTTP 502"), (503, "HTTP 503")):
+        monkeypatch.setattr(core.urllib.request, "urlopen", answer(code))
+        assert core._probe_once("http://x", "k", "m") == want

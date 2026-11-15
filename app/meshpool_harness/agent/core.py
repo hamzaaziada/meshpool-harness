@@ -219,6 +219,63 @@ def _set_read_timeout(resp, seconds: float) -> None:
         pass
 
 
+class _Track:
+    """urllib handler mixin: hand each new connection to a callback, so Stop can shut its socket even while the
+    request is still waiting for the response headers (a gateway that never answers)."""
+    def __init__(self, sink, *a, **kw):
+        super().__init__(*a, **kw)
+        self.sink = sink
+
+    def do_open(self, http_class, req, **kw):
+        sink = self.sink
+
+        def make(host, **k):
+            c = http_class(host, **k)
+            sink(c)
+            return c
+        return super().do_open(make, req, **kw)
+
+
+class _TrackHTTP(_Track, urllib.request.HTTPHandler):
+    pass
+
+
+class _TrackHTTPS(_Track, urllib.request.HTTPSHandler):
+    pass
+
+
+class _EndpointDown(RuntimeError):
+    """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
+
+
+def _urlopen(req, timeout: float, sink):
+    """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
+    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
+
+
+def _probe_once(base: str, key: str, model: str) -> str:
+    """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
+    A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
+    body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=float(os.environ.get("MH_PROBE_S", "30"))) as r:
+            r.read()
+        return "ok"
+    except urllib.error.HTTPError as e:
+        return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001
+        return f"HTTP 0: {e}"
+
+
+def _lighten(messages: list) -> None:
+    """After an outage: elide older tool outputs only when the conversation is very large (over 150k characters),
+    keeping the last eight verbatim. Smaller conversations are left whole, so a long task keeps its context."""
+    if _context_size(messages) > 150000:
+        _compact(messages, keep_recent=8)
+
+
 def _retry_text(msg: str, attempt: int) -> str:
     """One calm line per retry instead of the raw network error."""
     m = msg.lower()
@@ -670,18 +727,20 @@ class Agent:
         except Exception as e:
             self._repair()
             msg = raw = str(e)
-            if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
+            if re.search(r"rejected the API key|stopped accepting the API key", msg):
+                msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
                 msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
-                       "to try again; the next try starts on a smaller context and a fresh route."
+                       "to try again; the next try starts on a fresh route."
                        if "answers small requests" not in msg else
                        "The endpoint answers small requests, but this conversation's requests keep failing. Send a "
-                       "message to try again on a smaller context, or start a new chat.")
+                       "message to try again, or start a new chat.")
             elif re.search(r"HTTP 429", msg):
                 msg = "The model is busy right now. Wait a minute, then send your message again."
             elif re.search(r"HTTP 5\d\d", msg):
                 msg = "The model service had a problem. Send your message again in a moment."
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
-                _shrink_context(self.messages, 0, hard=True)   # the next message starts small, on a fresh route
+                _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
             if msg != raw:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
@@ -800,7 +859,7 @@ class Agent:
                 else:
                     h = GW.health(base, key)
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
-                        raise RuntimeError("HTTP 0: the model endpoint did not come back")
+                        raise _EndpointDown("HTTP 0: the model endpoint did not come back")
                     h.acquire(self._check_stop, self.emit)
                     ok = False
                     try:
@@ -814,6 +873,8 @@ class Agent:
                 raise
             except RuntimeError as e:
                 last, msg = e, str(e)
+                if isinstance(e, _EndpointDown):           # it already waited the whole recovery time
+                    raise
                 if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
@@ -859,15 +920,16 @@ class Agent:
                     # or it is up and this request is slow or stuck on its route (the probe answers).
                     h = GW.health(base, key)
                     state = h.check(lambda: self._wait(self._probe, base, key, body["model"]))
-                    if state == "auth":
-                        raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
+                    if state == "auth":                    # not the network: say so, not "can't reach"
+                        raise RuntimeError("The endpoint rejected the API key. Check it in settings. (HTTP 401 on a "
+                                           "check after the call failed)")
                     if state == "down":
                         if recoveries >= 3:
                             raise
                         recoveries += 1                    # no blind retries: they only pile up behind a stuck key
                         if not self._await_endpoint(h, base, key, body["model"]):
-                            raise
-                        _shrink_context(self.messages, 0, hard=True)
+                            raise _EndpointDown(msg)
+                        _lighten(self.messages)            # an outage is not about size: trim only a very large one
                         self.rotate_route()
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
@@ -927,35 +989,22 @@ class Agent:
         self._route_n, self._route = n, f"-r{n}"
 
     def _abort_live(self):
-        r, self._live = getattr(self, "_live", None), None
-        if r is not None:
+        c, self._live = getattr(self, "_live", None), None
+        sock = getattr(c, "sock", None)
+        if sock is not None:
             try:
                 import socket
-                r.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-            except Exception:  # noqa: BLE001  already closed, or not a socket
+                sock.shutdown(socket.SHUT_RDWR)          # wakes a read blocked on headers or on the stream
+            except Exception:  # noqa: BLE001  already closed
                 pass
 
     def _probe(self, base: str, key: str, model: str) -> str:
-        """One tiny request: "ok" when the endpoint answers (any reply but 5xx), "auth" on 401/403, else the error."""
-        body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
-        req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"),
-                                     method="POST", headers={"Authorization": f"Bearer {key}",
-                                                             "Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=float(os.environ.get("MH_PROBE_S", "30"))) as r:
-                r.read()
-            return "ok"
-        except urllib.error.HTTPError as e:
-            return "auth" if e.code in (401, 403) else "ok" if e.code < 500 else f"HTTP {e.code}"
-        except Exception as e:  # noqa: BLE001
-            return f"HTTP 0: {e}"
+        return _probe_once(base, key, model)
 
     def _await_endpoint(self, h, base: str, key: str, model: str) -> bool:
         """Wait, shared with every other chat on this endpoint, until it answers a probe again: up to
         MH_RECOVER_MIN minutes (30). False when it did not come back in time, or recovery is off."""
-        budget = float(os.environ.get("MH_RECOVER_MIN", "30")) * 60
-        if budget <= 0:
-            return False
+        budget = max(0.0, float(os.environ.get("MH_RECOVER_MIN", "30")) * 60)   # 0: one probe, no waiting
         return h.wait_until_up(lambda: self._wait(self._probe, base, key, model), self._sleep, self.emit, budget,
                                self._check_stop)
 
@@ -980,11 +1029,21 @@ class Agent:
         first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
         got_text = False
         gen = getattr(self, "_gen", 0)
+        live = []
+
+        def sink(c):
+            live.append(c)
+            self._live = c                               # Stop shuts this socket, before or after the headers
         try:
-            with urllib.request.urlopen(req, timeout=first) as r:
-                self._live = r
+            with _urlopen(req, first, sink) as r:
                 if not stream:
-                    return json.loads(r.read().decode("utf-8", "replace")), False
+                    raw_body = r.read()
+                    try:
+                        return json.loads(raw_body.decode("utf-8", "replace")), False
+                    except ValueError:                   # a gateway that streams anyway, or sends an error page
+                        if raw_body.lstrip().startswith(b"data:"):
+                            return sse_to_chat(raw_body.splitlines(keepends=True)), False
+                        raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
 
                 def tee(lines):
                     nonlocal got_text
@@ -1021,6 +1080,9 @@ class Agent:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
+        finally:
+            if live and getattr(self, "_live", None) is live[-1]:   # never clear a newer call's handle
+                self._live = None
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:
