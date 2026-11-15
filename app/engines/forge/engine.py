@@ -158,6 +158,36 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
                        + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
 
 
+def panel_sentence(panel: dict | None) -> str:
+    """The reviewers in the answer: the storyboard rounds and research, each persona's final score and verdict
+    ("Senior partner 8.4/10 signs off; MD 7.6/10: revise, top issue: ..."), or plainly why they could not run."""
+    if not panel or panel.get("status") == "off":
+        return ""
+    out = ""
+    sb = panel.get("storyboard") or {}
+    rounds = sb.get("rounds") or []
+    steps = (panel.get("research") or {}).get("steps") or []
+    found = sum(len(s.get("new_facts") or []) for s in steps)
+    asked = sum(len(s.get("questions") or []) for s in steps)
+    if rounds and any(r.get("score") is not None for r in rounds):
+        out += (f" Storyboard: {len(rounds)} review round{'s' if len(rounds) != 1 else ''} before any slide was "
+                f"written, {'signed off' if sb.get('signed_off') else 'not signed off'}")
+        out += (f"; research answered {sum(1 for s in steps for q in s.get('questions') or [] if q.get('status') == 'found')}"
+                f" of {asked} reviewer questions with {found} sourced facts." if asked else ".")
+    deck = panel.get("deck") or {}
+    n = len(deck.get("rounds") or [])
+    if panel.get("status") == "not_run":
+        why = next((r.get("why_not_run") for r in reversed(deck.get("rounds") or []) if r.get("why_not_run")),
+                   None) or "no reviewer answered"
+        return out + (f" The senior partner and MD reviews could not run ({why}), so the deck has no review score; "
+                      "it passed the automatic checks only.")
+    if panel.get("line"):
+        out += f" Review panel after {n} round{'s' if n != 1 else ''}: {panel['line']}."
+    if panel.get("status") == "revise" and (deck.get("final") or {}).get("open_issues"):
+        out += " Their open blocking and major issues are in the speaker notes as [REVIEW] lines."
+    return out
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
     m = ADD_RE.match(task or "")
@@ -198,7 +228,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         th = look.get("theme")
         look["theme"] = {**(th if isinstance(th, dict) else {"palette": th} if th else {}), "icon_set": iset}
     res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client, task_id=task_id,
-                density=mode, fixed_pages=fixed, extra_facts=extra, **look)
+                density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"), **look)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
@@ -216,6 +246,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
               + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
+    answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}
     if rv.get("score") is not None:                            # the partner review's verdict, said plainly
         answer += (f" Partner review: {rv['score']}/10, "

@@ -278,6 +278,7 @@ def test_build_sends_review_complaints_to_the_writer_and_reports_the_verdict(tmp
              "scope": "content"}]}]},
         {"status": "ok", "slides": [{"slide": 2, "verdict": "ship", "score": 8, "complaints": []}]}])
     monkeypatch.setattr(B, "_review_on", lambda client, rules: True)
+    monkeypatch.setenv("MH_PERSONAS", "0")               # the generic single review (personas: test_forge_panel.py)
     monkeypatch.setattr(RV, "review_deck", lambda *a, **k: next(reviews))
     brief = "Facts\n- North revenue $120m, South $90m, East $60m in 2025; North grew 18%"
     res = B.build(brief, str(tmp_path), slides_wanted=2, client=Stub(), task_id="t")

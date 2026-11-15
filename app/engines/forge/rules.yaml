@@ -284,3 +284,21 @@ xlsx:
 
 review:
   enabled: true                 # partner review of the rendered pages (engines/forge/review.py); live builds only
+  personas:                     # the senior partner and the MD (engines/review/personas.py, engines/forge/critics.py)
+    enabled: true               # off: the single generic partner review above runs instead (MH_PERSONAS=0 too)
+    who: [partner, md]
+    bar: {overall: 8.0, floor: 7, blocking: 0}   # sign-off: weighted score >= 8, no dimension below 7, no blocker
+    max_storyboard_rounds: 3    # storyboard reviews before any slide is written (review, research, re-plan, review)
+    max_review_rounds: 3        # deck reviews (review, fix, review, fix, review); stops early on sign-off or no gain
+    batch: 6                    # pages per reviewer message (vision models limit images per call)
+    image_width: 1100           # page image width in pixels
+    timeout_s: 300              # wall clock per reviewer call
+    deck_models: []             # vision models first; then MH_REVIEW_MODEL, claude-sonnet-5.5, gpt-6.1-terra, kimi-k3
+    text_models: []             # storyboard review and research picks: MH_STORY_REVIEW_MODEL, these, then the chain
+  research:                     # the reviewers' research step (engines/forge/research.py); live builds only
+    enabled: true               # off with MH_RESEARCH=0, a brief that says no research, stub clients or no network
+    max_questions: 6            # questions per research step
+    max_sources_per_question: 3 # pages read per question
+    facts_per_question: 3
+    time_budget_s: 240          # wall clock per research step
+    max_research_steps: 3       # research steps per build (storyboard and deck review together)
