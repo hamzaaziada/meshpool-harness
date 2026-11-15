@@ -1,14 +1,16 @@
 """Client-side handling of a gateway that stalls (Harness v4, gateway health).
 
-One Health per endpoint and key, shared by every chat and subagent in the process. It answers three questions:
+Shared by every chat and sub-agent in the process:
 
-- Is the endpoint up? One tiny probe tells a stuck gateway (the probe hangs or fails too) from a request that is only
-  slow (the probe answers). A probe result is reused for a few seconds, so chats that fail together probe once.
-- How many model calls may be in flight? A gateway that leaks a slot for every abandoned request locks the key once
-  the slots run out. The gate keeps at most MH_MAX_INFLIGHT calls open (4), drops to 1 while the endpoint is
-  recovering, and opens again after a few calls succeed.
-- Who waits for it to come back? While it is down, one caller probes (with growing gaps) and every other caller
-  waits on that result instead of sending requests that would only pile up behind it.
+- A Gate per endpoint and key: how many model calls may be open at once. A gateway that leaks a slot for every
+  abandoned request locks the key once its slots run out, so at most MH_MAX_INFLIGHT calls are open (4). While a
+  model on the key is recovering from an outage, calls go one at a time; the limit opens again after three calls
+  go through.
+- A Health per endpoint, key and model: is it serving? One tiny probe after a failure tells a stuck endpoint (the
+  probe fails too) from a request that is only slow (the probe answers). A gateway can fail one model and serve the
+  rest, so each model has its own: one model's outage never holds back a chat on another model. While it is down,
+  one caller probes at a time on a backoff shared by every caller, and the others wait for its answer instead of
+  sending requests that would only pile up behind it.
 """
 from __future__ import annotations
 
@@ -27,46 +29,119 @@ def _max_inflight() -> int:
         return 4
 
 
-class Health:
+class Gate:
     def __init__(self):
         self.cond = threading.Condition()
-        self.down_since = 0.0
-        self.prober = False
         self.inflight = 0
         self.limit = _max_inflight()
         self.ok_streak = 0
+
+    def degrade(self):
+        with self.cond:
+            self.limit, self.ok_streak = 1, 0       # while something recovers: one call at a time
+
+    def acquire(self, check_stop, emit=None):
+        told = False
+        with self.cond:
+            while self.inflight >= self.limit:
+                if emit and not told:
+                    told = True
+                    emit({"type": "status", "text": "Waiting for another chat's model call to finish (the endpoint "
+                                                    "is recovering, so calls go one at a time)." if self.limit == 1
+                                                    and self.limit < _max_inflight() else
+                                                    f"Waiting for a free slot: {self.inflight} model calls are "
+                                                    "already running on this key (MH_MAX_INFLIGHT)."})
+                self.cond.wait(0.25)
+                self.cond.release()
+                try:
+                    check_stop()
+                finally:
+                    self.cond.acquire()
+            self.inflight += 1
+
+    def release(self, ok: bool):
+        with self.cond:
+            self.inflight = max(0, self.inflight - 1)
+            if ok:
+                self.ok_streak += 1
+                if self.ok_streak >= 3:
+                    self.limit = _max_inflight()
+            self.cond.notify_all()
+
+
+class Health:
+    def __init__(self, gate: Gate | None = None):
+        self.gate = gate or Gate()
+        self.cond = threading.Condition()
+        self.down_since = 0.0
+        self.prober = False
         self.last_probe = (0.0, "")
         self.next_probe = 0.0                       # while down: no one probes before this (shared backoff)
         self.fails = 0
         self.up_at = 0.0
+
+    # the gate is shared by every model on the key
+    @property
+    def inflight(self) -> int:
+        return self.gate.inflight
+
+    @property
+    def limit(self) -> int:
+        return self.gate.limit
+
+    def acquire(self, check_stop, emit=None):
+        self.gate.acquire(check_stop, emit)
+
+    def release(self, ok: bool):
+        if ok:
+            with self.cond:
+                if self.down_since:
+                    self._mark_up()
+        self.gate.release(ok)
 
     # ---------- is it up -----------------------------------------------------------------------------------------
     def is_down(self) -> bool:
         with self.cond:
             return self.down_since > 0
 
-    def check(self, probe) -> str:
-        """"up", "down" or "auth" after a call failed: a probe taken in the last few seconds, or a fresh one. While
-        the endpoint is already marked down this does not probe: the caller goes on to wait_until_up, where one
-        caller at a time probes."""
+    def check(self, probe, wait_s: float = 60) -> str:
+        """"up", "down" or "auth" after a call failed: a probe taken in the last few seconds, another caller's probe
+        that is running now, or a fresh one. While the endpoint is already marked down this does not probe: the
+        caller goes on to wait_until_up."""
+        end = time.time() + wait_s
         with self.cond:
-            if self.down_since:
-                return "down"
-            t, got = self.last_probe
-            if got and time.time() - t < PROBE_REUSE_S:
-                return got
+            while True:
+                if self.down_since:
+                    return "down"
+                t, got = self.last_probe
+                if got and time.time() - t < PROBE_REUSE_S:
+                    return got
+                if not self.prober:
+                    break
+                if time.time() >= end:              # a probe that never returns: answer for it
+                    return "down"
+                self.cond.wait(0.25)                # another chat is probing: use its answer
+            self.prober = True
             started = time.time()
-        res = probe()
-        got = "up" if res == "ok" else "auth" if res == "auth" else "down"
-        with self.cond:
-            if got == "down" and self.up_at > started:   # an answer from before it came back: stale
-                return "up"
-            self.last_probe = (time.time(), got)
-            if got == "down":
-                self._mark_down()
-                self._failed()                      # this probe counts: the next one waits its turn
-            elif got == "up" and self.down_since:
-                self._mark_up()
+        got = None                                  # stays None when the probe raised (Stop): record nothing
+        try:
+            res = probe()
+            got = "up" if res == "ok" else "auth" if res == "auth" else "down"
+        finally:
+            with self.cond:
+                self.prober = False
+                if got is None:
+                    pass
+                elif got == "down" and self.up_at > started:   # an answer from before it came back: stale
+                    got = "up"
+                else:
+                    self.last_probe = (time.time(), got)
+                    if got == "down":
+                        self._mark_down()
+                        self._failed()              # this probe counts: the next one waits its turn
+                    elif got == "up" and self.down_since:
+                        self._mark_up()
+                self.cond.notify_all()
         return got
 
     def _failed(self) -> float:
@@ -79,7 +154,7 @@ class Health:
     def _mark_down(self):
         if not self.down_since:
             self.down_since = time.time()
-        self.limit, self.ok_streak = 1, 0           # while it recovers: one call at a time
+        self.gate.degrade()
 
     def _mark_up(self):
         self.down_since, self.next_probe, self.fails = 0.0, 0.0, 0
@@ -113,7 +188,7 @@ class Health:
                                                     "checking it; this one carries on when it is back."})
                 sleep(min(1.0, max(0.05, budget_s - (time.time() - t0))))
                 continue
-            wait = 0.0
+            wait, got = 0.0, ""
             try:
                 got = probe()
                 if got == "auth":
@@ -126,6 +201,7 @@ class Health:
             finally:
                 with self.cond:
                     self.prober = False
+                    self.cond.notify_all()
             if got == "ok":
                 emit({"type": "status", "text": "The model endpoint is answering again. Picking up where it left off."})
                 return True
@@ -134,48 +210,22 @@ class Health:
                                                 f"again in {wait:.0f} s, for up to {max(1, int(budget_s // 60))} min. "
                                                 "Press Stop to end."})
 
-    # ---------- the in-flight gate -------------------------------------------------------------------------------
-    def acquire(self, check_stop, emit=None):
-        told = False
-        with self.cond:
-            while self.inflight >= self.limit:
-                if emit and not told:
-                    told = True
-                    emit({"type": "status", "text": "Waiting for another chat's model call to finish (the endpoint "
-                                                    "is recovering, so calls go one at a time)." if self.limit == 1
-                                                    and self.limit < _max_inflight() else
-                                                    f"Waiting for a free slot: {self.inflight} model calls are "
-                                                    "already running on this key (MH_MAX_INFLIGHT)."})
-                self.cond.wait(0.25)
-                self.cond.release()
-                try:
-                    check_stop()
-                finally:
-                    self.cond.acquire()
-            self.inflight += 1
 
-    def release(self, ok: bool):
-        with self.cond:
-            self.inflight = max(0, self.inflight - 1)
-            if ok:
-                if self.down_since:
-                    self._mark_up()
-                self.ok_streak += 1
-                if self.ok_streak >= 3:
-                    self.limit = _max_inflight()
-            self.cond.notify_all()
-
-
+_GATES: dict[str, Gate] = {}
 _REG: dict[str, Health] = {}
 _REG_LOCK = threading.Lock()
 
 
-def health(base: str, key: str) -> Health:
+def health(base: str, key: str, model: str = "") -> Health:
+    """The Health of one model on one endpoint and key; every model on the key shares one Gate."""
     k = (base or "").rstrip("/") + "|" + (key or "")[-8:]
     with _REG_LOCK:
-        h = _REG.get(k)
+        g = _GATES.get(k)
+        if g is None:
+            g = _GATES[k] = Gate()
+        h = _REG.get(k + "|" + model)
         if h is None:
-            h = _REG[k] = Health()
+            h = _REG[k + "|" + model] = Health(g)
         return h
 
 
@@ -183,3 +233,4 @@ def reset():
     """Tests: forget every endpoint's state."""
     with _REG_LOCK:
         _REG.clear()
+        _GATES.clear()

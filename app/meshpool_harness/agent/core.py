@@ -37,6 +37,9 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
+# Proves to the assistant server (a child process, which inherits it) that run_subtasks' parent details came from
+# this app's agent and not from a model: only then may sub-agents use the parent's model, mode and stop file.
+os.environ.setdefault("MH_PARENT_TOKEN", uuid.uuid4().hex)
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
@@ -540,6 +543,31 @@ class Agent:
     def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
+        for f in list(getattr(self, "_sub_stops", ())):  # sub-agents run in the assistant server: tell them too
+            try:
+                Path(f).write_text("stop", encoding="utf-8")
+            except OSError:
+                pass
+
+    def _run_subtasks(self, name: str, args: dict):
+        """run_subtasks with what only this chat knows, never what the model wrote: its model, its permission mode
+        and a stop file that stop() creates, so Stop here stops the sub-agents too."""
+        if not hasattr(self, "_sub_stops"):
+            self._sub_stops = set()
+        stop_file = self.dir / f"stop-subtasks-{uuid.uuid4().hex[:8]}"
+        args = {k: v for k, v in args.items() if k != "parent"}
+        for old in self.dir.glob("stop-subtasks-*") if self.dir.is_dir() else ():
+            old.unlink(missing_ok=True)              # left by an earlier Stop
+        args["parent"] = {"model": self.current_model() or "", "mode": self.mode, "stop_file": str(stop_file),
+                          "token": os.environ.get("MH_PARENT_TOKEN", "")}
+        self._sub_stops.add(str(stop_file))
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            return self._wait(self.mcp.call, name, args)
+        finally:
+            self._sub_stops.discard(str(stop_file))
+            if not self._stop:                       # after Stop, leave it for the sub-agents to see
+                stop_file.unlink(missing_ok=True)
 
     def _exists(self, path: str) -> bool:
         try:
@@ -857,7 +885,7 @@ class Agent:
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
-                    h = GW.health(base, key)
+                    h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
                         raise _EndpointDown("HTTP 0: the model endpoint did not come back")
                     h.acquire(self._check_stop, self.emit)
@@ -918,7 +946,7 @@ class Agent:
                 if net and wire == "chat":
                     # One probe says which it is: the endpoint is down or stuck for this key (the probe fails too),
                     # or it is up and this request is slow or stuck on its route (the probe answers).
-                    h = GW.health(base, key)
+                    h = GW.health(base, key, body["model"])
                     state = h.check(lambda: self._wait(self._probe, base, key, body["model"]))
                     if state == "auth":                    # not the network: say so, not "can't reach"
                         raise RuntimeError("The endpoint rejected the API key. Check it in settings. (HTTP 401 on a "
@@ -942,7 +970,8 @@ class Agent:
                         self._first_scale = min(5.0, self._first_scale * 2.5)
                     if attempt == 1:                       # a stuck sticky route (cache affinity) upstream: new route
                         self.rotate_route()
-                        body["prompt_cache_key"] = body["user"] = self.route_id()
+                        if "prompt_cache_key" in body:     # only when this endpoint gets cache keys (MH_CACHE_KEY)
+                            body["prompt_cache_key"] = body["user"] = self.route_id()
                     if attempt == 2 and stream:            # a gateway that mishandles the stream: ask for one reply
                         stream = False
                         self.emit({"type": "status", "text": "Trying again without streaming."})
@@ -990,6 +1019,8 @@ class Agent:
 
     def _abort_live(self):
         c, self._live = getattr(self, "_live", None), None
+        if c is not None:
+            c._mh_abort = True                           # still connecting: checked_connect closes it (_post)
         sock = getattr(c, "sock", None)
         if sock is not None:
             try:
@@ -1034,6 +1065,14 @@ class Agent:
         def sink(c):
             live.append(c)
             self._live = c                               # Stop shuts this socket, before or after the headers
+            connect = c.connect
+
+            def checked_connect():                       # Stop while connecting: close before sending anything
+                connect()
+                if getattr(c, "_mh_abort", False):
+                    c.close()
+                    raise ConnectionAbortedError("stopped while connecting")
+            c.connect = checked_connect
         try:
             with _urlopen(req, first, sink) as r:
                 if not stream:
@@ -1047,11 +1086,16 @@ class Agent:
 
                 def tee(lines):
                     nonlocal got_text
-                    started = False
+                    started, t_data = False, time.time()
                     for raw in lines:
                         if not started:                  # bytes are flowing: from here on, a gap is the idle clock
                             started = True
                             _set_read_timeout(r, idle)
+                        if raw.startswith(b"data:"):
+                            t_data = time.time()
+                        elif time.time() - t_data > first:   # only keep-alives: they must not hold a slot forever
+                            raise RuntimeError(f"HTTP 0: connection problem (timed out: only keep-alives for "
+                                               f"{int(first)} s)")
                         if self._stop or getattr(self, "_gen", 0) != gen:
                             raise Interrupted()
                         line = raw.decode("utf-8", "replace").strip()
@@ -1259,6 +1303,10 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+            elif is_mcp and name.endswith("run_subtasks"):
+                out, err = self._run_subtasks(name, args)
+                ok = not err
+                out = self.ws._cap(str(out), "mcp")
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
                 ok = not err

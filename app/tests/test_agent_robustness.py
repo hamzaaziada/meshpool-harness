@@ -257,6 +257,11 @@ def _big(a, n=30):
                        {"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 8000}]
 
 
+def _model(a):
+    from meshpool_harness import providers as PV
+    return PV.split(a._body()["model"])[1]
+
+
 def _turn():
     return {"in": 0, "cached": 0, "out": 0, "calls": 0}
 
@@ -368,7 +373,7 @@ def test_a_known_outage_holds_new_calls_until_the_endpoint_is_back(tmp_path, mon
     a = Agent(str(tmp_path), mode="auto")
     monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
     base, key = PV.endpoint("key")
-    core.GW.health(base, key).check(lambda: "HTTP 0")              # another chat found it down
+    core.GW.health(base, key, _model(a)).check(lambda: "HTTP 0")              # another chat found it down
     order = []
     a._probe = lambda b, k, m: order.append("probe") or "ok"
     a._post = lambda b, k, body, stream: order.append("post") or _ok()
@@ -397,10 +402,10 @@ def test_with_recovery_off_a_past_outage_does_not_block_the_app_forever(tmp_path
     from meshpool_harness import providers as PV
     a = Agent(str(tmp_path), mode="auto")
     base, key = PV.endpoint("key")
-    core.GW.health(base, key).check(lambda: "HTTP 0")              # marked down earlier; MH_RECOVER_MIN is 0 here
+    core.GW.health(base, key, _model(a)).check(lambda: "HTTP 0")              # marked down earlier; MH_RECOVER_MIN is 0 here
     a._probe = lambda b, k, m: "ok"                                # it is back now
     a._post = lambda b, k, body, stream: _ok()
-    assert a._chat(_turn())[0]["content"] == "ok" and not core.GW.health(base, key).is_down()
+    assert a._chat(_turn())[0]["content"] == "ok" and not core.GW.health(base, key, _model(a)).is_down()
 
 
 def _silent_server(log):
@@ -421,8 +426,11 @@ def _silent_server(log):
             def hold(c=c):
                 c.settimeout(20)
                 try:
-                    while c.recv(65536):
-                        pass
+                    while True:
+                        if not c.recv(65536):
+                            break
+                        if "request" not in log:
+                            log.append("request")
                     log.append("closed")
                 except OSError:
                     log.append("closed")
@@ -442,9 +450,9 @@ def test_stop_closes_a_call_still_waiting_for_its_first_byte(tmp_path, monkeypat
     with pytest.raises(core.Interrupted):
         a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
     t0 = time.time()
-    while not log and time.time() - t0 < 3:
+    while "closed" not in log and time.time() - t0 < 3:
         time.sleep(0.05)
-    assert log == ["closed"]                                       # the gateway sees the disconnect at once
+    assert log == ["request", "closed"]                            # the gateway sees the disconnect at once
     srv.close()
 
 
@@ -454,7 +462,7 @@ def test_a_chat_started_during_an_outage_waits_once_not_twice(tmp_path, monkeypa
     from meshpool_harness import providers as PV
     a = Agent(str(tmp_path), mode="auto")
     base, key = PV.endpoint("key")
-    core.GW.health(base, key).check(lambda: "HTTP 0")
+    core.GW.health(base, key, _model(a)).check(lambda: "HTTP 0")
     probes = []
     a._probe = lambda b, k, m: probes.append(1) or "HTTP 0: still down"
     a._post = lambda *x: pytest.fail("no request while the endpoint is down")
@@ -515,3 +523,106 @@ def test_a_500_from_one_model_is_an_answer_not_an_outage(monkeypatch):
     for code, want in ((500, "ok"), (429, "ok"), (401, "auth"), (502, "HTTP 502"), (503, "HTTP 503")):
         monkeypatch.setattr(core.urllib.request, "urlopen", answer(code))
         assert core._probe_once("http://x", "k", "m") == want
+
+
+def test_one_models_outage_does_not_hold_back_another_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_RECOVER_MIN", "30")
+    from meshpool_harness import providers as PV
+    a = Agent(str(tmp_path), mode="auto")
+    base, key = PV.endpoint("key")
+    core.GW.health(base, key, "other-model").check(lambda: "HTTP 503")   # another chat's model is down
+    sent = []
+    a._post = lambda b, k, body, stream: sent.append(body["model"]) or _ok()
+    a._chat(_turn())
+    assert sent == [_model(a)]                                     # this chat's model went straight through
+    assert core.GW.health(base, key, _model(a)).gate is core.GW.health(base, key, "other-model").gate
+
+
+def test_a_stream_of_only_keep_alives_ends(tmp_path, monkeypatch):
+    import http.server
+    import threading
+    import time
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            try:
+                for _ in range(100):
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    time.sleep(0.2)
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("MH_AGENT_FIRST_BYTE_S", "1")
+    monkeypatch.setenv("MH_AGENT_IDLE_S", "1")
+    a = Agent(str(tmp_path), mode="auto")
+    t0 = time.time()
+    with pytest.raises(RuntimeError, match="only keep-alives"):
+        a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, True)
+    assert time.time() - t0 < 4
+    srv.shutdown()
+
+
+def test_stop_while_connecting_sends_nothing(tmp_path, monkeypatch):
+    import threading
+    import time
+    a = Agent(str(tmp_path), mode="auto")
+    log = []
+    srv, base = _silent_server(log)
+    real = core.http.client.HTTPConnection.connect
+
+    def slow_connect(self):
+        time.sleep(0.6)                                            # Stop lands while this is connecting
+        real(self)
+    monkeypatch.setattr(core.http.client.HTTPConnection, "connect", slow_connect)
+    threading.Timer(0.2, lambda: setattr(a, "_stop", True)).start()
+    with pytest.raises(core.Interrupted):
+        a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
+    time.sleep(1.2)
+    assert "request" not in log                                    # closed without a request on it
+    srv.close()
+
+
+def test_route_rotation_adds_no_cache_fields_when_they_are_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_CACHE_KEY", "0")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+    a = Agent(str(tmp_path), mode="auto")
+    a._probe = lambda b, k, m: "ok"
+    keys = []
+
+    def post(base, key, body, stream):
+        keys.append(sorted(k for k in body if k in ("prompt_cache_key", "user")))
+        if len(keys) < 3:
+            raise RuntimeError("HTTP 0: connection problem (timed out)")
+        return _ok()
+    a._post = post
+    a._chat(_turn())
+    assert keys == [[], [], []]
+
+
+def test_simultaneous_failures_share_one_probe(monkeypatch):
+    import threading
+    import time
+    from meshpool_harness.core import gateway as GW
+    h = GW.health("http://z/v1", "k-2", "m")
+    probes = []
+
+    def probe():
+        probes.append(1)
+        time.sleep(0.3)
+        return "HTTP 0"
+    out = []
+    ts = [threading.Thread(target=lambda: out.append(h.check(probe))) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(3)
+    assert out == ["down"] * 4 and len(probes) == 1 and h.fails == 1

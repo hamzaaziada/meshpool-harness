@@ -525,6 +525,9 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     C.load_into_env(override=False)
     cfg = subagent_settings()
     parent = parent if isinstance(parent, dict) else {}
+    token = os.environ.get("MH_PARENT_TOKEN", "")
+    if not token or parent.get("token") != token:            # written by a model, not by Meshpool's agent: ignore
+        parent = {}
     if not cfg["on"]:
         raise ValueError("Sub-agents are off in Settings, Advanced. Do the parts one after another yourself.")
     rows = []

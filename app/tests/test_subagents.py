@@ -14,12 +14,18 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(K, "SESSIONS", tmp_path / "_sessions")
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.delenv("MESHPOOL_PROJECT", raising=False)          # other tests leave it set (agent/mcp.py)
+    monkeypatch.setenv("MH_PARENT_TOKEN", "tok")
     for k in ("MH_SUBAGENTS", "MH_SUBAGENT_MODEL", "MH_SUBAGENT_ACCESS", "MH_SUBAGENT_PARALLEL", "MH_SUBAGENT_STEPS",
               "MH_SUBAGENT_MINUTES"):
         monkeypatch.delenv(k, raising=False)
     proj = tmp_path / "proj"
     proj.mkdir()
     return proj
+
+
+def P(**kw):
+    return {"token": "tok", **kw}
 
 
 def _reply(text="report"):
@@ -71,25 +77,25 @@ def test_off_in_settings(monkeypatch, _env):
 def test_parent_model_by_default_and_the_setting_overrides(monkeypatch, _env):
     seen = []
     _record(monkeypatch, seen)
-    out = A.run_subtasks([{"title": "a", "prompt": "x"}], str(_env), parent={"model": "parent-model"})
+    out = A.run_subtasks([{"title": "a", "prompt": "x"}], str(_env), parent=P(model="parent-model"))
     assert "1 parts finished" in out and "report" in out and seen[0]["model"] == "parent-model"
     monkeypatch.setenv("MH_SUBAGENT_MODEL", "cheap-model")
     seen.clear()
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"model": "parent-model"})
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(model="parent-model"))
     assert seen[0]["model"] == "cheap-model"
 
 
 def test_read_only_unless_settings_and_the_parent_chat_allow_edits(monkeypatch, _env):
     seen = []
     _record(monkeypatch, seen)
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "auto"})
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="auto"))
     assert "write_file" not in seen[-1]["tools"] and "read_file" in seen[-1]["tools"]
     monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "ask"})            # Supervised: they cannot ask
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="ask"))            # Supervised: they cannot ask
     assert "write_file" not in seen[-1]["tools"]
-    A.run_subtasks([{"prompt": "x"}], "", parent={"mode": "auto"})                 # no project: nothing to edit
+    A.run_subtasks([{"prompt": "x"}], "", parent=P(mode="auto"))                 # no project: nothing to edit
     assert "write_file" not in seen[-1]["tools"]
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "edits"})
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="edits"))
     assert {"write_file", "edit"} <= set(seen[-1]["tools"]) and "bash" not in seen[-1]["tools"]
 
 
@@ -115,5 +121,36 @@ def test_stop_in_the_parent_chat_stops_them(monkeypatch, _env, tmp_path):
     flag = tmp_path / "stop-subtasks"
     threading.Timer(0.5, flag.write_text, args=("stop",)).start()
     t0 = time.time()
-    out = A.run_subtasks([{"prompt": "a"}, {"prompt": "b"}], str(_env), parent={"stop_file": str(flag)})
+    out = A.run_subtasks([{"prompt": "a"}, {"prompt": "b"}], str(_env), parent=P(stop_file=str(flag)))
     assert time.time() - t0 < 5 and "stopped by Stop" in out
+
+
+def test_parent_details_from_a_model_are_ignored(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
+    seen = []
+    _record(monkeypatch, seen)
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "auto", "model": "spoof", "token": "guess"})
+    assert "write_file" not in seen[-1]["tools"] and seen[-1]["model"] != "spoof"
+
+
+def test_the_chat_passes_its_model_mode_and_a_stop_file(tmp_path, monkeypatch):
+    import os
+    a = K.Agent(str(tmp_path), mode="edits")
+    got = {}
+
+    class Mcp:
+        last_images = []
+
+        def has(self, n):
+            return n == "mcp__meshpool_assistant__run_subtasks"
+
+        def call(self, name, args):
+            got.update(args)
+            a.stop()                                               # the user presses Stop while they run
+            return "done", False
+    a.mcp = Mcp()
+    with pytest.raises(K.Interrupted):
+        a._run_subtasks("mcp__meshpool_assistant__run_subtasks", {"tasks": [], "parent": {"mode": "auto"}})
+    p = got["parent"]
+    assert p["mode"] == "edits" and p["token"] == os.environ["MH_PARENT_TOKEN"] and p["model"] == a.current_model()
+    assert open(p["stop_file"]).read() == "stop"                   # Stop reached the sub-agents

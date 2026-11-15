@@ -91,7 +91,9 @@ TOOLS = {
                          {"tasks": {"type": "array", "items": {"type": "object", "properties": {
                              "title": {"type": "string"}, "prompt": {"type": "string"}}, "required": ["prompt"]}},
                           "max_parallel": {"type": "integer", "description": "1 to 6; at most the number set in "
-                                                                          "Settings (default 4)"}}, ["tasks"]),
+                                                                          "Settings (default 4)"},
+                          "parent": {"type": "object", "description": "Filled in by Meshpool. Leave it out."}},
+                         ["tasks"]),
 }
 
 if __name__ == "__main__":
