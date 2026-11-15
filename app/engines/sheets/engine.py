@@ -570,7 +570,7 @@ class WorkbookReview:
         return rnd
 
     def best(self) -> dict | None:
-        scored = [r for r in self.rounds if r["score"] is not None]
+        scored = [r for r in self.rounds if r["score"] is not None and r.get("passed_checks", True)]
         return max(scored, key=lambda r: (r["score"], r["round"])) if scored else None
 
     def feedback(self, rnd: dict, turns_left: int) -> str:
@@ -639,10 +639,17 @@ class WorkbookReview:
         import shutil
         xl = [a for a in out.get("artifacts") or [] if str(a).endswith((".xlsx", ".xlsm"))]
         cur = Path(xl[0] if os.path.isabs(xl[0]) else self.ws.root / xl[0]) if xl else None
-        if (at_cap and out.get("ok") and cur and cur.exists() and not self.stopped
+        failing_only = at_cap and not out.get("ok") and not self.rounds   # nothing ever passed the engine checks
+        if (at_cap and (out.get("ok") or failing_only) and cur and cur.exists() and not self.stopped
                 and _sha(cur) not in {r["sha256"] for r in self.rounds}):
-            rep = {"rules": out.get("rules") or {}, "warnings": out.get("warnings") or []}
-            self.run_round(str(cur), rep, final=True)           # the delivered version at the cap gets its review
+            rep = {"rules": out.get("rules") or {}, "warnings": out.get("warnings") or [],
+                   "failures": out.get("checks") or out.get("failures") or []}
+            rnd = self.run_round(str(cur), rep, final=True)     # the delivered version at the cap gets its review;
+            if failing_only:                                    # one that fails the engine checks is still graded
+                rnd["passed_checks"] = False                    # (the MD's job), but never delivered as "passed"
+                self.notes.append("The workbook did not pass the engine checks; the partner and MD reviewed it anyway "
+                                  "so their verdict and issues are known.")
+                self.save()
         best = self.best()
         delivered = None
         if best:
@@ -678,6 +685,14 @@ class WorkbookReview:
             return ("Partner and MD review: not run (no workbook passed the engine checks, so there was nothing to "
                     "review).")
         best = self.best()
+        graded = [r for r in self.rounds if r["score"] is not None]
+        if best is None and graded:                    # only a workbook that fails the engine checks was graded
+            r = graded[-1]
+            names = {"partner": "senior partner", "md": "MD"}
+            sc = "; ".join(f"{names.get(v['persona'], v['persona'])} {v['overall']}/10 ({'signs off' if v['verdict'] == 'sign_off' else 'revise'})"
+                           for v in r["reviews"] if v.get("status") == "ok")
+            top = "; ".join(f"{i['where']}: {i['issue']}" for i in r["issues"][:3])
+            return (f"Partner and MD review of the workbook (it fails the engine checks): {sc}. Top issues: {top}")
         if best is None:
             why = self.stopped or "; ".join(self.rounds[-1]["errors"]) or "their replies could not be read"
             return (f"Partner and MD review: the reviewers could not run ({why[:300]}). No review scores are "

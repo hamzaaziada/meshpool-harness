@@ -230,3 +230,35 @@ def test_without_review_the_finish_gate_and_answer_are_unchanged(tmp_path, monke
     r = E.solve("Build", workdir=str(tmp_path), task_id="t", max_turns=6, client=c, model="mock")
     assert r["ok"] and r["answer"] == "Built Model.xlsx" and "review" not in r
     assert not (tmp_path / ".run" / "review.json").exists()
+
+
+def test_a_workbook_that_never_passes_the_checks_is_still_graded_but_not_delivered_as_passed(tmp_path, monkeypatch):
+    """Seen live: 30 turns, the workbook kept failing X1/X2, so the MD never saw it. At the cap it is graded anyway."""
+    import json as _json
+    from engines.sheets import engine as E
+    from engines.review import personas as P
+
+    class WS:
+        root = tmp_path
+        run_dir = tmp_path / ".run"
+        turn = 29
+    WS.run_dir.mkdir()
+    wb = tmp_path / "m.xlsx"
+    import openpyxl
+    b = openpyxl.Workbook()
+    b.active["A1"] = "Model"
+    b.save(wb)
+    md = {"persona": "md", "status": "ok", "overall": 3.5, "verdict": "revise", "scores": {}, "reviews": [],
+          "issues": [], "research_requests": []}
+    monkeypatch.setattr(P, "panel", lambda *a, **k: {"signed_off": False, "scores": {"md": 3.5},
+                                                     "reviews": [dict(md)], "not_run": [], "research_requests": [],
+                                                     "issues": [{"severity": "blocking", "scope": "logic",
+                                                                 "where": "Precedents!D5", "issue": "typed numbers",
+                                                                 "fix": "link", "persona": "md"}]})
+    monkeypatch.setattr("engines.sheets.review_digest.digest", lambda *a, **k: "digest text")
+    rv = E.WorkbookReview(object(), WS(), 30, model="m")
+    out = rv.finalize({"ok": False, "artifacts": [str(wb)], "checks": ["X1 D5: typed numbers"]}, at_cap=True)
+    assert len(rv.rounds) == 1 and rv.rounds[0]["passed_checks"] is False
+    assert out["ok"] is False
+    rep = rv.report(None)
+    assert "fails the engine checks" in rep and "MD 3.5/10 (revise)" in rep and "Precedents!D5" in rep
