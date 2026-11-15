@@ -3,7 +3,8 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 **New in 0.0.5**
 - Long tasks keep going through a stalling or overloaded connection: they wait and pick the work back up instead of failing with "Couldn't reach the model". A /goal waits out outages on its own.
 - Chats from weeks ago can be continued: old screenshots are no longer resent with every message, a chat whose model was retired continues on today's model, and Hermes, Codex and Pi chats keep their earlier conversation.
-- Sub-agents have settings (Settings, Advanced): on or off, model, read or edit access, how many at once, steps and a time limit. They run on the chat's model, and Stop stops them.
+- Sub-agents have settings (Settings, Advanced): on or off, model, read or edit access, how many at once, steps and a time limit. In Meshpool's own chats they run inside the app with the chat's model, permission mode and project; Hermes, Codex and Pi sub-agents are read-only. Stop stops them.
+- A request too big for the model is repaired instead of failing: an older image is dropped, the middle of a huge paste is cut, or you are asked for a smaller image, and Meshpool says which.
 - Meshpool Code keeps your files exactly as they were when it retries a task, and no longer reports an edit that changed nothing as done.
 - Test connection tells "the gateway is up but isn't serving this key" apart from "can't reach that address".
 
