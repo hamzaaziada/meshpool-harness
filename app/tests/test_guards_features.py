@@ -133,3 +133,55 @@ def test_date_inputs_accept_us_dates(monkeypatch):
         assert ctl.call("_eval", "() => document.getElementById('w').value")["value"] == "2019-12-31"
     finally:
         ctl.call("stop")
+
+
+def test_test_guard_clears_after_revert_without_git(tmp_path):
+    """No git repo: the guard judges written test files by whether they still differ from what the agent first saw,
+    so a revert clears it (it used to block every finish for the rest of the run)."""
+    (tmp_path / "tests").mkdir()
+    t = tmp_path / "tests" / "test_one.py"
+    t.write_text("def test_one():\n    assert True\n")
+    ws = Workspace(str(tmp_path), str(tmp_path / ".run"))
+    ws.read_file("tests/test_one.py")
+    ws.edit("tests/test_one.py", "assert True", "assert 1")
+    g = G.Guards({"task_id": "t"}, ws, require_check=False)
+    assert "test_tampering" in (g.check_finish([]) or "")
+    ws.write_file("tests/test_one.py", "def test_one():\n    assert True\n")
+    assert g.check_finish([]) is None
+
+
+def _docker_ok():
+    import shutil
+    import subprocess
+    return bool(shutil.which("docker")) and subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_ok(), reason="needs a running Docker daemon")
+def test_test_guard_reads_git_inside_an_unmounted_container(tmp_path):
+    """Files only in the container: the guard runs git there, so additions are allowed and a revert clears it."""
+    import subprocess
+    img = subprocess.run(["docker", "images", "-q"], capture_output=True, text=True).stdout.split()
+    base = next((i for i in img if subprocess.run(["docker", "run", "--rm", i, "git", "--version"],
+                                                  capture_output=True).returncode == 0), None)
+    if not base:
+        pytest.skip("no local image with git")
+    name = "mh-guard-test"
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+    subprocess.run(["docker", "run", "-d", "--name", name, base, "sleep", "300"], check=True, capture_output=True)
+    try:
+        subprocess.run(["docker", "exec", name, "bash", "-c",
+                        "mkdir -p /r/tests && cd /r && git init -q && printf 'def test_a():\\n    assert True\\n' "
+                        "> tests/test_a.py && git add -A && git -c user.email=x@y -c user.name=x commit -qm i"],
+                       check=True, capture_output=True)
+        ws = Workspace(str(tmp_path), str(tmp_path / ".run"), container=name, container_dir="/r", mounted=False)
+        ws.read_file("tests/test_a.py")
+        ws.edit("tests/test_a.py", "assert True\n", "assert True\n\ndef test_b():\n    assert 2\n")
+        g = G.Guards({"task_id": "t"}, ws, require_check=False)
+        assert g.check_finish([]) is None                                   # added a test: allowed
+        ws.read_file("tests/test_a.py")
+        ws.edit("tests/test_a.py", "def test_a():\n    assert True", "def test_a():\n    assert 0")
+        assert "test_tampering" in (g.check_finish([]) or "")              # changed an existing line
+        ws.bash("git checkout -- tests/test_a.py")
+        assert g.check_finish([]) is None                                   # reverted: cleared
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True)

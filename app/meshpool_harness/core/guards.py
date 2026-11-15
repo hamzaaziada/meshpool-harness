@@ -207,9 +207,10 @@ class Guards:
                         f"last edit. Passing commands: {[c['cmd'][:80] for c in passing][:5]}")
         if not self.allow_test_edits and enabled("test_guard") and test_guard_mode() != "off":
             git = self._git_test_changes()
-            if git is None:   # not a git repo: fall back to files the agent wrote
+            if git is None:   # not a git repo: test files the agent wrote that still differ from what it first saw
                 touched = [p.replace(str(self.ws.root) + "/", "") for p in self.ws.written
-                           if p not in self.ws.created and TEST_PATH.search(p.replace(str(self.ws.root) + "/", ""))]
+                           if p not in self.ws.created and TEST_PATH.search(p.replace(str(self.ws.root) + "/", ""))
+                           and self._still_changed(p)]
             else:             # git repo: judge by the actual diff, so a revert clears the flag
                 touched = git
             touched = sorted(set(touched))
@@ -244,10 +245,26 @@ class Guards:
                     + (f"Invalid JSON: {', '.join(bad)}. " if bad else "") + "Write it, then finish.")
         return None
 
+    def _still_changed(self, path: str) -> bool:
+        """A written file differs from its content when the agent first saw it (a revert clears it). Unknown: True."""
+        before = getattr(self.ws, "original", {}).get(path)
+        try:
+            now = (self.ws._cread(path) if self.ws.container and not self.ws.mounted
+                   else Path(path).read_text(errors="replace"))
+        except Exception:  # noqa: BLE001 - deleted or unreadable: still a change
+            return True
+        return before is None or self.ws._hash(now) != before
+
+    def _git(self, args: list[str]):
+        """git in the task's repository: inside the container when its files live only there (not mounted)."""
+        if self.ws.container and not self.ws.mounted:
+            return subprocess.run(["docker", "exec", "-w", self.ws.cdir, self.ws.container, "git", *args],
+                                  capture_output=True, text=True, timeout=30)
+        return subprocess.run(["git", *args], cwd=self.ws.root, capture_output=True, text=True, timeout=30)
+
     def _git_test_changes(self) -> list[str] | None:
         try:
-            r = subprocess.run(["git", "-c", "core.fsmonitor=false", "status", "--porcelain"], cwd=self.ws.root, capture_output=True,
-                               text=True, timeout=30)
+            r = self._git(["-c", "core.fsmonitor=false", "status", "--porcelain"])
             if r.returncode != 0:
                 return None
             names = [l[3:].strip() for l in r.stdout.splitlines()]
@@ -257,8 +274,8 @@ class Guards:
             if test_guard_mode() == "additive":         # only removed or changed existing lines count as tampering
                 kept = []
                 for n in tests:
-                    d = subprocess.run(["git", "-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--numstat", "HEAD", "--", n], cwd=self.ws.root,
-                                       capture_output=True, text=True, timeout=30).stdout.split()
+                    d = self._git(["-c", "core.fsmonitor=false", "diff", "--no-ext-diff", "--numstat", "HEAD", "--",
+                                   n]).stdout.split()
                     if not d or d[1] == "-" or int(d[1]) > 0:   # deleted lines (or binary/unknown): tampering
                         kept.append(n)
                 tests = kept

@@ -137,7 +137,10 @@ def _context(out: str, ws, command: str) -> str:
         if not r:
             continue
         key, host = r
-        text = host.read_text(errors="replace") if host is not None else ws._cread(key)
+        try:
+            text = host.read_text(errors="replace") if host is not None else ws._cread(key)
+        except Exception:  # noqa: BLE001 - one unreadable file must not drop the other locations
+            continue
         src = text.splitlines()
         if line > len(src):
             continue
@@ -151,6 +154,8 @@ def _context(out: str, ws, command: str) -> str:
         blocks.append(block)
         used += len(block)
         ws.seen[key] = ws._hash(text)          # like read_file with a line range: the file may now be edited
+        if isinstance(getattr(ws, "original", None), dict):
+            ws.original.setdefault(key, ws.seen[key])
     if not blocks:
         return ""
     return ("\n\n--- where it failed (project code, > marks the line; you may edit these files directly) ---\n"

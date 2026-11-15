@@ -182,6 +182,7 @@ class Workspace:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.skills = skills or {}
         self.seen: dict[str, str] = {}        # path -> content hash the agent last saw/wrote
+        self.original: dict[str, str] = {}    # path -> content hash when the agent first saw it (revert check)
         self.commands: list[dict] = []        # executed commands with exit codes and edit counter
         self.edits = 0
         self.written: set[str] = set()
@@ -245,6 +246,7 @@ class Workspace:
         if self.container and not self.mounted:
             text = self._cread(path)
             self.seen[self._cpath(path)] = self._hash(text)
+            self.original.setdefault(self._cpath(path), self.seen[self._cpath(path)])
             lines = text.splitlines()
             s, e = max(1, start or 1), min(len(lines), end or len(lines))
             body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
@@ -262,6 +264,7 @@ class Workspace:
             return self._cap(docread.extract(p, pages=pages), "read")
         text = p.read_text(errors="replace")
         self.seen[str(p)] = self._hash(text)
+        self.original.setdefault(str(p), self.seen[str(p)])
         lines = text.splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
@@ -403,6 +406,8 @@ class Workspace:
         if self.container and not self.mounted:
             if subprocess.run(["docker", "exec", self.container, "test", "-e", self._cpath(path)]).returncode != 0:
                 self.created.add(self._cpath(path))
+            elif self._cpath(path) not in self.original:
+                self.original[self._cpath(path)] = self._hash(self._cread(path))
             self._cwrite(path, content, append)
             self.seen[self._cpath(path)] = self._hash(self._cread(path))
             self.edits += 1
@@ -411,6 +416,8 @@ class Workspace:
         p = self._path(path, write=True)
         if not p.exists():
             self.created.add(str(p))
+        elif str(p) not in self.original and p.is_file():
+            self.original[str(p)] = self._hash(p.read_text(errors="replace"))
         p.parent.mkdir(parents=True, exist_ok=True)
         if append and p.exists():
             with p.open("a") as f:
