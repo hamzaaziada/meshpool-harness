@@ -361,6 +361,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.branch_changes(q.get("root", [""])[0], q.get("base", [""])[0]))
             if u.path == "/api/git/ci":
                 return self._send(200, W.git_ci(parse_qs(u.query).get("root", [""])[0]))
+            if u.path == "/api/git/prs":
+                return self._send(200, W.pr_list(parse_qs(u.query).get("root", [""])[0]))
+            if u.path == "/api/git/pr":
+                q = parse_qs(u.query)
+                return self._send(200, W.pr_detail(q.get("root", [""])[0], int(q.get("n", ["0"])[0] or 0)))
             if u.path == "/api/usage":
                 return self._send(200, W.usage())
             if u.path == "/api/search":
@@ -614,6 +619,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/git/ci":
                 b = self._json()
                 return self._send(200, W.git_ci_action(b.get("root", ""), b))
+            if u.path == "/api/git/pr":
+                b = self._json()
+                return self._send(200, W.pr_action(b.get("root", ""), b))
             if u.path == "/api/open-file":
                 from meshpool_harness.ui.desktop import reveal
                 b = self._json()
