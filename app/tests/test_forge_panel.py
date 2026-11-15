@@ -358,3 +358,9 @@ def test_xbrl_facts_give_the_latest_reported_figures_with_their_filing_and_skip_
     assert [f["id"] for f in out] == ["F7"]
     assert "net income (loss) -$2.08B for the period 2026-01-01 to 2026-09-30 (10-Q filed 2026-11-12" in out[0]["text"]
     assert "interest expense" not in " ".join(f["text"] for f in out)          # a 2024 tag is not current
+
+
+def test_only_the_facts_given_still_allows_sourced_research_when_the_brief_says_so():
+    from engines.forge.research import NO_RESEARCH_RE as R
+    assert not R.search("Use only the facts given and any sourced research.")
+    assert R.search("Use only the facts given.") and R.search("Do not research.")

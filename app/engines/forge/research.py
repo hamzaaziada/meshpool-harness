@@ -25,9 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 NO_RESEARCH_RE = re.compile(r"(?i)\b(no|without|skip|don'?t|do not)\s+(?:any\s+|web\s+|external\s+|outside\s+)?"
-                            r"(research|web search|searching|browsing)\b|\bonly (?:use |with )?the (?:facts|data|"
-                            r"documents?|files?) (?:provided|given|attached)\b|\buse only the (?:facts|data|documents?|"
-                            r"files?)\b")
+                            r"(research|web search|searching|browsing)\b|\b(?:use |using )?only the (?:facts|data|"
+                            r"documents?|files?)(?: (?:provided|given|attached))?\b(?![^.]*\b(?:and|or|plus)\b[^.]*"
+                            r"\b(?:research|sourced|sources?)\b)")       # "only the facts given and any sourced research" allows it
 
 DEFAULTS = {"enabled": True, "max_questions": 6, "max_sources_per_question": 3, "time_budget_s": 240,
             "facts_per_question": 3, "max_research_steps": 3}
@@ -268,10 +268,20 @@ XBRL_LINES = [("dei", "EntityCommonStockSharesOutstanding", "shares", "shares ou
               ("us-gaap", "NetIncomeLoss", "USD", "net income (loss)"),
               ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment", "USD", "capital expenditure"),
               ("us-gaap", "CashAndCashEquivalentsAtCarryingValue", "USD", "cash and cash equivalents"),
-              ("us-gaap", "InterestExpense", "USD", "interest expense")]
+              ("us-gaap", "InterestExpense", "USD", "interest expense"),
+              ("us-gaap", "NetCashProvidedByUsedInOperatingActivities", "USD", "operating cash flow"),
+              ("us-gaap", "PaymentsOfDividends", "USD", "dividends paid"),
+              ("us-gaap", "PaymentsOfDividendsCommonStock", "USD", "dividends paid"),
+              ("us-gaap", "PaymentsForRepurchaseOfCommonStock", "USD", "share repurchases"),
+              ("us-gaap", "LongTermDebtNoncurrent", "USD", "long-term debt (non-current)"),
+              ("us-gaap", "OperatingLeaseLiability", "USD", "operating lease liabilities"),
+              ("us-gaap", "CommonStockDividendsPerShareDeclared", "USD/shares", "dividends declared per share"),
+              ("us-gaap", "EarningsPerShareDiluted", "USD/shares", "diluted EPS")]
 
 
 def _money(v: float, unit: str) -> str:
+    if unit == "USD/shares":
+        return f"${v:,.2f} per share"
     if unit == "shares":
         return f"{v / 1e6:,.1f}M shares"
     a = abs(v)
