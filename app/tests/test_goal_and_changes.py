@@ -75,3 +75,19 @@ def test_branch_changes(tmp_path, monkeypatch):
     assert by["keep.py"]["status"] == "changed" and (by["keep.py"]["added"], by["keep.py"]["removed"]) == (2, 1)
     assert by["moved.md"]["status"] == "renamed" and by["moved.md"]["from"] == "move.md"
     assert (c["added"], c["removed"]) == (4, 2)
+
+
+def test_goal_picks_up_again_after_a_connection_failure(monkeypatch):
+    monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
+    s = session()
+    down = {"type": "error", "text": "Couldn't reach the model, even after waiting. (HTTP 0: timed out)"}
+    for i in (1, 2):                                              # an outage: carry on, twice in a row at most
+        n = len(s.events)
+        turn(s, "", extra=[down])
+        assert s._goal_next(n) == (A.GOAL_NEXT, []) and f"({i} of 2)" in s.events[-1]["text"]
+    n = len(s.events)
+    turn(s, "", extra=[down])
+    assert s._goal_next(n) is None and "error" in s.events[-1]["text"]
+    n = len(s.events)
+    turn(s, "Back on it.\nGOAL: CONTINUE")                        # a good turn resets the count
+    assert s._goal_next(n) == (A.GOAL_NEXT, []) and s._goal_net == 0

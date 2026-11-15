@@ -267,3 +267,66 @@ def test_repeated_timeouts_on_a_large_context_compact_it(tmp_path, monkeypatch):
     a._post = post
     a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
     assert sizes[0] > 150000 and sizes[-1] < sizes[0] // 2
+
+
+def _big(a, n=30):
+    for i in range(n):
+        a.messages += [_call("read_file", {"path": f"f{i}"}, cid=f"c{i}"),
+                       {"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 8000}]
+
+
+def test_an_outage_waits_for_the_endpoint_then_resumes_smaller_on_a_fresh_route(tmp_path, monkeypatch):
+    a = Agent(str(tmp_path), mode="auto")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+    _big(a)
+    calls, probes, events = [], iter(["HTTP 0: timed out", "HTTP 502", "ok"]), []
+    a.emit = events.append
+
+    def post(base, key, body, stream):
+        calls.append((stream, body["prompt_cache_key"], core._context_size(body["messages"])))
+        if len(calls) <= 6:
+            raise RuntimeError("HTTP 0: connection problem (The read operation timed out)")
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}, False
+    a._post = post
+    a._probe = lambda base, key, model: next(probes)
+    msg, _ = a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert msg["content"] == "ok" and len(calls) == 7
+    assert calls[0][0] and not calls[4][0]                        # streaming is dropped after the fourth failure
+    assert calls[0][1] == a.id and calls[-1][1] != a.id           # a fresh route after a stuck one
+    assert calls[-1][2] < calls[0][2] // 2                        # and a much smaller context
+    texts = " ".join(e.get("text", "") for e in events)
+    assert "isn't answering" in texts and "answering again" in texts
+
+
+def test_an_endpoint_that_answers_small_calls_but_not_this_one_is_reported(tmp_path, monkeypatch):
+    a = Agent(str(tmp_path), mode="auto")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+
+    def post(base, key, body, stream):
+        raise RuntimeError("HTTP 0: connection problem (timed out)")
+    a._post = post
+    a._probe = lambda base, key, model: "ok"
+    with pytest.raises(RuntimeError, match="answers small requests"):
+        a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    a._probe = lambda base, key, model: "HTTP 0: refused"
+    monkeypatch.setenv("MH_RECOVER_MIN", "0")                     # recovery off: the plain error, as before
+    with pytest.raises(RuntimeError, match="HTTP 0") as e:
+        a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert "answers small" not in str(e.value)
+
+
+def test_stop_closes_the_model_stream_at_once(tmp_path, monkeypatch):
+    import threading
+    import time
+    monkeypatch.setenv("MH_AGENT_FIRST_BYTE_S", "30")
+    a = Agent(str(tmp_path), mode="auto")
+    srv, base = _sse_server(first_delay=0, mid_delay=20)          # streams one chunk, then hangs
+    def stop_soon():
+        time.sleep(0.5)
+        a._stop = True
+    threading.Thread(target=stop_soon, daemon=True).start()
+    t0 = time.time()
+    with pytest.raises(core.Interrupted):
+        a._wait(a._post, base, "k", {"model": "m", "messages": []}, True)
+    assert time.time() - t0 < 3 and a._live is None              # the socket was shut, not left to hang
+    srv.shutdown()

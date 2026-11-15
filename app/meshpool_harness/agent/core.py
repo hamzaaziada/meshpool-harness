@@ -504,6 +504,7 @@ class Agent:
         while t.is_alive():
             t.join(0.15)
             if self._stop:
+                self._abort_live()                 # close the model stream now, not when it next sends a byte
                 raise Interrupted()
         if "e" in box:
             raise box["e"]
@@ -669,12 +670,18 @@ class Agent:
             self._repair()
             msg = raw = str(e)
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
-                msg = ("Couldn't reach the model. Check your internet connection, or the endpoint in Settings, then "
-                       "send your message again.")
+                msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
+                       "to try again; the next try starts on a smaller context and a fresh route."
+                       if "answers small requests" not in msg else
+                       "The endpoint answers small requests, but this conversation's requests keep failing. Send a "
+                       "message to try again on a smaller context, or start a new chat.")
             elif re.search(r"HTTP 429", msg):
                 msg = "The model is busy right now. Wait a minute, then send your message again."
             elif re.search(r"HTTP 5\d\d", msg):
                 msg = "The model service had a problem. Send your message again in a moment."
+            if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
+                _shrink_context(self.messages, 0, hard=True)   # the next message starts small, on a fresh route
+                self.rotate_route()
             if msg != raw:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
@@ -747,8 +754,8 @@ class Agent:
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
         if os.environ.get("MH_CACHE_KEY", "1") == "1":
-            body["prompt_cache_key"] = self.id
-            body["user"] = self.id
+            body["prompt_cache_key"] = self.route_id()
+            body["user"] = self.route_id()
         return body
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
@@ -765,7 +772,11 @@ class Agent:
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
-        for attempt in range(8):
+        attempt, recoveries = -1, 0
+        while True:
+            attempt += 1
+            if attempt >= 8:                               # every attempt waited or withheld: report the last error
+                raise last or RuntimeError("HTTP 0: the model call did not go through")
             self._check_stop()
             try:
                 if wire == "chatgpt":                  # the user's ChatGPT sign-in (core/chatgpt.py)
@@ -830,22 +841,45 @@ class Agent:
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         continue
+                net = bool(re.search(r"HTTP 0|timed out|connection", msg, re.I))   # nothing came back at all
                 if attempt >= 5:
-                    raise
+                    # Long tasks must not die on an outage: wait for the endpoint to answer a tiny request, then
+                    # start the ladder again on a smaller context and a fresh route (Harness v4, recovery).
+                    if not (net or re.search(r"HTTP 5\d\d", msg)) or wire == "chatgpt" or recoveries >= 3:
+                        raise
+                    recoveries += 1
+                    alive_at_once = self._await_endpoint(base, key, body["model"])
+                    if alive_at_once is None:
+                        raise
+                    if alive_at_once and recoveries >= 2:  # it answers small calls but not this one: size or route
+                        raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
+                                           "requests keep failing]")
+                    _shrink_context(self.messages, 0, hard=True)
+                    self.rotate_route()
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    attempt = -1
+                    continue
+                if net and attempt == 2:                   # a stuck sticky route (cache affinity) upstream: new route
+                    self.rotate_route()
+                    body["prompt_cache_key"] = body["user"] = self.route_id()
+                if net and attempt >= 3 and stream:        # a gateway that mishandles the stream: ask for one reply
+                    stream = False
+                    self.emit({"type": "status", "text": "Trying again without streaming."})
                 stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
                 if stalled and attempt >= 1:               # a big request that keeps failing upstream:
-                    if _context_size(self.messages) > 150000:   # shrink it instead of resending the same thing
+                    before = _context_size(self.messages)
+                    if before > 150000:                    # shrink it instead of resending the same thing
                         _compact(self.messages, keep_recent=8)
-                        body = self._body()
-                        body["model"] = PV.split(body["model"])[1]
-                        self.emit({"type": "status", "text": "The request was very large; older tool outputs were "
-                                                             "shortened before trying again."})
+                        if _context_size(self.messages) < before:
+                            body = self._body()
+                            body["model"] = PV.split(body["model"])[1]
+                            self.emit({"type": "status", "text": "The request was very large; older tool outputs "
+                                                                 "were shortened before trying again."})
                 self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
-        else:                                              # every attempt waited or withheld: report the last error
-            raise last or RuntimeError("HTTP 0: the model call did not go through")
         self.emit({"type": "model_end"})
         self._n429 = 0
         u = resp.get("usage") or {}
@@ -864,6 +898,59 @@ class Agent:
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
 
+    def route_id(self) -> str:
+        """The id the endpoint sees for this chat (cache affinity, gateway session). Changes after a stuck route."""
+        return self.id + getattr(self, "_route", "")
+
+    def rotate_route(self):
+        n = getattr(self, "_route_n", 0) + 1
+        self._route_n, self._route = n, f"-r{n}"
+
+    def _abort_live(self):
+        r, self._live = getattr(self, "_live", None), None
+        if r is not None:
+            try:
+                import socket
+                r.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+            except Exception:  # noqa: BLE001  already closed, or not a socket
+                pass
+
+    def _probe(self, base: str, key: str, model: str) -> str:
+        """One tiny request: "ok" when the endpoint answers (any reply but 5xx), "auth" on 401/403, else the error."""
+        body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+        req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"),
+                                     method="POST", headers={"Authorization": f"Bearer {key}",
+                                                             "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=float(os.environ.get("MH_PROBE_S", "30"))) as r:
+                r.read()
+            return "ok"
+        except urllib.error.HTTPError as e:
+            return "auth" if e.code in (401, 403) else "ok" if e.code < 500 else f"HTTP {e.code}"
+        except Exception as e:  # noqa: BLE001
+            return f"HTTP 0: {e}"
+
+    def _await_endpoint(self, base: str, key: str, model: str):
+        """After the retries ran out: probe the endpoint until it answers, for up to MH_RECOVER_MIN minutes (30).
+        True: it answered the first probe (so the endpoint is up and the big request is the problem). False: it
+        answered after a wait. None: it never answered, or recovery is off."""
+        budget = float(os.environ.get("MH_RECOVER_MIN", "30")) * 60
+        t0, n = time.time(), 0
+        while budget > 0 and time.time() - t0 < budget:
+            got = self._wait(self._probe, base, key, model)
+            if got == "auth":
+                raise RuntimeError("HTTP 401: the endpoint stopped accepting the API key while the task ran.")
+            if got == "ok":
+                self.emit({"type": "status", "text": "The model endpoint is answering again. Picking up where it "
+                                                     "left off."})
+                return n == 0
+            n += 1
+            wait = min(60, 10 * n)
+            self.emit({"type": "status", "text": f"The model endpoint isn't answering ({got[:80]}). Checking again in "
+                                                 f"{wait} s, for up to {int(budget // 60)} min. Press Stop to end."})
+            self._sleep(wait)
+        return None
+
     def _sleep(self, s: float):
         end = time.time() + s
         while time.time() < end:
@@ -877,7 +964,7 @@ class Agent:
             b["stream_options"] = {"include_usage": True}
         req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": self.id, "session_id": self.id})
+                                              "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
         # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
         # long task the same way ("The read operation timed out").
@@ -887,6 +974,7 @@ class Agent:
         gen = getattr(self, "_gen", 0)
         try:
             with urllib.request.urlopen(req, timeout=first) as r:
+                self._live = r
                 if not stream:
                     return json.loads(r.read().decode("utf-8", "replace")), False
 

@@ -26,6 +26,7 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
+_NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|HTTP 0|HTTP 5\d\d", re.I)
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan"}
@@ -202,7 +203,7 @@ class Session:
         self.events: list[dict] = []
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
-        self.goal, self._goal_idle = "", 0          # /goal: see GOAL_NOTE
+        self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
         self.cp = None
         self.lock = threading.RLock()          # re-entrant: a steer taken under it emits an event
         self.state = "starting"
@@ -652,7 +653,7 @@ class Session:
         """/goal: keep working until this is done. An empty text clears it."""
         had = self.goal
         self._goal_t = time.time()
-        self.goal, self._goal_idle = (text or "").strip()[:2000], 0
+        self.goal, self._goal_idle, self._goal_net = (text or "").strip()[:2000], 0, 0
         write_meta(self.id, goal=self.goal)
         if not self.goal and not had:
             return                                   # nothing was set: no "Goal cleared." line
@@ -670,6 +671,15 @@ class Session:
         verdict = found[-1].upper() if found else ""
         acted = any(e.get("type") == "tool_end" for e in evs)
         failed = any(e.get("type") in ("error", "interrupted") for e in evs)
+        net = [e for e in evs if e.get("type") == "error" and _NET_RE.search(e.get("text") or "")]
+        if failed and net and not any(e.get("type") == "interrupted" for e in evs) and getattr(self, "_goal_net", 0) < 2:
+            self._goal_net = getattr(self, "_goal_net", 0) + 1                      # an outage, not the task: the agent already waited for the
+                                                     # endpoint inside the turn; carry on rather than stop the goal
+            self.emit({"type": "status", "text": "Goal: the model connection failed. Picking the goal up again "
+                                                 f"({self._goal_net} of 2)."})
+            return (GOAL_NEXT, [])
+        if not failed:
+            self._goal_net = 0
         if verdict == "DONE":
             done, self.goal = self.goal, ""
             write_meta(self.id, goal="")
