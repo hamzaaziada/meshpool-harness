@@ -165,6 +165,13 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       "rate": "notes_rate"}}])   # sources & uses, sweep, IRR / MOIC, and lbo_floor_low / lbo_floor_high ($ per share
       a sponsor could pay at lbo_irr_high / lbo_irr_low): use them as the LBO bar in valuation_summary
       (needs lbo_entry_multiple, lbo_ltm_ebitda, lbo_fees_pct, lbo_exit_multiple, lbo_irr_low, lbo_irr_high)
+  ca = B.capital_allocation(wb["Model"], 3, [2027, 2028, 2029, 2030, 2031])   # cash generated and its uses (return
+      cash vs fund growth, buybacks, special dividends): revenue -> operating cash flow -> capex -> FCF; opening cash,
+      interest, regular dividends, special dividend, buyback, closing cash; shares retired; headroom over the cash
+      floor; a growth x capex grid of closing cash; checks that tie. Put these names in the assumption book first:
+      revenue_base, rev_growth, ocf_margin, capex_base, capex_growth, cash, min_cash, shares, share_price, dps,
+      dps_growth, special_dps, buyback, cash_yield (override with names={{...}}). Outputs: ca_fcf_total, ca_cash_end,
+      ca_min_headroom, ca_uses_total, ca_shares_end. Use it instead of writing these rows by hand.
   B.alerts(wb, m, d)               # Alerts tab: growth fades, capex vs depreciation, growth and margin both rising,
       cash shortfall, terminal value share, terminal growth vs risk-free; explain every REVIEW in your answer
   d = B.dcf_from_statements(wb["DCF"], 3, m)   # names risk_free, beta_unlevered, equity_risk_premium, cost_of_debt,
