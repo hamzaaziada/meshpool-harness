@@ -513,23 +513,24 @@ EDIT_TOOLS = READ_TOOLS + ["write_file", "edit"]
 
 
 def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps: int = 0,
-                 parent: dict | None = None, cancelled=None) -> str:
+                 parent: dict | None = None, cancelled=None, trusted: bool = False) -> str:
     """Run independent parts of a job in parallel with Meshpool's own agent.
 
     Settings (Settings, Advanced): on or off, the model (empty: the parent chat's model), read-only or edit access,
-    how many at once, steps per sub-agent and a time limit for the whole call. `parent` comes from the chat that
-    calls the tool, not from the model: its model, its permission mode and a stop file that appears when the user
-    presses Stop. At the time limit or on Stop every sub-agent stops and the parts report what they have."""
+    how many at once, steps per sub-agent and a time limit for the whole call. `parent` (with trusted=True) comes
+    from Meshpool's own chat in its own process: its model, permission mode and project. `cancelled` reports Stop
+    (the chat's, or a harness's notifications/cancelled). At the time limit or on Stop every sub-agent stops and
+    the parts report what they have."""
     import os
     import shutil
     from concurrent.futures import ThreadPoolExecutor
     from meshpool_harness.agent import core as K
     C.load_into_env(override=False)
     cfg = subagent_settings()
-    parent = parent if isinstance(parent, dict) else {}
-    token = os.environ.get("MH_PARENT_TOKEN", "")
-    if not token or parent.get("token") != token:            # written by a model, not by Meshpool's agent: ignore
-        parent = {}
+    # A parent (model, mode, project) only from Meshpool's own agent, calling in its own process (trusted=True,
+    # agent/core.py _run_subtasks). From the assistant server (Hermes, Codex, Pi) it is ignored: read-only
+    # sub-agents on the configured model, in the server's project.
+    parent = parent if (trusted and isinstance(parent, dict)) else {}
     if not cfg["on"]:
         raise ValueError("Sub-agents are off in Settings, Advanced. Do the parts one after another yourself.")
     rows = []
@@ -541,8 +542,6 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
     rows = rows[:12]
-    # The parent chat's own project (token-checked), not the server's MESHPOOL_PROJECT: that is process-wide and
-    # can belong to another chat whose servers started at the same moment.
     root = str(parent.get("root") or "") or folder or os.environ.get("MESHPOOL_PROJECT") or ""
     has_project = bool(root) and Path(root).is_dir()
     if not has_project:                                      # no project: an empty folder, never the home folder
@@ -554,7 +553,6 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     steps = int(max_steps or cfg["steps"])
     workers = max(1, min(int(max_parallel or cfg["parallel"]), cfg["parallel"], 6))
     deadline = time.time() + cfg["minutes"] * 60
-    stop_file = str(parent.get("stop_file") or "")
     live: list = []
     halted = {"why": ""}
 
@@ -581,7 +579,7 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         while not halted.get("done"):
             if not halted["why"]:
                 halted["why"] = ("the time limit" if time.time() >= deadline else
-                                 "Stop" if (stop_file and os.path.exists(stop_file)) or (cancelled and cancelled())
+                                 "Stop" if cancelled and cancelled()
                                  else "")
             if halted["why"]:                                # keep at it: a sub-agent that was still being set
                 for a in list(live):                         # up, or whose send() reset its flag, stops too

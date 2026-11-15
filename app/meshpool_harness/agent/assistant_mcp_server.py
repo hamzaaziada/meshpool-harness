@@ -51,9 +51,11 @@ def search_chats(query: str) -> str:
     return A.search_chats(query)
 
 
-def run_subtasks(tasks: list, max_parallel: int = 0, parent: dict | None = None) -> str:
+def run_subtasks(tasks: list, max_parallel: int = 0) -> str:
+    """For Hermes, Codex, Pi and other harnesses: read-only sub-agents in this server's project. Meshpool's own chats
+    run sub-agents in the app instead (agent/core.py _run_subtasks), where their mode and project are known."""
     import os
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, parent=parent,
+    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel,
                           cancelled=cancel_check())       # Stop in Hermes, Codex or Pi cancels the call
 
 
@@ -92,8 +94,7 @@ TOOLS = {
                          {"tasks": {"type": "array", "items": {"type": "object", "properties": {
                              "title": {"type": "string"}, "prompt": {"type": "string"}}, "required": ["prompt"]}},
                           "max_parallel": {"type": "integer", "description": "1 to 6; at most the number set in "
-                                                                          "Settings (default 4)"},
-                          "parent": {"type": "object", "description": "Filled in by Meshpool. Leave it out."}},
+                                                                          "Settings (default 4)"}},
                          ["tasks"]),
 }
 
