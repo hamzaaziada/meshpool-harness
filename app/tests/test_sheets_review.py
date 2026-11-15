@@ -215,13 +215,30 @@ def test_cap_with_passing_workbook_gets_a_final_review(tmp_path, monkeypatch, bo
     assert "Both reviewers signed off" in r["answer"]
 
 
-def test_review_is_on_for_live_clients_and_off_for_stubs_or_when_disabled(monkeypatch):
+def test_review_is_off_by_default_and_on_when_asked(monkeypatch):
+    """0.0.5: the workbook review took a budget from about 150 s to about 400 s with the same validator results, so it
+    runs only when asked (MH_MODEL_REVIEW=1, or review=True from the caller)."""
     live = object.__new__(LiveClient)
     monkeypatch.delenv("MH_MODEL_REVIEW", raising=False)
-    assert E.review_enabled(live) and not E.review_enabled(MockClient([]))
+    assert not E.review_enabled(live) and not E.review_enabled(MockClient([]))
     assert E.review_enabled(MockClient([]), True) and not E.review_enabled(live, False)
+    monkeypatch.setenv("MH_MODEL_REVIEW", "1")
+    assert E.review_enabled(live) and not E.review_enabled(MockClient([]))
     monkeypatch.setenv("MH_MODEL_REVIEW", "0")
     assert not E.review_enabled(live)
+
+
+def test_deck_review_is_off_by_default_and_on_when_asked(monkeypatch):
+    from engines.forge.build import _review_on
+    from engines.forge.common import load_rules
+    live = object.__new__(LiveClient)
+    rules = load_rules()
+    monkeypatch.delenv("MH_REVIEW", raising=False)
+    assert not _review_on(live, rules)                     # rules ship with the deck review off
+    monkeypatch.setenv("MH_REVIEW", "1")
+    assert _review_on(live, rules) and not _review_on(MockClient([]), rules)
+    monkeypatch.setenv("MH_REVIEW", "0")
+    assert not _review_on(live, dict(rules, review={"enabled": True}))
 
 
 def test_without_review_the_finish_gate_and_answer_are_unchanged(tmp_path, monkeypatch, books):

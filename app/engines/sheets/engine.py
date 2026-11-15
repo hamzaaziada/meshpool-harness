@@ -466,11 +466,12 @@ NAMES = {"md": "MD (bulge-bracket bank)", "partner": "senior partner (strategy f
 
 
 def review_enabled(client, flag: bool | None = None) -> bool:
-    """The partner / MD review runs for live clients; MH_MODEL_REVIEW=0 turns it off; stub clients only when the
-    caller asks (review=True)."""
+    """The partner / MD review of a finished workbook. Off by default in 0.0.5: one round took a 12-month budget from
+    about 150 s to about 400 s with the same validator results, and no workbook has shown a measured gain yet.
+    MH_MODEL_REVIEW=1 turns it on for live clients; stub clients only when the caller asks (review=True)."""
     if flag is not None:
         return bool(flag)
-    if os.environ.get("MH_MODEL_REVIEW", "").strip().lower() in ("0", "false", "off", "no"):
+    if os.environ.get("MH_MODEL_REVIEW", "").strip().lower() not in ("1", "true", "on", "yes"):
         return False
     return isinstance(client, LiveClient)
 
