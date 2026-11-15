@@ -227,6 +227,11 @@ class Delegation:
             def _tool_names(self):
                 return names + (["delegate_task"] if nested else [])
 
+            def _permit(self, name, args):              # unattended: never read outside the project, any mode
+                if self._outside(name, args):
+                    return False, ("sub-agents only read inside the project; ask the user to attach the file")
+                return super()._permit(name, args)
+
             def _check_stop(self):                       # Stop, the time limit, or action=stop
                 if deleg.stopped or rec.get("stop"):
                     raise K.Interrupted()

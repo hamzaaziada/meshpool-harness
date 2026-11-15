@@ -256,3 +256,16 @@ def test_children_use_the_chats_mcp_tools_minus_memory_scheduling_and_sub_agents
                                                              "mcp__meshpool-office__make_document"]
     assert not c.has("mcp__meshpool-assistant__memory_save") and c.has("mcp__meshpool-office__make_document")
     assert c.call("mcp__meshpool-office__make_document", {}) == ("made", False) and c.last_images == ["img"]
+
+
+def test_children_never_read_outside_the_project_even_in_full_access(monkeypatch, _env, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("KEY")
+
+    def child(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("got: " + b["messages"][-1]["content"][:120])
+        return _msg("", [("read_file", {"path": str(secret)})])
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(_agent(_env, mode="auto"), {"tasks": [{"goal": "Read the secret file"}]})
+    assert "only read inside the project" in out and "KEY" not in out.split("```json")[0]
