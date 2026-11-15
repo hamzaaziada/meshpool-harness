@@ -259,6 +259,82 @@ def _pick_model(q: str, passages: list, k: int, client, models: list[str], task_
     return None
 
 
+# SEC XBRL company facts: reported figures (latest filing) for the companies a question names, no search engine needed
+XBRL_LINES = [("dei", "EntityCommonStockSharesOutstanding", "shares", "shares outstanding"),
+              ("us-gaap", "LongTermDebt", "USD", "long-term debt"),
+              ("us-gaap", "DebtCurrent", "USD", "current debt"),
+              ("us-gaap", "Revenues", "USD", "revenue"),
+              ("us-gaap", "RevenueFromContractWithCustomerExcludingAssessedTax", "USD", "revenue"),
+              ("us-gaap", "NetIncomeLoss", "USD", "net income (loss)"),
+              ("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment", "USD", "capital expenditure"),
+              ("us-gaap", "CashAndCashEquivalentsAtCarryingValue", "USD", "cash and cash equivalents"),
+              ("us-gaap", "InterestExpense", "USD", "interest expense")]
+
+
+def _money(v: float, unit: str) -> str:
+    if unit == "shares":
+        return f"{v / 1e6:,.1f}M shares"
+    a = abs(v)
+    s = f"${a / 1e9:,.2f}B" if a >= 1e9 else f"${a / 1e6:,.1f}M"
+    return ("-" if v < 0 else "") + s
+
+
+def _days_between(a: str, b: str) -> int:
+    import datetime as _dt
+    try:
+        return abs((_dt.date.fromisoformat(b) - _dt.date.fromisoformat(a)).days)
+    except ValueError:
+        return 0
+
+
+def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=None) -> list[dict]:
+    """Latest reported values for each named company that files with the SEC, as sourced facts (F ids from no).
+    Each fact names the form, period end, filing date and the filing's URL."""
+    from engines.sheets import spreading as SP
+    out: list[dict] = []
+    try:
+        tick = ticker_map or json.loads(SP._get(SP.TICKERS, SP.default_user_agent()))
+    except Exception:  # noqa: BLE001
+        return out
+    rows = list(tick.values()) if isinstance(tick, dict) else tick
+    for name in dict.fromkeys(n.strip() for n in names if n.strip()):
+        low = name.lower()
+        hit = next((r for r in rows if str(r.get("ticker", "")).lower() == low), None) or next(
+            (r for r in rows if str(r.get("title", "")).lower().startswith(low)), None)
+        if not hit:
+            continue
+        cik = str(hit["cik_str"]).zfill(10)
+        try:
+            facts = fetch(cik) if fetch else SP.fetch_companyfacts(cik)
+        except Exception:  # noqa: BLE001
+            continue
+        seen = set()
+        ends = [u.get("end", "") for ns, tag, unit, _ in XBRL_LINES for u in
+                ((facts.get("facts", {}).get(ns, {}).get(tag) or {}).get("units") or {}).get(unit) or []
+                if u.get("form") in ("10-K", "10-Q")]
+        latest = max(ends) if ends else ""
+        for ns, tag, unit, label in XBRL_LINES:
+            if label in seen:
+                continue
+            units = ((facts.get("facts", {}).get(ns, {}).get(tag) or {}).get("units") or {}).get(unit) or []
+            pts = [u for u in units if u.get("form") in ("10-K", "10-Q", "10-K/A", "10-Q/A") and "val" in u]
+            if not pts:
+                continue
+            u = max(pts, key=lambda x: (x.get("end", ""), x.get("filed", "")))
+            if latest and _days_between(u.get("end", ""), latest) > 200:
+                continue                                 # a tag the company stopped using: stale, not current
+            if u.get("start") and unit != "shares":
+                per = f"for the period {u['start']} to {u['end']}"
+            else:
+                per = f"at {u['end']}"
+            url = SP._filing_url(cik, u.get("accn", ""))
+            out.append({"id": f"F{no + len(out)}", "text": f"{hit['title']} {label} {_money(float(u['val']), unit)} "
+                        f"{per} ({u.get('form')} filed {u.get('filed')}; SEC XBRL {tag}; {url})",
+                        "source": url, "research": True})
+            seen.add(label)
+    return out
+
+
 def investigate(questions: list[dict | str], facts: list[dict], *, client=None, models: list[str] | None = None,
                 out_dir: str | None = None, rules: dict | None = None, task_id: str = "forge-research",
                 search_fn=None, fetch_fn=None) -> dict:
@@ -303,6 +379,15 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
     with ThreadPoolExecutor(max(1, min(4, len(qs)))) as ex:
         gathered = list(ex.map(gather, qs))
     new_facts: list[dict] = []
+    if edgar_ok:                                     # reported figures for every company the questions name
+        names = []
+        for q in qs:
+            names += [w for w in _keywords(q["question"], 8).split() if w[:1].isupper() and len(w) > 2
+                      and not re.match(r"^(EV|NTM|GW|DCF|WACC|EPS|IC|CEO|CFO|FY\d*|Q\d)$", w)][:3]
+        known0 = {re.sub(r"\W+", "", f.get("text", "").lower())[:200] for f in facts}
+        for f in xbrl_facts(names, next_fact_no(facts)):
+            if re.sub(r"\W+", "", f["text"].lower())[:200] not in known0:
+                new_facts.append(f)
     dead: set = set()
     log = []
     no = next_fact_no(facts)

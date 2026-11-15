@@ -343,3 +343,18 @@ def test_verdict_line_reads_like_the_room():
                                   "(slide 6)")
     notes = C.review_notes(dict(pn, issues=P.merge_issues(pn["reviews"])), 8)
     assert notes == {6: ["[REVIEW] MD (major, data): Premium does not tie Fix: recompute"]}
+
+
+def test_xbrl_facts_give_the_latest_reported_figures_with_their_filing_and_skip_stale_tags():
+    from engines.forge.research import xbrl_facts
+    tick = {"0": {"cik_str": 1769628, "ticker": "CRWV", "title": "CoreWeave, Inc."}}
+    facts = {"facts": {"us-gaap": {
+        "NetIncomeLoss": {"units": {"USD": [
+            {"start": "2026-01-01", "end": "2026-09-30", "val": -2.08e9, "form": "10-Q", "filed": "2026-11-12", "accn": "0001769628-26-000300"},
+            {"start": "2026-01-01", "end": "2026-06-30", "val": -1.37e9, "form": "10-Q", "filed": "2026-08-12", "accn": "x"}]}},
+        "InterestExpense": {"units": {"USD": [
+            {"start": "2024-01-01", "end": "2024-03-31", "val": 1e8, "form": "10-Q", "filed": "2024-05-01", "accn": "y"}]}}}}}
+    out = xbrl_facts(["CoreWeave"], 7, ticker_map=tick, fetch=lambda cik: facts)
+    assert [f["id"] for f in out] == ["F7"]
+    assert "net income (loss) -$2.08B for the period 2026-01-01 to 2026-09-30 (10-Q filed 2026-11-12" in out[0]["text"]
+    assert "interest expense" not in " ".join(f["text"] for f in out)          # a 2024 tag is not current
