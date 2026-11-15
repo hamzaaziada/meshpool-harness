@@ -65,6 +65,11 @@ Observe helped the engine loop (+3 tasks, 39% cheaper per solve). It did not hel
 solved all 10. Navigation and the edit check added calls without adding solves. All three stay off until observe is
 confirmed on test tasks.
 
+`MH_ERROR_CONTEXT=1` (not yet measured): when a command fails, its output gets the project lines it points to
+(Python tracebacks, pytest, gcc/clang, rustc, tsc, Ruff, mypy, Pyright, Node stacks), marked and counted as a read.
+It adds no tool and no call; it targets the 9.7 re-reads per task after the first edit. Off until an A/B on test tasks
+shows fewer calls or more solves.
+
 ## How the agents were measured
 
 Every agent ran under the same conditions:

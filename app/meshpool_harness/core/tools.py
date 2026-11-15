@@ -466,7 +466,7 @@ class Workspace:
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True, raw=False):
+    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -511,7 +511,12 @@ class Workspace:
             pass
         if raw:                                  # probe/trace post-process the full text themselves
             return f"[exit {code}]\n{out}", code
-        return self._cap(f"[exit {code}]\n{out}", kind), code
+        return self._cap(f"[exit {code}]\n{out}", kind) + (self._where(out, code, command) if ctx else ""), code
+
+    def _where(self, out, code, command) -> str:
+        """MH_ERROR_CONTEXT: excerpts of the project code a failing command points to (core/errctx.py)."""
+        from . import errctx
+        return errctx.context(out, self, command) if code not in (0, 124) and errctx.enabled() else ""
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
@@ -525,11 +530,11 @@ class Workspace:
         def one(cmd):
             if self.should_stop and self.should_stop():
                 return f"$ {cmd}\n[not run: stopped by the user]"
-            out, code = self._run(cmd, timeout_s, "bash")
+            out, code = self._run(cmd, timeout_s, "bash", ctx=False)
             body = out.split("\n", 1)[1] if out.startswith("[exit ") else out
             if len(body) > 2500:
                 body = body[:1200] + f"\n... [{len(body) - 2400} chars cut; run it alone for the full output] ...\n" + body[-1200:]
-            return f"$ {cmd}\n[exit {code}]\n{body}"
+            return f"$ {cmd}\n[exit {code}]\n{body}" + self._where(out, code, cmd)
         if os.environ.get("MH_PARALLEL_MANY") == "1" and len(cmds) > 1 and all(read_only(c) for c in cmds):
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=min(4, len(cmds))) as ex:
@@ -541,8 +546,8 @@ class Workspace:
     def probe(self, command, timeout_s=None):
         """MH_OBSERVE: run a check and return a failure digest (core/observe.py). Recorded as a check."""
         from .observe import digest, probe_command
-        out, _ = self._run(probe_command(command), timeout_s, "check", raw=True)
-        return digest(out)
+        out, code = self._run(probe_command(command), timeout_s, "check", raw=True)
+        return digest(out) + self._where(out, code, command)
 
     def trace(self, command, timeout_s=None):
         """MH_OBSERVE: run a Python command under a project-only profiler (core/observe.py)."""
