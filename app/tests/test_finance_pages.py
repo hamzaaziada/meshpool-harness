@@ -187,3 +187,28 @@ def test_comps_page_needs_recalculated_medians(books, monkeypatch):
     bk = FP.Book(path)
     assert bk.names.get("comps_ev_ebitda_median") and bk.name("comps_ev_ebitda_median") is None
     assert FP.comps(bk) is None                        # no page of NM
+
+
+def test_dcf_bridge_finds_labelled_rows_and_never_draws_a_bridge_that_does_not_add_up(tmp_path):
+    """The MD caught it live: a model labelled 'Sum of PV of free cash flow, 2027E-2031E ($m)' lost that step, and
+    the bridge showed PV of TV less debt as equity, which does not add up."""
+    import openpyxl
+    from openpyxl.workbook.defined_name import DefinedName
+    from engines.forge.finance_pages import Book, dcf_outputs
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "DCF"
+    rows = [("Sum of PV of free cash flow, 2027E-2031E ($m)", -46369), ("PV of terminal value ($m)", 118212),
+            ("Enterprise value ($m)", 71843), ("Less: total debt ($m)", -47000), ("Plus: cash ($m; GAP, 0)", 0),
+            ("Equity value ($m)", 24843), ("DCF value per share ($/share)", 45.09)]
+    for i, (k, v) in enumerate(rows, 1):
+        ws.cell(row=i, column=1, value=k)
+        ws.cell(row=i, column=2, value=v)
+    wb.defined_names["dcf_per_share"] = DefinedName("dcf_per_share", attr_text="DCF!$B$7")
+    wb.save(tmp_path / "m.xlsx")
+    p = dcf_outputs(Book(str(tmp_path / "m.xlsx")))
+    v = p["chart"]["series"][0]["values"]
+    assert p["chart"]["categories"][0] == "PV of free cash flow" and abs(sum(v[:-1]) - v[-1]) < 2
+    ws.cell(row=6, column=2, value=99999)                    # an equity value the steps do not reach
+    wb.save(tmp_path / "bad.xlsx")
+    assert dcf_outputs(Book(str(tmp_path / "bad.xlsx"))) is None

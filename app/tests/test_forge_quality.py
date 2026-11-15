@@ -108,3 +108,46 @@ def test_fallback_keeps_the_title_whole_and_moves_the_right_title_into_the_text(
                                                          "series": [{"name": "x", "values": [2.46]}]},
                   "blocks": [{"text": "Body."}]})
     assert s["title"] == "Year 1 dilutes EPS" and s["intro"].startswith("**Synergy timing drives EPS**")
+
+
+def test_variety_sends_back_look_alike_pages_and_text_led_neighbours_alternate(tmp_path):
+    """'All the slides look the exact same': neighbours with one layout, or a deck mostly of words, go back to the
+    writer; two text-led slides in a row are drawn in different forms (columns, then rows)."""
+    from pptx import Presentation
+    from engines.forge.build import variety_checks
+    from engines.forge.render import render
+    arg = lambda t: {"archetype": "argument_only", "title": t, "blocks": [  # noqa: E731
+        {"text": "**Debt** is rising", "bullets": [{"text": "Debt nears $47B"}]},
+        {"text": "**Revenue** is growing", "bullets": [{"text": "Revenue grew 168%"}]},
+        {"text": "**Risk** is regulatory", "bullets": [{"text": "Antitrust review is likely"}]}]}
+    deck = [{"archetype": "cover", "title": "Deck"}, arg("Debt rises as revenue grows"), arg("Risks are regulatory"),
+            arg("The board should act now"), {"archetype": "closing", "title": "Next steps", "steps": []}]
+    v = variety_checks(deck)
+    assert 3 in v and 4 in v and 2 not in v and any("same layout" in m for m in v[3])
+    out = tmp_path / "v.pptx"
+    render(deck[1:3], str(out), carry=False, density="balanced")
+    tops = []
+    for sl in Presentation(str(out)).slides:
+        ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_IconRing")})
+        tops.append(len(ys))
+    assert tops[0] == 1 and tops[1] > 1           # columns (icons on one line), then rows (icons stacked)
+
+
+def test_libreoffice_draws_segoe_ui_with_the_bundled_selawik(tmp_path):
+    """Without Segoe UI installed, LibreOffice fell back to a wider face and the render check flagged overflows
+    PowerPoint never shows; the throwaway profile now carries Selawik and a substitution for Segoe UI."""
+    import re as _re
+    import pytest as _pt
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from engines.forge.common import find_soffice, soffice_convert
+    if not find_soffice():
+        _pt.skip("LibreOffice not installed")
+    p = Presentation()
+    tb = p.slides.add_slide(p.slide_layouts[6]).shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    r = tb.text_frame.paragraphs[0].add_run()
+    r.text, r.font.name, r.font.size = "Segoe UI text", "Segoe UI", Pt(28)
+    p.save(tmp_path / "t.pptx")
+    pdf = soffice_convert(str(tmp_path / "t.pptx"), "pdf", str(tmp_path))
+    fonts = set(_re.findall(rb"/BaseFont\s*/([A-Za-z+\-]+)", pdf.read_bytes()))
+    assert any(b"Selawik" in f for f in fonts), fonts

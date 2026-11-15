@@ -461,8 +461,276 @@ def tidy(ws, artifacts: list) -> list:
     return [str(moved.get(Path(a if os.path.isabs(a) else ws.root / a).resolve(), a)) for a in artifacts]
 
 
+REVIEW_CHAIN = ("claude-sonnet-5.5", "gpt-6.1-terra")       # strong text models for the partner / MD panel
+NAMES = {"md": "MD (bulge-bracket bank)", "partner": "senior partner (strategy firm)"}
+
+
+def review_enabled(client, flag: bool | None = None) -> bool:
+    """The partner / MD review runs for live clients; MH_MODEL_REVIEW=0 turns it off; stub clients only when the
+    caller asks (review=True)."""
+    if flag is not None:
+        return bool(flag)
+    if os.environ.get("MH_MODEL_REVIEW", "").strip().lower() in ("0", "false", "off", "no"):
+        return False
+    return isinstance(client, LiveClient)
+
+
+def _sha(path) -> str:
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _rscore(rnd: dict):
+    """Comparable score of one review round: sign-off first, then how many signed off, then the mean score. None when
+    no reviewer ran (such a round never counts as best)."""
+    ran = [r for r in rnd.get("reviews") or [] if r.get("status") == "ok" and r.get("overall") is not None]
+    if not ran:
+        return None
+    return (bool(rnd.get("signed_off")), sum(r["verdict"] == "sign_off" for r in ran),
+            round(sum(r["overall"] for r in ran) / len(ran), 3))
+
+
+def _scores_line(rnd: dict) -> str:
+    parts = [f"{NAMES.get(r['persona'], r['persona'])} {r['overall']}/10 "
+             f"({'signs off' if r['verdict'] == 'sign_off' else 'revise'})"
+             for r in rnd.get("reviews") or [] if r.get("status") == "ok" and r.get("overall") is not None]
+    parts += [f"{NAMES.get(r['persona'], r['persona'])} reply unreadable (counted as revise)"
+              for r in rnd.get("reviews") or [] if r.get("status") == "unparsed"]
+    nr = [NAMES.get(r["persona"], r["persona"]) for r in rnd.get("reviews") or [] if r.get("status") == "not_run"]
+    return "; ".join(parts + ([f"not run: {', '.join(nr)}"] if nr else [])) or "no reviewer ran"
+
+
+def _issue_line(i: dict) -> str:
+    return (f"[{i['severity']}] {i.get('where') or 'model'} ({i.get('persona', '')}; {i.get('scope', '')}): "
+            f"{i['issue']}" + (f" Fix: {i['fix']}" if i.get("fix") else ""))
+
+
+class WorkbookReview:
+    """The partner and MD review the workbook each time it passes the engine's finish gate. Not signed off and budget
+    left: their merged issues go back to the agent, which keeps working with its tools and calls finish again; the
+    next passing finish is reviewed again. Stops when both sign off, after max_rounds, or when turns run out. Every
+    reviewed version is copied aside and the best-scoring one is delivered; .run/review.json keeps every round."""
+
+    def __init__(self, client, ws, max_turns: int, model: str | None = None, max_rounds: int | None = None,
+                 min_turns: int | None = None, budget: int | None = None, task_id: str = "sheets"):
+        self.client, self.ws, self.max_turns, self.task_id = client, ws, max_turns, task_id
+        env = os.environ
+        self.models = [m for m in dict.fromkeys([model, env.get("MH_SHEETS_REVIEW_MODEL"), env.get("MH_REVIEW_MODEL"),
+                                                 *REVIEW_CHAIN]) if m]
+        self.max_rounds = max(1, int(max_rounds or env.get("MH_REVIEW_ROUNDS") or 3))
+        self.min_turns = int(min_turns if min_turns is not None else env.get("MH_REVIEW_MIN_TURNS") or 4)
+        self.budget = int(budget or env.get("MH_REVIEW_DIGEST_CHARS") or 25000)
+        self.rounds: list[dict] = []
+        self.stopped = ""                       # why reviewing stopped early (reviewers could not run)
+        self.notes: list[str] = []
+
+    # ---- one round
+    def run_round(self, path: str, report: dict | None, final: bool = False) -> dict:
+        import shutil
+        from engines.review.personas import panel
+        from engines.sheets.review_digest import digest
+        k = len(self.rounds) + 1
+        p, root = Path(path), self.ws.root.resolve()
+        rel = str(p.resolve().relative_to(root)) if root in p.resolve().parents else p.name
+        box = self.ws.run_dir / "review" / f"round{k}"
+        box.mkdir(parents=True, exist_ok=True)
+        copy = box / p.name
+        shutil.copy2(p, copy)
+        try:
+            text = digest(str(p), report=report, budget=self.budget, title=rel)
+        except Exception as e:  # noqa: BLE001 - a digest failure is reported as a review that could not run
+            text = ""
+            err = f"digest failed: {type(e).__name__}: {e}"
+        (box / "digest.txt").write_text(text)
+        res, used, errors = None, None, []
+        if text:
+            material = (f"Workbook to review: {rel}. The digest below was built by the engine from the recalculated "
+                        f"workbook.\n\n{text}")
+            for m in self.models:
+                res = panel(self.client, "workbook", material, model=m, task_id=f"{self.task_id}-r{k}")
+                used = m
+                errors = [f"{r['persona']}: {r.get('error')}" for r in res["reviews"] if r.get("status") == "not_run"]
+                if len(res["not_run"]) < len(res["reviews"]) or any(x in " ".join(errors) for x in
+                                                                     ("HTTP 401", "HTTP 403")):
+                    break                       # someone answered, or the key itself was refused: no other model helps
+        else:
+            errors = [err]
+        rnd = {"round": k, "turn": getattr(self.ws, "turn", 0) + 1, "final": final, "workbook": rel,
+               "copy": str(copy), "sha256": _sha(p), "model": used, "digest_chars": len(text),
+               "signed_off": bool(res and res["signed_off"]), "scores": (res or {}).get("scores", {}),
+               "not_run": (res or {}).get("not_run", ["md", "partner"]), "errors": errors,
+               "reviews": (res or {}).get("reviews", []), "issues": (res or {}).get("issues", []),
+               "research_requests": (res or {}).get("research_requests", [])}
+        rnd["score"] = _rscore(rnd)
+        self.rounds.append(rnd)
+        if rnd["score"] is None and not any(r.get("status") == "unparsed" for r in rnd["reviews"]):
+            self.stopped = "; ".join(errors)[:400] or "no reply"
+        self.save()
+        return rnd
+
+    def best(self) -> dict | None:
+        scored = [r for r in self.rounds if r["score"] is not None and r.get("passed_checks", True)]
+        return max(scored, key=lambda r: (r["score"], r["round"])) if scored else None
+
+    def feedback(self, rnd: dict, turns_left: int) -> str:
+        lines = [f"Partner and MD review, round {rnd['round']} of {self.max_rounds} ({rnd['workbook']}): not signed "
+                 f"off. {_scores_line(rnd)}."]
+        for r in rnd["reviews"]:
+            if r.get("status") == "ok" and r.get("headline"):
+                lines.append(f"- {NAMES.get(r['persona'], r['persona'])}: \"{r['headline']}\"")
+        lines.append("Sign-off bar: weighted score at least 8.0, no dimension below 7, no blocking issue.")
+        b = self.best()
+        if b and b["round"] != rnd["round"] and rnd["score"] is not None and b["score"] > rnd["score"]:
+            lines.append(f"This version scores lower than round {b['round']} ({_scores_line(b)}); the engine keeps "
+                         "and delivers the best-scoring version, so do not undo what the reviewers liked.")
+        issues = rnd["issues"]
+        top = [i for i in issues if i["severity"] in ("blocking", "major")]
+        top += [i for i in issues if i["severity"] == "minor"][:max(0, 12 - len(top))]
+        if top:
+            lines.append("Issues (blocking first):")
+            lines += [f"{n}. {_issue_line(i)}" for n, i in enumerate(top[:20], 1)]
+        if rnd["research_requests"]:
+            lines.append("Facts the reviewers say are missing (find them in the inputs you have, or mark the input as "
+                         "an illustrative assumption with who would confirm it):")
+            lines += [f"- {q.get('question')} ({q.get('why', '')})" for q in rnd["research_requests"][:6]]
+        lines.append(f"Fix the blocking and major issues now: change build_workbook.py, rebuild the workbook, rerun "
+                     f"python -m engines.sheets.check until it prints PASS, then call finish again (the reviewers will "
+                     f"look again). Never invent a number to satisfy a reviewer: use figures already in the inputs, or "
+                     f"label the input as an illustrative assumption. {turns_left} turns and "
+                     f"{self.max_rounds - rnd['round']} review round(s) left.")
+        return "\n".join(lines)
+
+    # ---- the finish gate
+    def gate(self, answer, artifacts, ws, report=None):
+        rep: dict = {}
+        try:
+            msg = finish_check(answer, artifacts, ws, report=rep)
+        except TypeError:                       # a checker without the report argument
+            msg = finish_check(answer, artifacts, ws)
+        if report is not None:
+            report.update(rep)
+        if msg or self.stopped:
+            return msg
+        xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
+        path = Path(xl[0] if os.path.isabs(xl[0]) else ws.root / xl[0])
+        last = self.rounds[-1] if self.rounds else None
+        if last and last["sha256"] == _sha(path):
+            return None                         # unchanged since the last review: accept, report that review
+        if len(self.rounds) >= self.max_rounds:
+            return None
+        rnd = self.run_round(str(path), rep)
+        turns_left = self.max_turns - (getattr(ws, "turn", 0) + 1)
+        if (rnd["signed_off"] or rnd["score"] is None or len(self.rounds) >= self.max_rounds
+                or turns_left < self.min_turns):
+            return None
+        ws.review_note = self.feedback(rnd, turns_left)
+        return (f"REVIEW: the workbook passes the engine checks, but the partner and MD did not sign it off (review "
+                f"round {rnd['round']} of {self.max_rounds}). Their review is in the next message: fix the blocking "
+                "and major issues, then call finish again.")
+
+    def hook(self, turn, max_turns, ws):
+        note = turn_budget(turn, max_turns, ws)
+        pending, ws.review_note = getattr(ws, "review_note", None), None
+        return "\n".join(x for x in (pending, note) if x) or None
+
+    # ---- delivery
+    def finalize(self, out: dict, at_cap: bool) -> dict:
+        import shutil
+        xl = [a for a in out.get("artifacts") or [] if str(a).endswith((".xlsx", ".xlsm"))]
+        cur = Path(xl[0] if os.path.isabs(xl[0]) else self.ws.root / xl[0]) if xl else None
+        failing_only = at_cap and not out.get("ok") and not self.rounds   # nothing ever passed the engine checks
+        if (at_cap and (out.get("ok") or failing_only) and cur and cur.exists() and not self.stopped
+                and _sha(cur) not in {r["sha256"] for r in self.rounds}):
+            rep = {"rules": out.get("rules") or {}, "warnings": out.get("warnings") or [],
+                   "failures": out.get("checks") or out.get("failures") or []}
+            rnd = self.run_round(str(cur), rep, final=True)     # the delivered version at the cap gets its review;
+            if failing_only:                                    # one that fails the engine checks is still graded
+                rnd["passed_checks"] = False                    # (the MD's job), but never delivered as "passed"
+                self.notes.append("The workbook did not pass the engine checks; the partner and MD reviewed it anyway "
+                                  "so their verdict and issues are known.")
+                self.save()
+        best = self.best()
+        delivered = None
+        if best:
+            if not out.get("ok"):
+                self.notes.append(f"The last saved workbook fails the engine checks, so the version reviewed in round "
+                                  f"{best['round']} (which passed them) is delivered instead.")
+            if not (cur and cur.exists() and out.get("ok") and _sha(cur) == best["sha256"]):
+                dst = self.ws.root / best["workbook"]
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(best["copy"], dst)
+                rest = [a for a in out.get("artifacts") or [] if not str(a).endswith((".xlsx", ".xlsm"))]
+                out["artifacts"] = [str(dst)] + rest
+                if out.get("ok"):
+                    self.notes.append(f"Delivered the round {best['round']} version: it scored higher than the later "
+                                      "version, which is kept in .run/review/.")
+                out["ok"] = True
+                out["reason"] = f"{out.get('reason', '')}; delivered the best reviewed workbook (round {best['round']})"
+            delivered = best["round"]
+        elif self.rounds:
+            delivered = next((r["round"] for r in reversed(self.rounds) if cur and cur.exists()
+                              and r["sha256"] == _sha(cur)), None)
+        text = self.report(delivered)
+        if text:
+            out["answer"] = (out.get("answer") or "").rstrip() + "\n\n" + text
+        out["review"] = {"rounds": [{k: r[k] for k in ("round", "scores", "signed_off", "not_run", "errors", "model")}
+                                    for r in self.rounds], "delivered_round": delivered,
+                         "signed_off": bool(best and best["signed_off"]), "stopped": self.stopped}
+        self.save(delivered)
+        return out
+
+    def report(self, delivered) -> str:
+        if not self.rounds:
+            return ("Partner and MD review: not run (no workbook passed the engine checks, so there was nothing to "
+                    "review).")
+        best = self.best()
+        graded = [r for r in self.rounds if r["score"] is not None]
+        if best is None and graded:                    # only a workbook that fails the engine checks was graded
+            r = graded[-1]
+            names = {"partner": "senior partner", "md": "MD"}
+            sc = "; ".join(f"{names.get(v['persona'], v['persona'])} {v['overall']}/10 ({'signs off' if v['verdict'] == 'sign_off' else 'revise'})"
+                           for v in r["reviews"] if v.get("status") == "ok")
+            top = "; ".join(f"{i['where']}: {i['issue']}" for i in r["issues"][:3])
+            return (f"Partner and MD review of the workbook (it fails the engine checks): {sc}. Top issues: {top}")
+        if best is None:
+            why = self.stopped or "; ".join(self.rounds[-1]["errors"]) or "their replies could not be read"
+            return (f"Partner and MD review: the reviewers could not run ({why[:300]}). No review scores are "
+                    "reported; the workbook was not reviewed by them.")
+        n = len(self.rounds)
+        lines = [f"Partner and MD review ({n} round{'s' if n != 1 else ''}, reviewer model {best['model']}):"]
+        for r in self.rounds:
+            counts = {s: sum(i["severity"] == s for i in r["issues"]) for s in ("blocking", "major", "minor")}
+            lines.append(f"- Round {r['round']}{' (at the turn cap)' if r['final'] else ''}: {_scores_line(r)}; "
+                         f"{counts['blocking']} blocking, {counts['major']} major, {counts['minor']} minor issues.")
+        lines += [f"- {x}" for x in self.notes]
+        if best["signed_off"]:
+            lines.append(f"Both reviewers signed off on the delivered version (round {best['round']}).")
+        else:
+            why = ("the review budget ran out" if len(self.rounds) >= self.max_rounds
+                   else "the turn budget ran out" if not self.stopped else "a later review could not run")
+            lines.append(f"Not signed off ({why}). Delivered the best-scoring version (round {best['round']}: "
+                         f"{_scores_line(best)}). Remaining top issues:")
+            lines += [f"- {_issue_line(i)}" for i in best["issues"][:6]]
+        if self.stopped and best["round"] != self.rounds[-1]["round"]:
+            lines.append(f"A later review could not run: {self.stopped}")
+        return "\n".join(lines)
+
+    def save(self, delivered=None) -> None:
+        import json
+        try:
+            self.ws.run_dir.mkdir(parents=True, exist_ok=True)
+            (self.ws.run_dir / "review.json").write_text(json.dumps({
+                "models": self.models, "max_rounds": self.max_rounds, "stopped": self.stopped,
+                "delivered_round": delivered, "best_round": (self.best() or {}).get("round"),
+                "rounds": self.rounds}, indent=1, default=str))
+        except OSError:
+            pass
+
+
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
-          client=None, phase: str = "phase_2_build", files=None) -> dict:
+          client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
+          review_model: str | None = None, review_rounds: int | None = None) -> dict:
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
@@ -471,10 +739,16 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
+    rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
+        if review_enabled(client, review) else None
+    if rv:
+        task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
+                 "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
     crashed = False
     try:
         r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
-                caps=Caps(max_turns=n), temperature=0.0, finish_check=finish_check, turn_hook=turn_budget)
+                caps=Caps(max_turns=n), temperature=0.0, finish_check=rv.gate if rv else finish_check,
+                turn_hook=rv.hook if rv else turn_budget)
     except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose
         if not ws.saved_workbook():            # workbook was already saved: check and deliver it, do not lose it
             raise
@@ -484,8 +758,14 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
                             reason=f"{type(e).__name__}: {e}")
     out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
            "reason": r.reason, "usage": r.usage}
-    if not r.ok and (crashed or r.reason.startswith(CAPS)):
+    at_cap = not r.ok and (crashed or r.reason.startswith(CAPS))
+    if at_cap:
         out.update(salvage(r, ws, n))
+    if rv and (r.ok or at_cap):
+        try:
+            out = rv.finalize(out, at_cap)
+        except Exception as e:                 # noqa: BLE001 - the review never costs the delivered workbook
+            out["answer"] = (out.get("answer") or "") + f"\n\nPartner and MD review failed: {type(e).__name__}: {e}"
     try:
         out["artifacts"] = tidy(ws, out["artifacts"])
     except Exception:                          # noqa: BLE001 - tidying never costs the result

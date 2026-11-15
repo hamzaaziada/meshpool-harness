@@ -289,11 +289,17 @@ def _stat_rest(it, size_label):
     return [b for b in rest if b["text"]]
 
 
-def stats_plan(items, w, boxed, h=None) -> dict:
+STAT_UP_SIZES = (60, 54, 48, 44)   # figure sizes a thin slide's stats may step up to (6 pt per type step)
+
+
+def stats_plan(items, w, boxed, h=None, up=0) -> dict:
     """How k figures sit in a w-wide box: (cols, rows), 'stack' tiles (figure over its label) or 'row' tiles (figure
     left, label right, for wide boxes), the figure size, and the natural tile height. With `h`, the arrangement whose
-    natural height uses h best without exceeding it; without, the best-proportioned one."""
+    natural height uses h best without exceeding it; without, the best-proportioned one. `up` is the composition's
+    type step: on a thin slide the figures may run larger than 40 pt and the labels a step or two larger."""
     k = max(1, len(items))
+    up = max(0, int(up or 0))
+    sizes = tuple(z for z in STAT_UP_SIZES if z <= STAT_VALUE_SIZES[0] + 6 * up) + STAT_VALUE_SIZES
     gap = 0.15 if boxed else 0.2
     pad = 0.12 if boxed else 0.06
     cands = []
@@ -302,12 +308,11 @@ def stats_plan(items, w, boxed, h=None) -> dict:
         tw = (w - gap * (cols - 1)) / cols
         for style in ("stack", "row") if tw >= 4.0 else ("stack",):
             vw_max = (tw - 2 * pad) * (0.85 if style == "stack" else 0.38)   # margin: the house face may run wider
-            vsize = next((z for z in STAT_VALUE_SIZES if all(_head_w(it.get("value", ""), z) <= vw_max for it in items)),
-                         None)
+            vsize = next((z for z in sizes if all(_head_w(it.get("value", ""), z) <= vw_max for it in items)), None)
             if vsize is None:
                 continue
             vw = max(_head_w(it.get("value", ""), vsize) for it in items) * 1.15 + 0.3   # a figure never wraps
-            lab = R.bump(12) + (2 if style == "row" else 0)
+            lab = R.bump(12) + (2 if style == "row" else 0) + min(up, 3)
             if style == "stack":
                 th = max(R._pitch(vsize, 1.0) / 72 + R._need(_stat_rest(it, lab), tw - 2 * pad) for it in items) + 0.2
             else:
@@ -336,7 +341,7 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
         _note(s, f"part {i}: {len(raw) - 6} figures left out: " + "; ".join(_txt(v) for v in raw[6:]))
     items = raw[:6]
     boxed = LOOKS[look]["card"]
-    P = stats_plan(items, w, boxed, h)
+    P = stats_plan(items, w, boxed, h, up=int(part.get("_bump") or 0))
     cols, rows, gap, pad = P["cols"], P["rows"], P["gap"], P["pad"]
     th = min(P["th"] * (STAT_GROW if boxed else 3.0), max(P["th"], (h - gap * (rows - 1)) / rows))   # no card: the
                                                                                     # hairlined figures may spread
@@ -394,12 +399,14 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
     bl = _text_blocks(part)
     if not bl:
         return
-    bl = _fit_trim(R._grow(bl, w, h, 6 if R.DENSITY["mode"] == "present" else 2), w, h, s, f"the text of part {i}",
-                   ctx, n)                              # presenting: short text steps well up the scale
+    room = max(0, MAX_BUMP.get(R.DENSITY["mode"], 3) - int(part.get("_bump") or 0))   # never past the mode's limit
+    bl = _fit_trim(R._grow(bl, w, h, min(room, 6 if R.DENSITY["mode"] == "present" else 2)), w, h, s,
+                   f"the text of part {i}", ctx, n)     # presenting: short text steps well up the scale
     if card is not None and not part.get("heading"):
         R._shape_text(card, bl, ctx, n, (x, y, w, h))   # the card is the text's own shape
         return
-    R._write(R._box(sl, x, y, w, h, f"Text{i}"), bl, ctx, n)
+    R._write(R._box(sl, x, y, w, h, f"Text{i}", MSO_ANCHOR.MIDDLE if card is not None else MSO_ANCHOR.TOP),
+             bl, ctx, n)                                # in a card, the measuring margin is shared above and below
 
 
 def p_callout(ctx, sl, n, part, box, look, i, s, card):
@@ -475,6 +482,26 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
             R._rule(sl, tx, ry + rh + g / 2, tw, TC.ACCENT_5, 0.5, f"ov_StepRule{i}_{j + 1}")
 
 
+TL_STEPS = (4, 2, 0)                                    # type steps a horizontal timeline takes, largest first
+
+
+def _tl_label(m, z, on=False):
+    out = [{"text": _txt(m.get("label") or m.get("title")), "size": R.bump(12) + z, "numbers": False,
+            "align": PP_ALIGN.CENTER, "bold": bool(m.get("text")) or on, "prov": m.get("prov")}]
+    if m.get("text"):
+        out.append({"text": _txt(m["text"]), "size": R.bump(11) + z, "align": PP_ALIGN.CENTER, "space_before": 4})
+    return out
+
+
+def _tl_band(ms, cw, z, dot=0.18):
+    """(dates blocks, date height, label height, band height) of a horizontal timeline at type step z."""
+    dates = [[{"text": _txt(m.get("date")), "size": R.bump(12) + z, "bold": True, "numbers": False,
+               "color": TC.ACCENT_1, "align": PP_ALIGN.CENTER}] for m in ms]
+    dh = max([R._need(d, cw) for d in dates if d[0]["text"]] or [0.0]) + 0.04
+    ln = max([R._need(_tl_label(m, z), cw) for m in ms] or [0.0]) + 0.04
+    return dates, dh, ln, dh + 0.16 + dot + 0.12 + ln
+
+
 def p_timeline(ctx, sl, n, part, box, look, i, s, card):
     x, y, w, h = box
     ms = [m if isinstance(m, dict) else {"label": str(m)} for m in part.get("milestones") or part.get("items") or []]
@@ -487,28 +514,15 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
     if w > h:                                            # horizontal: dates above the axis, labels below
         sp = w / k
         cw = sp - 0.12
-
-        def lab(j, z):
-            m = ms[j]
-            out = [{"text": _txt(m.get("label") or m.get("title")), "size": R.bump(12) + z, "numbers": False,
-                    "align": PP_ALIGN.CENTER, "bold": bool(m.get("text")) or hl == j, "prov": m.get("prov")}]
-            if m.get("text"):
-                out.append({"text": _txt(m["text"]), "size": R.bump(11) + z, "align": PP_ALIGN.CENTER, "space_before": 4})
-            return out
-        for z in (4, 2, 0):                              # the largest type at which the band takes <= 60% of the box
-            dates = [[{"text": _txt(m.get("date")), "size": R.bump(12) + z, "bold": True, "numbers": False,
-                       "color": TC.ACCENT_1, "align": PP_ALIGN.CENTER}] for m in ms]
-            dh = max([R._need(d, cw) for d in dates if d[0]["text"]] or [0.0]) + 0.04
-            ln = max(R._need(lab(j, z), cw) for j in range(len(ms))) + 0.04
-            band = dh + 0.16 + dot + 0.12 + ln
-            if band <= 0.6 * h or z == 0:
+        lab = lambda j, z: _tl_label(ms[j], z, hl == j)  # noqa: E731
+        for z in TL_STEPS:                               # the largest type at which the band fits its box; the band
+            dates, dh, ln, band = _tl_band(ms, cw, z)    # sits at the top of the box (the composition gave the box
+            if band <= h or z == 0:                      # its height from the band: no white above and below it)
                 break
-        if band < h:                                     # a short band sits a little above the middle of its box
-            y += (h - band) * 0.4
-            h = band + (h - band) * 0.6
+        h = min(h, band + 0.04)
         ly = y + dh + 0.16 + dot / 2
         R._rule(sl, x, ly, w, TC.TEXT_2, 1.5, f"ov_TimelineAxis{i}")
-        lh = y + h - (ly + dot / 2 + 0.12)
+        lh = max(0.2, y + h - (ly + dot / 2 + 0.12))
         for j, m in enumerate(ms):
             cx = x + sp * (j + 0.5)
             on = hl == j
@@ -761,6 +775,10 @@ FLEX = ("chart", "process", "timeline", "matrix2x2")        # exhibits that take
 MIN_H = {"chart": 2.0, "process": 1.3, "timeline": 1.4, "matrix2x2": 2.6}
 MAX_PARTS = 4
 BUMPS = (0, 1, 2, 3)                                         # type steps a text part may take to use its column
+MAX_BUMP = {"read": 3, "balanced": 5, "present": 6}          # ... at most, by density: a thin balanced slide's text
+                                                             # may reach 18 pt (a presented slide's body size)
+RHYTHM_MAX = 0.45         # what a thin column has left after its exhibits and type grew goes into the gaps between its
+                          # parts, one equal gap each, up to this much (never into a part: a card fits its content)
 
 
 def _overhead(part, w, look) -> tuple[float, float]:
@@ -805,16 +823,25 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         if nat:
             return oh + unit + nat, oh + unit + nat, oh + unit + nat
         return oh + unit + MIN_H["chart"], oh + unit + 3.2, 99.0
+    if t == "timeline" and iw >= 4.0:                     # horizontal: the band at its largest type is its most
+        ms = [m if isinstance(m, dict) else {"label": str(m)} for m in part.get("milestones") or part.get("items") or []][:8]
+        cw = iw / max(1, len(ms)) - 0.12
+        band = lambda z: _tl_band(ms, cw, z)[3] * 1.08 + 0.04   # noqa: E731  the renderer sets labels looser
+        top = band(TL_STEPS[0])
+        return oh + min(MIN_H[t], top), oh + min(top, band(TL_STEPS[1])), oh + top
     if t in FLEX:
         return oh + MIN_H[t], oh + MIN_H[t] + 0.8, 99.0
     if t == "stats":
-        P = stats_plan(_stat_items(part), iw, LOOKS[look]["card"])
+        P = stats_plan(_stat_items(part), iw, LOOKS[look]["card"], up=bump)
         return oh + P["total"], oh + P["total"], oh + P["total"] * (STAT_GROW if LOOKS[look]["card"] else 3.0)
+    mw = 0.94 if bump else 1.0                           # grown type is measured a little narrower: the renderer's
+                                                         # face sets wider than measured, and large text wraps sooner
     if t == "text":
-        need = R._need(_text_blocks(dict(part, _bump=bump)), iw) * 1.08 + 0.06     # LibreOffice sets the house face
-        return oh + need, oh + need, oh + need                                    # a little looser than measured
+        need = R._need(_text_blocks(dict(part, _bump=bump)), iw * mw) * 1.08 + 0.06   # LibreOffice sets the house
+        return oh + need, oh + need, oh + need                                    # face a little looser than measured
     if t == "callout":
-        need = R._need(_text_blocks(dict(part, _bump=bump), TC.BACKGROUND_1, R.bump(16), R.bump(13)), iw - 0.5) * 1.08 + 0.34
+        need = R._need(_text_blocks(dict(part, _bump=bump), TC.BACKGROUND_1, R.bump(16), R.bump(13)),
+                       (iw - 0.5) * mw) * 1.08 + 0.34
         return oh + need, oh + need, oh + need
     if t == "table":
         tb = dict(part.get("table") if isinstance(part.get("table"), dict) else part)
@@ -843,6 +870,7 @@ ALTERNATIVES = {1: ["full"], 2: ["halves", "main_side", "side_main", "halves_v"]
                 3: ["main_stack", "stack_main", "thirds", "main_side", "side_main", "halves", "halves_v"],
                 4: ["quarters", "main_stack", "stack_main", "main_side", "side_main"]}
 TEXTY = ("text", "callout", "quote")      # tables keep their size: a wrapped header is hard to measure dry
+GROWS = TEXTY + ("stats",)                 # parts that step up the type scale on a thin slide
 KEEP_EMPTY = 0.10                # the asked-for layout stays when it leaves at most this share of the body empty
 
 
@@ -866,16 +894,19 @@ def _compose_one(parts, lay, look, top, bottom):
         gaps = GAP * (len(slots) - 1)
         bumps = {j: 0 for j in slots}
         ms = {j: measure(parts[j], w, look) for j in slots}
-        # step text and tables up the type scale while the column has room and no exhibit would take it anyway
-        if not any(parts[j].get("type") in FLEX and ms[j][2] > ms[j][1] for j in slots):
-            for b in BUMPS[1:]:
-                trial = {j: (measure(parts[j], w, look, min(b, 2) if parts[j].get("type") == "callout" else b)
-                             if parts[j].get("type") in TEXTY else ms[j]) for j in slots}
+        # step text and figures up the type scale while the column has room and no exhibit would take it anyway
+        # (a callout and the figures at most two steps: a callout is already large, a figure grows 6 pt a step)
+        step = lambda j, b: (min(b, 2) if parts[j].get("type") == "callout" else  # noqa: E731
+                             min(b, 3) if parts[j].get("type") == "stats" else b)
+        if not any(parts[j].get("type") in FLEX and ms[j][2] > 50 for j in slots):   # an exhibit that takes any
+                                                                                       # height takes the room first
+            for b in range(1, MAX_BUMP.get(R.DENSITY["mode"], BUMPS[-1]) + 1):
+                trial = {j: (measure(parts[j], w, look, step(j, b))
+                             if parts[j].get("type") in GROWS else ms[j]) for j in slots}
                 if sum(m[1] for m in trial.values()) + gaps > H:
                     break
                 ms = trial
-                bumps = {j: ((min(b, 2) if parts[j].get("type") == "callout" else b)
-                             if parts[j].get("type") in TEXTY else 0) for j in slots}
+                bumps = {j: (step(j, b) if parts[j].get("type") in GROWS else 0) for j in slots}
         hs = {j: ms[j][1] if parts[j].get("type") not in FLEX else ms[j][0] for j in slots}
         slack = H - sum(hs.values()) - gaps
         for _ in range(4):                                 # exhibits take the room first, then figures (capped)
@@ -899,11 +930,14 @@ def _compose_one(parts, lay, look, top, bottom):
                 over_all += over
                 last = max(slots, key=lambda j: hs[j])
                 hs[last] = max(0.6, hs[last] - over)       # the part fits what it can and notes the rest
+        gap = GAP
+        if len(slots) > 1 and slack > 0.01:                # what is left: a larger, equal rhythm between the parts
+            gap = GAP + min(slack / (len(slots) - 1), RHYTHM_MAX - GAP)
         y = top
         for j in slots:
             out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
-            y += hs[j] + GAP
-        empty += max(0.0, H - (y - GAP - top)) * w
+            y += hs[j] + gap
+        empty += max(0.0, H - (y - gap - top)) * w
     # side-by-side single cards of nearly one height share it (aligned feet); a much shorter card keeps its own
     xs = {}
     for o in out:
@@ -945,7 +979,43 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
     return best[2]
 
 
+WORD_PARTS = ("text", "callout", "quote")
+
+
+def words_only_to_argument(s: dict) -> dict | None:
+    """A grid of nothing but words (text, callout, quote parts) has no visual: it becomes the composed argument
+    layout, which marks every block with figures, process steps or an icon by its meaning (compose.py), the
+    callout becoming its so-what band. None when the grid has a visual part."""
+    parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
+    if not parts or any(p.get("type") not in WORD_PARTS for p in parts) or s.get("_condensed"):
+        return None                                      # a presenting-density matrix keeps its bold row panels
+    blocks, band = [], []
+    for p in parts:
+        if p.get("type") == "callout":
+            band += [b if isinstance(b, dict) else {"text": str(b)} for b in p.get("bullets") or []]
+            if p.get("text") or p.get("lead"):
+                band.insert(0, {"text": _txt(p.get("lead") or p.get("text")), "prov": p.get("prov")})
+            continue
+        lead = p.get("lead") or p.get("heading") or p.get("title") or ""
+        bullets = [b if isinstance(b, dict) else {"text": str(b)} for b in p.get("bullets") or []]
+        if p.get("text"):
+            bullets.insert(0, {"text": _txt(p["text"]), "prov": p.get("prov")})
+        if lead or bullets:
+            blocks.append({"text": f"**{_txt(lead)}**" if lead and not str(lead).startswith("**") else _txt(lead),
+                           "bullets": bullets, "prov": p.get("prov")})
+    out = {k: v for k, v in s.items() if k not in ("parts", "layout", "look")}
+    out.update(archetype="argument_only", blocks=blocks or [{"text": "", "bullets": band}])
+    if band and blocks:
+        out["callout"] = {"bullets": band}
+    return out
+
+
 def a_grid(ctx, s, sl, n):
+    arg = words_only_to_argument(s)
+    if arg is not None:                                  # never a words-only slide: compose it with a visual per block
+        _note(s, "grid had no visual part; composed as an argument with a visual per block")
+        s.update(arg)
+        return R.a_argument_only(ctx, s, sl, n)
     R._header(ctx, s, sl, n)
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
     look = s.get("look") or "editorial"

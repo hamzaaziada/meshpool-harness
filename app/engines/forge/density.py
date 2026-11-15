@@ -195,7 +195,7 @@ def _matrix_as_grid(s: dict, lim: dict, notes: _Notes) -> dict:
                       "bullets": bl})
     out = {k: v for k, v in s.items() if k not in ("rows", "columns")}
     out.update(archetype="grid", layout={1: "full", 2: "halves", 3: "thirds", 4: "quarters"}[max(1, len(parts))],
-               look=s.get("look") or "bold", parts=parts)
+               look=s.get("look") or "bold", parts=parts, _condensed=True)   # bold header bars mark each row
     return out
 
 

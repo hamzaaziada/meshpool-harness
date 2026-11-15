@@ -90,6 +90,35 @@ def find_soffice() -> str | None:
     return None
 
 
+FONT_SUBSTITUTES = {"Segoe UI": "Selawik", "Segoe UI Semibold": "Selawik"}
+
+
+def _profile_fonts(profile: Path) -> None:
+    """The throwaway profile carries the bundled fonts and a substitution table, so LibreOffice draws Segoe UI with
+    Selawik (same metrics) on every computer. Without it a machine lacking Segoe UI falls back to a wider face and
+    the render check reports overflows that PowerPoint never shows."""
+    try:
+        here = Path(__file__).resolve().parent / "fonts"
+        fonts = profile / "user" / "fonts"
+        fonts.mkdir(parents=True, exist_ok=True)
+        for f in here.glob("*.ttf"):
+            shutil.copy2(f, fonts / f.name)
+        pairs = "".join(
+            f'<item oor:path="/org.openoffice.Office.Common/Font/Substitution/FontPairs"><node oor:name="_{i}" '
+            f'oor:op="replace"><prop oor:name="Always" oor:op="fuse"><value>true</value></prop>'
+            f'<prop oor:name="OnScreenOnly" oor:op="fuse"><value>false</value></prop>'
+            f'<prop oor:name="ReplaceFont" oor:op="fuse"><value>{a}</value></prop>'
+            f'<prop oor:name="SubstituteFont" oor:op="fuse"><value>{b}</value></prop></node></item>'
+            for i, (a, b) in enumerate(FONT_SUBSTITUTES.items()))
+        (profile / "user" / "registrymodifications.xcu").write_text(
+            '<?xml version="1.0" encoding="UTF-8"?><oor:items xmlns:oor="http://openoffice.org/2001/registry" '
+            'xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            '<item oor:path="/org.openoffice.Office.Common/Font/Substitution"><prop oor:name="Replacement" '
+            'oor:op="fuse"><value>true</value></prop></item>' + pairs + '</oor:items>', encoding="utf-8")
+    except OSError:                                        # the conversion still runs, with the system's fonts
+        pass
+
+
 def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path:
     """Headless convert with a throwaway profile, so parallel runs never share a lock."""
     exe = find_soffice()
@@ -97,6 +126,7 @@ def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path
         raise RuntimeError("LibreOffice not installed")
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
+        _profile_fonts(Path(profile))
         r = subprocess.run([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--convert-to", to,
                             "--outdir", str(out_dir), str(src)], capture_output=True, text=True, timeout=timeout)
     ext = to.split(":")[0]

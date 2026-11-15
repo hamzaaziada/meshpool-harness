@@ -327,12 +327,12 @@ def _proportions(path: str, R: dict, failures: list):
 
 def _dead_space(pdf_path: str, m: dict, R: dict, failures: list, stats: dict):
     """P20: no large empty block in a content slide's body (measured on the render)."""
-    from .whitespace import page_empty, where
+    from .whitespace import bottom_blank, page_empty, where
     import pypdfium2 as pdfium
     Wd = R["whitespace"]
     W, H = m["slide_size_in"]
     doc = pdfium.PdfDocument(pdf_path)
-    worst = []
+    worst, thin = [], []
     exempt = set(Wd["exempt_archetypes"])
     for i, s in enumerate(m["slides"]):
         if i >= len(doc) or s.get("archetype") in exempt or s["n"] in stats.get("inferred_divider_slides", []):
@@ -349,7 +349,22 @@ def _dead_space(pdf_path: str, m: dict, R: dict, failures: list, stats: dict):
                               "slide is missing (more evidence, a breakdown, a comparison, the implication), or merge "
                               "this slide with its neighbour. Never pad with filler.", slide=s["n"],
                               measured=round(e["share"], 2), limit=limit))
+        # thin: the composition ends well above the body's foot (a band of white under it, not a block in it)
+        thin_lim = (Wd.get("max_bottom_share_by_density") or {}).get(s.get("density"), Wd.get("max_bottom_share"))
+        if thin_lim and s.get("archetype") and s.get("archetype") not in set(Wd.get("bottom_exempt") or []):
+            names = {sh.get("name") for sh in s["shapes"]}
+            panel = next((sh for sh in s["shapes"] if sh.get("name") == "ov_ArgumentPanel" and sh.get("x")), None)
+            b = bottom_blank(doc[i], W, H, Wd.get("body_top_in", 1.55), Wd.get("foot_rule_in", 7.02),
+                             notes="Footnotes" in names, right_in=(panel["x"] - 0.05) if panel else None)
+            thin.append(round(float(b["share"]), 2))
+            if b["share"] > thin_lim:
+                failures.append(F("P20", "thin", f"Slide {s['n']}: the content ends {b['blank_in']:.1f}in above the "
+                                  f"foot of the body ({b['share']:.0%} of it blank at the bottom): the slide is thin. "
+                                  "Add a real part from evidence the deck has not used (a chart, a stats row, an "
+                                  "implication callout), or merge this slide with its neighbour. Never pad.",
+                                  slide=s["n"], measured=round(float(b["share"]), 2), limit=thin_lim))
     stats["empty_share_by_slide"] = worst
+    stats["bottom_blank_by_slide"] = thin
     doc.close()
 
 

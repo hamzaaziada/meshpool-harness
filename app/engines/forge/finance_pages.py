@@ -126,9 +126,15 @@ def football_field(bk: Book) -> dict | None:
     cats = [str(ws.cell(row=r, column=1).value) for r in rows]
     lows = [_num(ws.cell(row=r, column=2).value) for r in rows]
     highs = [_num(ws.cell(row=r, column=3).value) for r in rows]
+    last_row = rows[-1] if rows else 0
+    dropped = [c for c, lo_ in zip(cats, lows) if lo_ is not None and lo_ <= 0]
+    if dropped:                                      # a method floored at $0 (its value went negative) is not a range:
+        keep = [i for i, lo_ in enumerate(lows) if not (lo_ is not None and lo_ <= 0)]   # left out and footnoted
+        rows, cats = [rows[i] for i in keep], [cats[i] for i in keep]
+        lows, highs = [lows[i] for i in keep], [highs[i] for i in keep]
     if not cats or any(v is None for v in lows + highs):
         return None
-    mk_row = rows[-1] + 2
+    mk_row = last_row + 2
     mk_lab, mk_val = ws.cell(row=mk_row, column=1).value, _num(ws.cell(row=mk_row, column=2).value)
     marker = {"label": re.sub(r"\s*\(.*\)$", "", str(mk_lab)), "value": mk_val} if mk_lab and mk_val is not None else None
     prov = [bk.fact(f"{c}: {fmt_value(lo, '$')} to {fmt_value(hi, '$')} per share", f"{ws.title}!B{r}:C{r}")
@@ -165,7 +171,9 @@ def football_field(bk: Book) -> dict | None:
                       "marker": marker, "highlight_categories": [c for c in cats if c.lower().startswith("weighted")]},
             "takeaway": {"text": "Value per share by method, low to high"}, "bullets": bullets[:4],
             "source": {"text": f"{FIRM_SRC} ({ws.title} tab); ranges are 25th-75th percentiles for multiples and the "
-                               "Gordon / exit-multiple pair for the DCF", "prov": prov}}
+                               "Gordon / exit-multiple pair for the DCF", "prov": prov},
+            **({"footnotes": [f"Not shown: {', '.join(dropped)}: the model's low case is zero or negative per share, "
+                              "so it gives no range"]} if dropped else {})}
 
 
 def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", style: str = "benchmark",
@@ -276,10 +284,24 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
     loc = bk.names.get(f"{prefix}per_share")
     ws = bk.v[loc[0]]
     lab = {}
+    raw = {}
     for r in range(1, ws.max_row + 1):
         v = ws.cell(row=r, column=1).value
-        if isinstance(v, str) and v not in lab:
-            lab[v] = _num(ws.cell(row=r, column=2).value)
+        if isinstance(v, str) and v not in raw:
+            raw[v] = _num(ws.cell(row=r, column=2).value)
+    canon = ["Sum of PV of free cash flow ($m)", "PV of terminal value ($m)", "Enterprise value ($m)",
+             "Less: total debt ($m)", "Plus: cash ($m)", "Less: minorities and preferred ($m)", "Equity value ($m)",
+             "Diluted shares (m)", "Value per share ($)", "Value per share, exit multiple ($)",
+             "Implied exit multiple from Gordon value (x)"]
+    stem = lambda s: re.sub(r"\s*\(.*$|,.*$", "", s).strip().lower()  # noqa: E731  labels carry years, units, notes
+    for c in canon:                                  # "Sum of PV of free cash flow, 2027E-2031E ($m)" is the same row
+        hit = next((k for k in raw if k == c), None) or next((k for k in raw if stem(k) == stem(c)), None)
+        if hit is not None:
+            lab[c] = raw[hit]
+    lab.update({k: v for k, v in raw.items() if k not in lab})
+    for c, nm in (("Sum of PV of free cash flow ($m)", "sum_pv"), ("PV of terminal value ($m)", "pv_tv")):
+        if lab.get(c) is None and _num(bk.name(f"{prefix}{nm}")) is not None:
+            lab[c] = _num(bk.name(f"{prefix}{nm}"))   # the named output when the label differs
     bridge = [("Sum of PV of free cash flow ($m)", "PV of free cash flow, forecast years", _usd),
               ("PV of terminal value ($m)", "PV of terminal value (Gordon growth)", _usd),
               ("Enterprise value ($m)", "Enterprise value", _usd),
@@ -304,6 +326,8 @@ def dcf_outputs(bk: Book, prefix: str = "dcf_") -> dict | None:
                     f"terminal value {_pct(g['tv_share'])} of EV", f"{prefix}per_share, {prefix}per_share_exit")]
     if None in vals:
         return None
+    if abs(sum(vals[:-1]) - vals[-1]) > max(1.0, 0.01 * abs(vals[-1])):
+        return None                                  # a bridge that does not add up is never drawn
     return {"archetype": "waterfall_bridge", "fixed": True,
             "title": f"The DCF puts the shares at {fmt_value(ps, '$')} at {wacc}",
             "title_prov": prov,
