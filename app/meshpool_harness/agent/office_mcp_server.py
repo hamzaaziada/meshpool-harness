@@ -536,7 +536,11 @@ TOOLS = {
 def _forge_tool(name):
     def call(path: str, **kw):
         from engines.forge import tools as FT
-        return getattr(FT, name)(str(_resolve(path)), **kw)
+        p = _resolve(path)
+        if not _readable(p):                    # they run without asking too: the same fence as read_document
+            return (f"{path} is outside the project. Ask the user to attach it (or open the folder it is in as "
+                    "the project) and check it from there."), True
+        return getattr(FT, name)(str(p), **kw)
     return call
 
 

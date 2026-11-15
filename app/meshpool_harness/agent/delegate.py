@@ -70,6 +70,34 @@ def settings() -> dict:
     return s
 
 
+PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to", "source", "input")
+
+
+def _mcp_paths_outside(root, args) -> bool:
+    """An MCP tool given a file path outside the project (its servers resolve them the same way: ~ and relative to
+    the project); the files the user attached are fine."""
+    from meshpool_harness import config as C
+    vals = []
+    for k in PATH_KEYS:
+        v = args.get(k)
+        vals += [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, str) and x.strip()]
+    if not vals:
+        return False
+    try:
+        uploads = (C.runs_dir() / "_uploads").resolve()
+    except Exception:  # noqa: BLE001
+        uploads = None
+    return any(_files_outside(root, {"files": [v]}) and not _under(v, uploads) for v in vals)
+
+
+def _under(f, base) -> bool:
+    from pathlib import Path
+    try:
+        return base is not None and Path(str(f)).expanduser().resolve().is_relative_to(base)
+    except (OSError, ValueError):
+        return False
+
+
 def _files_outside(root, args) -> bool:
     from pathlib import Path
     for f in args.get("files") or []:
@@ -156,13 +184,16 @@ def schema_errors(value, sch, path="$") -> list[str]:
         ok = isinstance(value, _TYPES[t]) and not (t in ("integer", "number") and isinstance(value, bool))
         if not ok:
             return [f"{path}: expected {t}"]
-    if "enum" in sch and value not in sch["enum"]:
+    # a schema the model wrote may be malformed (enum: 20, required: "name"): check only what is well formed
+    if isinstance(sch.get("enum"), list) and value not in sch["enum"]:
         errs.append(f"{path}: not one of {sch['enum']}")
     if isinstance(value, dict):
-        for k in sch.get("required") or []:
-            if k not in value:
+        req = sch.get("required")
+        for k in (req if isinstance(req, list) else []):
+            if isinstance(k, str) and k not in value:
                 errs.append(f"{path}: missing {k!r}")
-        for k, sub in (sch.get("properties") or {}).items():
+        props = sch.get("properties")
+        for k, sub in (props.items() if isinstance(props, dict) else ()):
             if k in value and isinstance(sub, dict):
                 errs += schema_errors(value[k], sub, f"{path}.{k}")
     if isinstance(value, list) and isinstance(sch.get("items"), dict):
@@ -258,11 +289,17 @@ class Delegation:
                           "approve their own actions\")")
 
         class Child(K.Agent):
+            final_only = False
+
             def _tool_names(self):
-                return names + (["delegate_task"] if nested else [])
+                return [] if self.final_only else names + (["delegate_task"] if nested else [])
+
+            def tool_schemas(self):
+                return [] if self.final_only else super().tool_schemas()
 
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
-                if self._outside(name, args) or (name == "office_task" and _files_outside(parent.root, args)):
+                if self._outside(name, args) or (name == "office_task" and _files_outside(parent.root, args)) or \
+                        (name.startswith("mcp__") and _mcp_paths_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
                     rec["pending_path"] = args.get("path")
@@ -294,6 +331,11 @@ class Delegation:
         def grep_in_project(pattern, path=".", glob=None):   # a symlink must not carry a read outside the project
             return grep(pattern, path, glob, inside_only=True)
         a.ws.grep = grep_in_project
+        glob = a.ws.glob
+
+        def glob_in_project(pattern):                    # nor a symlinked folder a listing outside it
+            return glob(pattern, inside_only=True)
+        a.ws.glob = glob_in_project
         a.model = cfg["model"] or parent.current_model()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
@@ -338,6 +380,12 @@ class Delegation:
                 rec["schema_valid"], rec["schema_errors"] = not errs, errs
             stopped = a._stop or self.stopped or rec["stop"]
             hit_steps = any("Stopped after" in e for e in rec["errors"])
+            cfg_steps = a.max_steps
+            if hit_steps and not stopped:                 # out of steps: one last answer, no tools, with the report
+                a.final_only, a.max_steps = True, 1
+                reply = a.send("You have used all your steps. Stop working now and reply with your report: what "
+                               "you did, what you found, files you changed, and what is left undone.") or reply
+                stopped = a._stop or self.stopped or rec["stop"]
             if stopped:
                 rec["status"], rec["exit"] = "interrupted", "interrupted"
             elif hit_steps:
@@ -353,6 +401,9 @@ class Delegation:
                     rec["error"] = rec["errors"][-1]
                     reply = (f"Error: {rec['error']}" + (f"\n\nWritten before it failed:\n{reply.strip()}"
                                                          if reply.strip() else ""))
+            if hit_steps and not stopped and not reply.strip():
+                reply = (f"This sub-agent used all {cfg_steps} of its steps without writing a report. Its last "
+                         "actions: " + ", ".join(f"{t['tool']}({t['target'][:40]})" for t in rec["trace"][-5:]))
             rec["summary"] = reply.strip() or (rec["errors"][-1] if rec["errors"] else "(no report)")
         except Exception as e:  # noqa: BLE001 - one failed part must not sink the rest
             rec.update(status="error", exit="error", error=f"{type(e).__name__}: {e}"[:300],
@@ -366,9 +417,13 @@ class Delegation:
     @staticmethod
     def _check(reply: str, sch: dict) -> list[str]:
         try:
-            return schema_errors(_json_of(reply), sch)
+            value = _json_of(reply)
         except ValueError as e:
             return [f"not valid JSON ({e})"]
+        try:
+            return schema_errors(value, sch)
+        except Exception:  # noqa: BLE001 - a schema too broken to check must not lose the report
+            return []
 
     def _entry(self, sid: str, rec: dict) -> dict:
         p = self.parent
@@ -434,10 +489,15 @@ class Delegation:
                     break
                 except BaseException:  # noqa: BLE001 - a second Ctrl+C while they stop: keep waiting (about 1 s)
                     continue
+            self.why = "Ctrl+C"
+            self.partial = self._result([f.result() for f in futs if f.done() and not f.exception()])
             raise
         finally:
             done.set()
             ex.shutdown(wait=False)
+        return self._result(results)
+
+    def _result(self, results: list) -> dict:
         out = {"delegation_id": self.id, "results": sorted(results, key=lambda r: r["task_index"]),
                "total_duration_seconds": round(time.time() - self.t0, 1)}
         if getattr(self, "why", ""):
@@ -465,9 +525,27 @@ def report(result: dict) -> str:
     head = f"{len(result['results'])} sub-agent report(s) (delegation {result['delegation_id']})."
     if result.get("note"):
         head += " " + result["note"]
-    return head + "\n\n" + "\n\n".join(lines) + "\n\n```json\n" + json.dumps(
-        {**result, "results": [{k: v for k, v in r.items() if k != "summary"} for r in result["results"]]},
-        ensure_ascii=False)[:8000] + "\n```"
+    return head + "\n\n" + "\n\n".join(lines) + "\n\n```json\n" + _json_block(result) + "\n```"
+
+
+def _json_block(result: dict, limit: int = 8000) -> str:
+    """The machine-readable part, always whole JSON: made smaller step by step (tool traces, then file lists,
+    then goals) until it fits, never cut in the middle."""
+    rows = [{k: v for k, v in r.items() if k != "summary"} for r in result["results"]]
+    steps = [lambda r: r.update(tool_trace=r.get("tool_trace", [])[-5:]),
+             lambda r: r.pop("tool_trace", None),
+             lambda r: r.update(files_written=r.get("files_written", [])[:5]),
+             lambda r: r.update(goal=str(r.get("goal", ""))[:60]),
+             lambda r: r.pop("schema_errors", None),
+             lambda r: r.update(files_written=[f[-80:] for f in r.get("files_written", [])][:2])]
+    for shrink in [None] + steps:
+        if shrink:
+            for r in rows:
+                shrink(r)
+        text = json.dumps({**result, "results": rows}, ensure_ascii=False)
+        if len(text) <= limit:
+            return text
+    return text
 
 
 def run_tool(parent, args: dict) -> tuple[str, bool]:
@@ -486,12 +564,17 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     if len(rows) > cfg["max_tasks"]:
         return (f"Too many tasks ({len(rows)}): at most {cfg['max_tasks']} per call. Split the work into fewer, "
                 "larger parts, or call again for the rest."), False
+    parent.__dict__.pop("_delegate_partial", None)       # never an older call's reports
     d = Delegation(parent, rows, cfg, depth)
     reg = parent.__dict__.setdefault("_delegations", {})
     reg[d.id] = d
     gen = getattr(parent, "_gen", 0)
     try:
         res = d.run(cancelled=lambda: parent._stop or getattr(parent, "_gen", 0) != gen)
+    except KeyboardInterrupt:                             # Ctrl+C: the turn ends, but what finished is kept as the
+        if getattr(d, "partial", None):                   # tool's result (Agent._repair puts it in)
+            parent._delegate_partial = report(d.partial)
+        raise
     finally:
         reg.pop(d.id, None)
     ok = any(r["status"] in ("completed", "interrupted") for r in res["results"])   # reports came back

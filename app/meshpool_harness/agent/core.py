@@ -1648,8 +1648,10 @@ class Agent:
                 have = {x.get("tool_call_id") for x in self.messages[i + 1:] if x.get("role") == "tool"}
                 for c in m["tool_calls"]:
                     if c["id"] not in have:
+                        partial = (self.__dict__.pop("_delegate_partial", None)
+                                   if (c.get("function") or {}).get("name") == "delegate_task" else None)
                         self.messages.append({"role": "tool", "tool_call_id": c["id"],
-                                              "content": "Not run: the user stopped the agent."})
+                                              "content": partial or "Not run: the user stopped the agent."})
                 break
             if m.get("role") == "user":
                 break

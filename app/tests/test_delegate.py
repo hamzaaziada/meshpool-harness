@@ -520,3 +520,95 @@ def test_a_failed_sub_agent_says_why_and_the_turn_counts_its_tokens(monkeypatch,
     _agent(_env, emit=ev.append).send("go")
     te = [e for e in ev if e["type"] == "turn_end"][-1]
     assert te["turn"]["in"] == te["session"]["in"] > 0
+
+
+def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _env):
+    import os
+    import signal
+    def child(b):
+        if "slow" in _goal(b):
+            time.sleep(0.2)
+            return _msg("", [("glob", {"pattern": "*"})])
+        return _msg("fast report: acme sells widgets")
+
+    def parent(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("not reached")
+        return _msg("", [("delegate_task", {"tasks": [{"goal": "Research fast Acme"},
+                                                      {"goal": "Research slow Globex"}]})])
+    fake(monkeypatch, child, parent=parent)
+    monkeypatch.setattr(signal, "SIGINT", signal.SIGINT)
+    old = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        a = _agent(_env)
+        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C
+        t0 = time.time()
+        a.send("research both")
+    finally:
+        signal.signal(signal.SIGINT, old)
+    assert time.time() - t0 < 10
+    tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
+    assert "fast report: acme sells widgets" in tool and "Ctrl+C" in tool
+    assert not any(m.get("content") == "not reached" for m in a.messages)
+
+
+def test_children_cannot_list_or_pass_paths_outside_the_project(monkeypatch, _env, tmp_path):
+    outside = tmp_path / "outside_secrets"
+    (outside / "sub").mkdir(parents=True)
+    (outside / "id_rsa_PRIVATE").write_text("x")
+    (_env / "docs").symlink_to(outside, target_is_directory=True)
+    (_env / "mine.txt").write_text("x")
+    for mode in ("ask", "edits", "auto"):
+        c = _bare_child(_agent(_env, mode=mode, profile="work"))
+        out = c.ws.glob("**/*") + c.ws.glob("docs/*") + c.ws.glob("docs/**/*")
+        assert "mine.txt" in out and "id_rsa" not in out
+        for tool in ("measure_office_file", "check_workbook", "check_deck", "check_document", "read_document"):
+            assert c._permit(f"mcp__meshpool-office__{tool}", {"path": str(tmp_path / "pay.xlsx")})[0] is False
+            assert c._permit(f"mcp__meshpool-office__{tool}", {"path": "~/pay.xlsx"})[0] is False
+        assert c._permit("mcp__meshpool-office__check_workbook", {"path": "mine.txt"})[0] is True
+    assert "id_rsa" in _agent(_env).ws.glob("docs/*")               # the chat itself lists as before
+
+
+def test_office_check_tools_refuse_files_outside_the_project(monkeypatch, _env, tmp_path):
+    from meshpool_harness.agent import office_mcp_server as O
+    if "check_workbook" not in O.TOOLS:
+        pytest.skip("forge engines not shipped")
+    monkeypatch.setenv("MESHPOOL_PROJECT", str(_env))
+    (tmp_path / "pay.xlsx").write_text("x")
+    for tool in ("measure_office_file", "check_workbook", "check_deck", "check_document"):
+        text, failed = O.TOOLS[tool][0](path=str(tmp_path / "pay.xlsx"))
+        assert failed and "outside the project" in text
+
+
+def test_a_broken_schema_keeps_the_report_and_the_json_always_parses(monkeypatch, _env):
+    fake(monkeypatch, lambda b: _msg('{"name": "Acme", "price": 20}'))
+    sch = {"type": "object", "required": "name", "properties": {"price": {"type": "number", "enum": 20}}}
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Find Acme's price", "output_schema": sch}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert ok and r["status"] == "completed" and '"price": 20' in out.split("```json")[0]
+
+    def child(b):
+        n = sum(1 for m in b["messages"] if m["role"] == "tool")
+        if n < 12:
+            return _msg("", [("glob", {"pattern": f"some/fairly/long/pattern/number/{n}/**/*.py"})])
+        return _msg("done")
+    fake(monkeypatch, child)
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": f"Review the module number {i} carefully"}
+                                                  for i in range(12)]})
+    block = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
+    assert len(block["results"]) == 12 and all(r["status"] == "completed" for r in block["results"])
+
+
+def test_out_of_steps_asks_for_a_report_with_no_tools(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_STEPS", "5")
+    seen = []
+
+    def child(b):
+        if "used all your steps" in b["messages"][-1]["content"]:
+            return _msg("REPORT: listed the files, nothing found")
+        return _msg("", [("glob", {"pattern": "*"})])
+    fake(monkeypatch, child, seen=seen)
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "List the files forever"}]})
+    r = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]
+    assert ok and r["exit_reason"] == "max_steps" and "REPORT: listed the files" in out
+    assert seen[-1]["tools"] == []                                  # the last call offers no tools

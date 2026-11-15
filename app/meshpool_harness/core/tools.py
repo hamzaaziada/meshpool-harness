@@ -279,6 +279,12 @@ class Workspace:
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
+    def _inside(self, p) -> bool:
+        try:
+            return Path(p).resolve().is_relative_to(self.root.resolve())
+        except (OSError, ValueError):
+            return False
+
     def grep(self, pattern, path=".", glob=None, inside_only=False):
         """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved."""
         if self.container and not self.mounted:
@@ -299,12 +305,8 @@ class Workspace:
                 continue
             if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
                 continue
-            if inside_only:
-                try:
-                    if not f.resolve().is_relative_to(self.root.resolve()):
-                        continue
-                except (OSError, ValueError):
-                    continue
+            if inside_only and not self._inside(f):
+                continue
             try:
                 for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
                     if rx.search(line):
@@ -318,14 +320,16 @@ class Workspace:
                 break
         return self._cap("\n".join(out) or "no matches", "grep")
 
-    def glob(self, pattern):
+    def glob(self, pattern, inside_only=False):
+        """inside_only: leave out what resolves outside the project (through a symlinked folder or file)."""
         if self.container and not self.mounted:
             out, _ = self._run(f"find . -path ./.git -prune -o -path './{pattern.lstrip('./')}' -print 2>/dev/null | head -2000"
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
         res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts)
+                     if ".git" not in p.parts and "node_modules" not in p.parts
+                     and (not inside_only or self._inside(p)))
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
 
     @staticmethod
