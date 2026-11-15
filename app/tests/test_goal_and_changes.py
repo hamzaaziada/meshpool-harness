@@ -75,3 +75,46 @@ def test_branch_changes(tmp_path, monkeypatch):
     assert by["keep.py"]["status"] == "changed" and (by["keep.py"]["added"], by["keep.py"]["removed"]) == (2, 1)
     assert by["moved.md"]["status"] == "renamed" and by["moved.md"]["from"] == "move.md"
     assert (c["added"], c["removed"]) == (4, 2)
+
+
+def test_goal_never_gives_up_on_an_outage(monkeypatch):
+    monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
+    monkeypatch.setattr(A, "GOAL_NET_WAIT_S", 0.01)
+    s = session()
+    s.agent = type("Ag", (), {"_stop": False})()
+    down = {"type": "error", "text": "Couldn't reach the model, even after waiting. (HTTP 0: timed out)"}
+    busy = {"type": "error", "text": "The model is busy right now. Wait a minute. (HTTP 429: Max parallel request "
+                                     "limit reached)"}
+    n = len(s.events)
+    turn(s, "", extra=[busy])                                      # a key whose slots are full: wait it out too
+    assert s._goal_next(n) == (A.GOAL_NEXT, [])
+    s._goal_net = 0
+    for i in range(1, 6):                                         # however long the outage: pick up again
+        n = len(s.events)
+        turn(s, "", extra=[down])
+        assert s._goal_next(n) == (A.GOAL_NEXT, []) and f"(try {i})" in s.events[-1]["text"]
+    n = len(s.events)
+    turn(s, "Back on it.\nGOAL: CONTINUE")                        # a good turn resets the count
+    assert s._goal_next(n) == (A.GOAL_NEXT, []) and s._goal_net == 0
+    s.agent._stop = True                                           # Stop ends the wait
+    n = len(s.events)
+    turn(s, "", extra=[down])
+    assert s._goal_next(n) is None
+    s.agent._stop, s.goal = False, ""                              # so does clearing the goal
+    n = len(s.events)
+    turn(s, "", extra=[down])
+    assert s._goal_next(n) is None
+
+
+def test_a_message_queued_during_the_outage_wait_goes_next(monkeypatch):
+    import time
+    monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
+    monkeypatch.setattr(A, "GOAL_NET_WAIT_S", 5)
+    s = session()
+    s.queue, s._stop_req = [], False
+    s.agent = type("Ag", (), {"_stop": False})()                   # an ACP harness: no steers, a queue instead
+    threading.Timer(0.3, lambda: s.queue.append(("stop the report and summarise", []))).start()
+    turn(s, "", extra=[{"type": "error", "text": "Couldn't reach the model. (HTTP 0: timed out)"}])
+    t0 = time.time()
+    assert s._goal_next(0) == ("stop the report and summarise", []) and time.time() - t0 < 2
+    assert s.queue == []

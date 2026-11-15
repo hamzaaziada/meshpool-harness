@@ -566,6 +566,7 @@ class Ctx:
         self.prov = prov
         self.overflow = []
         self.last_side = -9          # last slide whose chart had its text in a side panel (composition variety)
+        self.last_arg = (-9, "")      # last text-led slide and its form (columns or rows): neighbours never share one
 
     def miss(self, n, where, words):
         self.overflow.append(f"slide {n}: {where} does not fit at the minimum size; cut about {words} words")
@@ -595,11 +596,28 @@ def _header(ctx, s, sl, n, title_w=None):
     ctx.track(n, s["title"], s.get("title_prov"))
     w = title_w or (RIGHT - LEFT)
     if s.get("subtitle"):                             # one line: 18 pt, stepping down to 14 pt
-        ssz = next((z for z in (T["sub"], 16, 15, 14) if _need([{"text": s["subtitle"], "size": z}], w) <= z * 1.2 / 72 + 0.1), 14)
+        sub_t = s["subtitle"]
+        one = lambda t, z: _need([{"text": t, "size": z}], w * 0.86) <= z * 1.2 / 72 + 0.1  # noqa: E731  margin:
+                                                       # the renderer's face can set a little wider than measured
+        ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
+        if not one(sub_t, ssz):                       # two lines would run up into the title: keep the head of the
+            head = None                               # label (the unit): at a colon or dash first, then a comma
+            for pat in (r"\s*(?::|;|\s[–—-]\s)", r"\s*(?:,|\s\()"):
+                for c in reversed([m.start() for m in re.finditer(pat, sub_t)]):
+                    h_ = sub_t[:c].rstrip(" ,;:")
+                    if h_.count("(") == h_.count(")") and one(h_, 14):
+                        head = h_
+                        break
+                if head:
+                    break
+            if head and len(head.split()) >= 2:
+                s["notes"] = (s.get("notes", "") + "\n[QA] subtitle shortened to one line; in full: " + sub_t).strip()
+                sub_t = head
+                ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
         _write(_box(sl, LEFT, SUB_Y, w, 0.33, "role_subtitle_Subtitle", MSO_ANCHOR.BOTTOM),
-               [{"text": s["subtitle"], "size": ssz, "numbers": False}])
-        if ssz == 14 and _need([{"text": s["subtitle"], "size": 14}], w) > 0.35:
-            ctx.miss(n, "the subtitle", max(3, len(s["subtitle"].split()) // 3))
+               [{"text": sub_t, "size": ssz, "numbers": False}])
+        if ssz == 14 and _need([{"text": sub_t, "size": 14}], w) > 0.35:
+            ctx.miss(n, "the subtitle", max(3, len(sub_t.split()) // 3))
     if s.get("subtitle"):            # a line under the subtitle only: never an accent line under a bare title
         _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
     x = RIGHT
@@ -620,6 +638,11 @@ def footnote_text(t) -> str:
     """A footnote without the marker the writer typed ("1. ", "^1 ", "¹ ") or a stray one at its end: the footer
     numbers the notes itself."""
     return _NOTE_TAIL.sub("", _NOTE_MARK.sub("", str(t or ""))).strip()
+
+
+def _notes_h(notes) -> float:
+    """Height the footnotes take above the source rule (one line per ~190 characters, 8 pt)."""
+    return (0.14 * max(1, (len("    ".join(map(str, notes))) // 190) + 1) + 0.04) if notes else 0.0
 
 
 def _footer(ctx, s, sl, n):
@@ -1577,6 +1600,78 @@ def _emptied(d: dict) -> bool:
     return not words and not any(d.get(k) for k in ("bullets", "items", "chart", "table", "steps"))
 
 
+_GAPCELL = re.compile(r"\[GAP[^\]]*\]")
+_NA = re.compile(r"(?i)^\s*(n/a|n\.a\.|not available)\s*$")     # a dash is a nil in a finance table, not a gap
+_VALUE_HEAD = re.compile(r"(?i)^\s*(value|amount|figure|terms?|number|total|price|size|\$|€|£)\b")
+
+
+def _is_na(c) -> bool:
+    c = re.sub(r"\s*(\^\w+|[¹²³⁴⁵⁶⁷⁸⁹⁰]+)\s*$", "", str(c or ""))     # "n/a¹" is still n/a
+    return bool(_NA.match(c)) or bool(_GAPCELL.search(c) and not _GAPCELL.sub("", c).strip())
+
+
+def _table_gaps(t: dict, s: dict) -> dict:
+    """A table's gaps, honestly: [GAP] cells read N/A; a row with no value at all goes (in a key-value table such as
+    deal terms, a row whose Value is N/A goes: "Equity value: N/A" is not a term); a column that is mostly N/A goes,
+    with a footnote that names the few values it had; whatever N/A is left is footnoted. What was dropped is
+    recorded in the notes. Never invents a value."""
+    t = dict(t)
+    cols, rows = list(t.get("columns") or []), [list(r) for r in t.get("rows") or []]
+    gapped = any(_GAPCELL.search(c) for r in rows for c in r)
+    if not rows or len(cols) < 2 or not any(_GAPCELL.search(c) or _is_na(c) for r in rows for c in r[1:]):
+        return t
+    rows = [[_GAPCELL.sub("N/A", c) if _GAPCELL.search(c) and _is_na(c) else _GAPCELL.sub("not available", c)
+             for c in r] for r in rows]
+    na = lambda c: _is_na(c)                               # noqa: E731
+    keyval = len(cols) <= 4 and any(_VALUE_HEAD.match(c) for c in cols[1:2])
+    note = lambda m: s.__setitem__("notes", (s.get("notes", "") + "\n[QA] " + m).strip())  # noqa: E731
+    hl = set(t.get("highlight_rows") or [])
+    keep, gone = [], []
+    for i, r in enumerate(rows):
+        vals = r[1:len(cols)]
+        if (vals and all(na(c) for c in vals)) or (keyval and len(r) > 1 and na(r[1])):
+            gone.append(i)
+        else:
+            keep.append(i)
+    if gone and len(keep) >= 1 and not t.get("heat_grid"):
+        note("table rows left out, no value in the sources: " + "; ".join(str(rows[i][0]) for i in gone))
+        remap = {old: new for new, old in enumerate(keep)}
+        for key in ("highlight_rows", "italic_rows"):
+            if t.get(key):
+                t[key] = [remap[i] for i in t[key] if i in remap]
+        if t.get("total_row") and len(rows) - 1 in gone:
+            t["total_row"] = False
+        rows = [rows[i] for i in keep]
+    feet = []
+    if not t.get("groups") and len(rows) >= 2:
+        drop = []
+        for ci in range(1, len(cols)):
+            col = [r[ci] if ci < len(r) else "" for r in rows]
+            k = sum(1 for c in col if na(c))
+            if k >= 2 and k / len(col) > 0.5 and len(cols) - len(drop) > 2:
+                drop.append(ci)
+                have = [(re.sub(r"\*\*", "", str(r[0])), r[ci]) for r in rows if ci < len(r) and not na(r[ci])]
+                feet.append(f"{cols[ci]}: " + ("; ".join(f"{b} for {a}" for a, b in have[:3]) + "; " if have else "")
+                            + "not available in the source data for the other rows")
+        if drop:
+            note("table columns left out, mostly not available: " + ", ".join(cols[ci] for ci in drop))
+            keepc = [ci for ci in range(len(cols)) if ci not in drop]
+            cols = [cols[ci] for ci in keepc]
+            rows = [[r[ci] for ci in keepc if ci < len(r)] for r in rows]
+            if t.get("col_widths") and len(t["col_widths"]) == len(keepc) + len(drop):
+                t["col_widths"] = [t["col_widths"][ci] for ci in keepc]
+            if isinstance(t.get("heat"), dict):
+                t["heat"] = {str(keepc.index(int(k))): v for k, v in t["heat"].items()
+                             if str(k).isdigit() and int(k) in keepc}
+    if gapped and any(na(c) for r in rows for c in r[1:]):
+        feet.append("N/A: not available in the source data")
+        note("table contains values not available in the sources")
+    if feet:
+        s["footnotes"] = list(s.get("footnotes") or []) + feet
+    t["columns"], t["rows"] = cols, rows
+    return t
+
+
 def normalize(s: dict) -> dict:
     """Coerce the shapes models commonly produce into the renderer's shapes (never invents content)."""
     s = dict(s)
@@ -1592,12 +1687,19 @@ def normalize(s: dict) -> dict:
         t = dict(t)
         t["columns"] = [_txt(c) for c in t.get("columns") or []]
         t["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
-        gap = re.compile(r"\[GAP[^\]]*\]")
-        if any(gap.search(c) for r in t["rows"] for c in r):           # visible, footnoted gaps, not raw markers
-            t["rows"] = [[gap.sub("N/A", c) for c in r] for r in t["rows"]]
-            s["footnotes"] = list(s.get("footnotes") or []) + ["N/A: not available in the source data"]
-            s["notes"] = (s.get("notes", "") + "\n[QA] table contains values not available in the sources").strip()
-        s["table"] = t
+        s["table"] = _table_gaps(t, s)
+    if isinstance(s.get("parts"), list):                  # a grid's table parts get the same treatment
+        ps = []
+        for prt in s["parts"]:
+            if isinstance(prt, dict) and prt.get("type") == "table":
+                inner = isinstance(prt.get("table"), dict)
+                tb = dict(prt["table"] if inner else prt)
+                tb["columns"] = [_txt(c) for c in tb.get("columns") or []]
+                tb["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in tb.get("rows") or []]
+                tb = _table_gaps(tb, s)
+                prt = dict(prt, table=tb) if inner else dict(prt, **tb)
+            ps.append(prt)
+        s["parts"] = ps
     for key in ("bullets",):
         if isinstance(s.get(key), list):
             s[key] = [b if isinstance(b, dict) else {"text": str(b)} for b in s[key]]
@@ -2129,7 +2231,9 @@ def a_challenge_matrix(ctx, s, sl, n):
     while sum(x[2] for x in laid) > avail and size > s.get("min_size", 10):
         size -= 1
         laid = fit_rows(rows, size)
-    while size < T["cell"] + 2 * DENSITY["bump"]:          # short content: larger type before larger gaps
+    grow_to = T["cell"] + (2 * DENSITY["bump"] if DENSITY["mode"] == "read" else max(4, 2 * DENSITY["bump"]))
+    while size < grow_to:                                  # short content: larger type before larger gaps (a dense
+                                                           # send-ahead keeps its type scale)
         bigger = fit_rows(rows, size + 1)
         if sum(x[2] for x in bigger) > avail * 0.97:
             break
@@ -2175,9 +2279,11 @@ def a_exhibit_argument(ctx, s, sl, n):
     y = BODY_Y - 0.05
     if ex.get("title"):
         tb_ = [{"text": ex["title"], "size": ARGUMENT["exhibit"], "bold": True, "numbers": False}]
-        if _need(tb_, lw) > 0.4:                          # a long exhibit title steps down before it wraps
+        if _need(tb_, lw * 0.88) > 0.4:                   # a long exhibit title steps down before it wraps
             tb_[0]["size"] = ARGUMENT["exhibit"] - 2
-        th_ = max(0.32, _need(tb_, lw) + 0.04)
+        th_ = max(0.32, _need(tb_, lw * 0.88) + 0.06)      # measured narrower: the renderer's face sets bold a little
+                                                           # wider, and the unit line under a wrapped title never runs
+                                                           # into it
         _write(_box(sl, LEFT, y, lw, th_, "role_subtitle_ExhibitTitle"), tb_)
         y += th_
     if ex.get("unit"):
@@ -2188,7 +2294,10 @@ def a_exhibit_argument(ctx, s, sl, n):
     if ex.get("title") or ex.get("unit"):              # the exhibit's subtitle carries the line, not the titles
         _rule(sl, LEFT, y, lw, TC.TEXT_1, 0.75, "SubtitleRule")
         y += 0.06
-    foot = 0.35 if s.get("footnotes") else 0
+    notes = s.get("footnotes") or []                   # the exhibit runs down to the footnotes' first line
+    foot = BODY_B - (FOOT_RULE_Y - 0.08 - _notes_h(notes)) if notes else 0
+    if notes:
+        ctx.notes_top = FOOT_RULE_Y - 0.03 - _notes_h(notes)
     _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
     blocks = []
     for blk in s.get("blocks") or []:
@@ -2295,6 +2404,9 @@ def _grow(blocks, w, h, max_bump=2):
 
 
 PANEL_PAD = 0.18
+THIN = 0.10               # a composition that leaves more than this share of the body empty is thin: it grows
+RHYTHM_MAX = 0.55         # the largest gap between two blocks when a thin slide spreads its rhythm
+TABLE_PADS = (0.16,)      # air a table row may take past its text (P20 allows 0.25in, measured on Arial)
 
 
 def _fill_text(blocks, w, h, max_bump=5):
@@ -2417,27 +2529,41 @@ def a_table_focus(ctx, s, sl, n):
         base = t.get("size") or T["cell"]                  # fills little of the height goes full width with a panel
         top = min(20, base + (5 if DENSITY["mode"] == "present" else 4))
         for z in range(top, base - 1, -1):
-            need = _table(ctx, sl, n, dict(t, size=z, _pad=0.16), tx, y, tw, hgt, dry=True)
-            ctx.carry_rows = None
-            if need <= 0.9 * hgt:
-                side_t = dict(t, size=z) if z != base else dict(t)
+            for pad in TABLE_PADS:
+                need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), tx, y, tw, hgt, dry=True)
+                ctx.carry_rows = None
+                if need <= 0.9 * hgt:
+                    side_t = dict(t, size=z, _pad=pad) if z != base else dict(t, _pad=pad)
+                    break
+            if side_t is not None:
                 break
         if side_t is None or need < 0.55 * hgt:
             side = None
+        elif need < (1 - 2 * THIN) * hgt:                  # a side composition that would still end high: the
+            pb = (([{"text": tk["text"], "size": T["head"], "bold": True}] if tk.get("text") else [])  # full-width
+                  + [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6} for b in bullets])
+            ph = _panel(ctx, s, sl, n, ax, y, aw, hgt, [], pb, dry=True)   # table, its panel under it, if that
+                                                                           # uses the body better
+            if max(need, ph) < (1 - 2 * THIN) * hgt:
+                side = None
     if as_chart or side:
         if as_chart:                                       # a small all-number table reads better as a chart
             gf = _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
             ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
             eh = gf.height / 914400
         else:                                              # short table: table left, its argument right
-            eh = _table(ctx, sl, n, dict(side_t, _pad=0.16), tx, y, tw, hgt).rendered_h
+            eh = _table(ctx, sl, n, dict(side_t), tx, y, tw, hgt).rendered_h
         lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
                 if tk.get("text") else [])
         bl = [{"text": b["text"], "size": T["body"], "bullet": True, "space_before": 6, "prov": b.get("prov")}
               for b in bullets]
-        # the panel aligns to the exhibit's height (taller only when its text needs it), never to the whole body
+        # the panel aligns to the exhibit's height (taller when its text needs it); when the exhibit is short of the
+        # body, the panel's text steps up the scale and runs on down the body, so the page does not end high
         need = _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True, grow=False)
-        _panel(ctx, s, sl, n, ax, y, aw, max(eh, min(hgt, need)), [], lead + bl, shrink=True)
+        ph = max(eh, min(hgt, need))
+        if eh < (1 - THIN) * hgt:
+            ph = max(ph, _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True))
+        _panel(ctx, s, sl, n, ax, y, aw, ph, [], lead + bl, shrink=True)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
         return
     # Full width (wide or long table): the table at its natural size, then the so-what panel down to the bottom of
@@ -2452,19 +2578,27 @@ def a_table_focus(ctx, s, sl, n):
         reserve = _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.45 * (bottom_all - y), lead, bl, dry=True,
                          grow=False) + 0.2
     bottom = bottom_all - reserve
-    if not t.get("size") and len(t.get("rows") or []) <= 14:     # room to spare: a step up the type scale first
-        base = T["cell"]
-        for z, pad in [(z, 0.16) for z in sorted({T["head"], T["body"], base}, reverse=True) if z >= base]:
-            need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
-            ctx.carry_rows = None
-            if need <= 0.95 * (bottom - y):                 # margin for header wrapping the dry run cannot see
-                t = dict(t, size=z, _pad=pad)
+    if len(t.get("rows") or []) <= 14:                  # room to spare: up the type scale (two steps past the
+        base = min(t.get("size") or T["cell"], T["cell"])  # heading size at most), then row air; a size the writer
+                                                           # gave is where the table may start, not a cap
+        done = False
+        for z in range(T["head"] + 2, base - 1, -1):
+            for pad in TABLE_PADS:
+                need = _table(ctx, sl, n, dict(t, size=z, _pad=pad), LEFT, y, RIGHT - LEFT, bottom - y, dry=True)
+                ctx.carry_rows = None
+                if need <= 0.95 * (bottom - y):             # margin for header wrapping the dry run cannot see
+                    t, done = dict(t, size=z, _pad=pad), True
+                    break
+            if done:
                 break
     gf = _table(ctx, sl, n, t, LEFT, y, RIGHT - LEFT, bottom - y)
     if ctx.carry_rows:
         ctx.carry = dict(s, table=dict(s["table"], rows=ctx.carry_rows, highlight_rows=[]), bullets=[],
                          title=_cont_title(s["title"]), _cont=True)
     ptop = min(bottom + 0.1, y + gf.rendered_h + 0.2)
+    if lead or bl:                                      # what the grown panel leaves: a larger gap above it (capped)
+        ph = _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl, dry=True)
+        ptop += max(0.0, min(RHYTHM_MAX - 0.2, bottom_all - ptop - ph))
     _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl, shrink=True)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
@@ -2541,12 +2675,35 @@ def a_chart_takeaway(ctx, s, sl, n):
                         MSO_ANCHOR.MIDDLE), c, ctx, n)
 
 
+_STOP = set("a an the of to for and or in on at by with is are be its it this that as from into than then will "
+            "should would can could must we our their his her decision today decide approve s".split())
+
+
+def _tokens(t: str) -> list[str]:
+    t = re.sub(r"\*\*|\^\w+", "", str(t or "")).lower().replace("’", "'")
+    words = (w.strip(".-/") for w in re.findall(r"[a-z0-9$€£~.%/-]+", t))
+    return [w for w in words if w and w not in _STOP]
+
+
+def repeats(text: str, title: str, share: float = 0.8) -> bool:
+    """Does `text` substantially repeat `title`? At least `share` of the shorter one's content words (normalised:
+    no bold marks, case, stop words, or the "Decision today:" label) appear in the other."""
+    a, b = _tokens(text), _tokens(title)
+    if not a or not b:
+        return False
+    short, other = (a, set(b)) if len(a) <= len(b) else (b, set(a))
+    return sum(1 for w in short if w in other) / len(short) >= share
+
+
 def a_executive_summary(ctx, s, sl, n):
     """Executive summary: the answer first. Numbered rows, each a bold claim on the left (the section's message) and
     its evidence on the right, hairlines between rows; an optional dark band at the foot with what to decide."""
     _header(ctx, s, sl, n)
     pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
     ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
+    if ask and repeats(ask, s.get("title", "")):           # the title already is the answer: a band saying it again
+        s["notes"] = (s.get("notes", "") + "\n[QA] decision band left out: it repeats the title: " + ask).strip()
+        ask = ""
     top, bottom = BODY_Y + 0.1, BODY_B
     if ask:
         ab = [{"text": ask, "size": T["head"] + 2, "bold": True, "numbers": False, "color": TC.BACKGROUND_1}]
@@ -2595,6 +2752,7 @@ def a_waterfall_bridge(ctx, s, sl, n):
 
 
 BENCH_LABEL_W = 1.9                                   # names (and logos) column of a benchmark page
+BENCH_ROW_MAX = 0.6                                   # a peer's row at most: bars about 0.33in thick at gap 55%
 
 
 def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
@@ -2714,8 +2872,16 @@ def a_benchmark(ctx, s, sl, n):
     # row, so bars stay bars), and the panel follows the bars at one gap
     need = (_panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.45 * (bottom_all - BODY_Y), lead, bl, dry=True, grow=False)
             if (lead or bl) else 0)
-    want_h = min(rows_n * 0.42, max(rows_n * 0.36, bottom_all - BODY_Y - head_h - (need + 0.25 if need else 0)))
+    # a thin page gives the room to the bars first (up to BENCH_ROW_MAX a row: bars stay well under the P20 slab
+    # limit), then to the panel's type, then to the gap between them (capped)
+    room = bottom_all - BODY_Y - head_h - (need + 0.25 if need else 0)
+    want_h = min(rows_n * BENCH_ROW_MAX, max(rows_n * 0.36, room))
     top = BODY_Y + head_h
+    pgap = 0.25
+    if lead or bl:
+        rest = bottom_all - (top + want_h + pgap)
+        pgap += max(0.0, min(RHYTHM_MAX - pgap,
+                             rest - _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, rest, lead, bl, dry=True)))
     gap = 0.3
     pw = (RIGHT - LEFT - BENCH_LABEL_W - gap * (len(panels) - 1)) / len(panels)
     band = want_h / rows_n
@@ -2750,7 +2916,7 @@ def a_benchmark(ctx, s, sl, n):
         _rule(sl, x, top - 0.04, pw, TC.TEXT_1, 0.75, f"ov_BenchRule{i + 1}")
         _bench_panel(ctx, sl, n, dict(pn, highlight=b.get("highlight")), x, top, pw, want_h, rows_n, f"Bench{i + 1}")
         ctx.track(n, " ".join(str(v) for v in pn.get("values") or []), pn.get("prov"))
-    ptop = top + want_h + 0.25
+    ptop = top + want_h + pgap
     _panel(ctx, s, sl, n, LEFT, ptop, RIGHT - LEFT, bottom_all - ptop, lead, bl, shrink=True)
     ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
 
@@ -2978,6 +3144,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         prs.part.drop_rel(sid.rId)
         prs.slides._sldIdLst.remove(sid)
     ctx = Ctx({})
+    ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
     queue = list(slides)
     n = 0
@@ -2991,11 +3158,16 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         own = [str(t) for t in s.get("tags") or [] if str(t).strip() and str(t) not in deck_stamps]
         ctx.stamps = (deck_stamps + own)[:2]               # a slide's own qualifier stays on that slide
         s = dict(condense(normalize(s), mode), tags=[])
+        spec = s.pop("_design", None)                      # a design-first layout spec (design.py), if any
         n += 1
         ctx.carry = None
         if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
             errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in schema_errors(s)]
             s = fallback(s)
+            if spec:
+                ctx.design[n] = {"path": "archetype", "why": "the slide failed its schema; the archetype fallback "
+                                 "draws it"}
+                spec = None
         arch = s.get("archetype")
         fn = ARCHETYPES.get(arch)
         if fn is None:
@@ -3007,7 +3179,11 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
                                            + (" computed:1" if s.get("fixed") else ""))
         try:
-            fn(ctx, s, sl, n)
+            if spec:
+                if not _designed(ctx, s, sl, n, spec, mode, arch):
+                    fn(ctx, s, sl, n)
+            else:
+                fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
                 _footer(ctx, s, sl, n)
         except (KeyError, TypeError, IndexError, ValueError, AttributeError, ZeroDivisionError) as e:
@@ -3042,4 +3218,27 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     prs.save(out_path)
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
-    return {"slides": n, "errors": errors, "provenance": prov_path}
+    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design}
+
+
+def _designed(ctx, s, sl, n, spec, mode, arch) -> bool:
+    """Draw the slide from its design spec (design.py). On a miss the half-drawn shapes are removed, what the attempt
+    reported is forgotten, and False lets the archetype draw it; the reason is kept in ctx.design."""
+    from .design import draw_design
+    before, notes = len(ctx.overflow), s.get("notes")
+    try:
+        draw_design(ctx, s, sl, n, spec)
+        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode} design:image")
+        ctx.design[n] = {"path": "image", "layout": spec.get("layout")}
+        return True
+    except Exception as e:  # noqa: BLE001 - any failure of the rebuild: the archetype draws the slide
+        for shp in list(sl.shapes):
+            if not shp.is_placeholder:
+                shp._element.getparent().remove(shp._element)
+        del ctx.overflow[before:]
+        if notes is None:
+            s.pop("notes", None)
+        else:
+            s["notes"] = notes
+        ctx.design[n] = {"path": "archetype", "why": f"{type(e).__name__}: {e}"[:300]}
+        return False

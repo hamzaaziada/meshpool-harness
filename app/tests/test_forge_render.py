@@ -133,5 +133,17 @@ def test_benchmark_names_never_wrap_into_the_next_row(tmp_path):
     names = {sh.name: sh for sh in Presentation(str(p)).slides[0].shapes if sh.name.startswith("ov_BenchName")}
     txt = [names[f"ov_BenchName{i}"].text_frame.text for i in range(1, 4)]
     assert txt[2] == "Keystone Measurement"                          # two lines fit a row: left as written
-    assert txt[1].endswith("…") and long[1].startswith(txt[1][:-1])  # three lines do not: cut
+    for i, t in enumerate(txt, 1):                                   # every name fits its row: as written when the
+        box = names[f"ov_BenchName{i}"]                              # (thin page's taller) row holds it, else cut
+        need = R._need([{"text": t, "size": R.T["body"]}], box.width / 914400)
+        assert need <= box.height / 914400 + 0.06, (t, need)
+        assert t == long[i - 1] or (t.endswith("…") and long[i - 1].startswith(t[:-1]))
+        if t != long[i - 1]:
+            assert box._element.find(".//{*}cNvPr").get("descr") == long[i - 1]
+    s["bullets"] = ["Lumen Optics paid the most, at 13.2x, the top of the peer range and 0.5x above the median"] * 4
+    s["benchmark"]["companies"] = long + ["Ridge Sensors", "Polar Test"]
+    R.render([s], str(p))                                            # a full page keeps rows short: the long name
+    names = {sh.name: sh for sh in Presentation(str(p)).slides[0].shapes if sh.name.startswith("ov_BenchName")}
+    t1 = names["ov_BenchName2"].text_frame.text                      # that needs three lines is cut, not wrapped
+    assert t1.endswith("…") and long[1].startswith(t1[:-1])
     assert names["ov_BenchName2"]._element.find(".//{*}cNvPr").get("descr") == long[1]

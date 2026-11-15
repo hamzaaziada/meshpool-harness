@@ -41,7 +41,9 @@ renderer applies a strict consulting design; you only fill fields.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
 - executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
   answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
-  1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, what the reader must decide.
+  1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
+  today, written "Decision today: <approve / choose / fund what, by when>"; it must NOT restate the title (the title
+  is the answer, the decision line is the ask) - leave it out when there is no decision to take.
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
@@ -177,6 +179,29 @@ def add_agenda(plan: list) -> list:
     if len(plan) > at and plan[at].get("archetype") == "executive_summary":
         at += 1                                  # answer first, then the map of the deck
     return plan[:at] + [{"node": "0.1", "section": "", "title": "Agenda", "archetype": "agenda", "evidence": []}] + plan[at:]
+
+
+KEEP_IN_COUNT = ("cover", "executive_summary", "closing", "next_steps", "end")
+
+
+def fit_count(plan: list, n: int) -> tuple[list, list]:
+    """Trim a storyline to n slides: section dividers go first (they carry no evidence), then the content slides with
+    the least evidence (the later one on a tie); the cover, the executive summary and the closing slide stay.
+    Returns (plan, titles cut)."""
+    plan = list(plan)
+    cut = []
+    while len(plan) > max(1, n):
+        cands = [i for i, x in enumerate(plan) if x.get("archetype") not in KEEP_IN_COUNT]
+        if not cands:
+            break
+        div = [i for i in cands if x_arch(plan[i]) == "section_divider"]
+        i = div[-1] if div else min(cands, key=lambda k: (len(plan[k].get("evidence") or []), -k))
+        cut.append(plan.pop(i).get("title") or "")
+    return plan, cut
+
+
+def x_arch(x) -> str:
+    return (x or {}).get("archetype") or ""
 
 
 def fill_agenda(slides: list, plan: list) -> list:
@@ -614,6 +639,41 @@ def prose_checks(slides) -> dict[int, list[str]]:
     return out
 
 
+WORDS_LED = {"argument_only"}
+NO_VARIETY = {"cover", "section_divider", "agenda", "executive_summary", "closing", "next_steps", "end"}
+
+
+def _form(s: dict) -> str:
+    """The slide's visual form, for variety: its archetype, with a grid of only words counted as text-led."""
+    a = s.get("archetype") or ""
+    if a == "grid":
+        kinds = sorted({p.get("type") for p in s.get("parts") or [] if isinstance(p, dict)})
+        return "argument_only" if kinds and set(kinds) <= {"text", "callout", "quote"} else "grid:" + "+".join(kinds)
+    return a
+
+
+def variety_checks(slides) -> dict[int, list[str]]:
+    """What a partner sends back first: pages that all look the same. Two content slides in a row with the same
+    form, or more than a third of the content slides led by words, each go back to the writer with the forms to
+    choose from (chart from the facts, table, figures, 2x2, options vs criteria, process, timeline)."""
+    out: dict[int, list[str]] = {}
+    body = [(i, s) for i, s in enumerate(slides, 1) if isinstance(s, dict) and s.get("archetype") not in NO_VARIETY
+            and not s.get("fixed")]
+    forms = [_form(s) for _, s in body]
+    ask = ("make this slide a different exhibit than its neighbours: a chart of the numeric facts (bar_takeaway, "
+           "column_trend, waterfall_bridge), a table (table_focus), big figures beside a chart (grid with stats + "
+           "chart), a 2x2 or options vs criteria (grid matrix2x2 / harvey), a process or timeline, or a benchmark")
+    for k in range(1, len(body)):
+        if forms[k] == forms[k - 1]:
+            out.setdefault(body[k][0], []).append(
+                f"slides {body[k - 1][0]} and {body[k][0]} use the same layout ({forms[k]}); {ask}")
+    words = [i for (i, _), f in zip(body, forms) if f in WORDS_LED]
+    if body and len(words) > max(1, len(body) // 3):
+        for i in words[max(1, len(body) // 3):]:
+            out.setdefault(i, []).append(f"{len(words)} of {len(body)} content slides are words with icons; {ask}")
+    return out
+
+
 def _chart_unit(c: dict) -> str:
     u = str(c.get("unit") or "")
     if "%" in u:
@@ -678,11 +738,232 @@ def _content_failures(res: dict) -> dict[int, list[str]]:
     return out
 
 
+def _why_not_run(rv: dict) -> str:
+    """Why a partner review did not run, in plain words (the gateway refusing the key, a render failure, ...)."""
+    errs = " ".join(str(e) for e in (rv or {}).get("errors") or [])
+    if re.search(r"\b401\b|invalid or missing api key|unauthori[sz]ed", errs, re.I):
+        return "gateway refused the key"
+    if re.search(r"\b429\b|rate limit", errs, re.I):
+        return "gateway rate limit"
+    if errs.startswith("render") or "no slides rendered" in errs:
+        return "the deck could not be rendered for review"
+    return (errs[:120] or "no reviewer response")
+
+
+def review_verdict(reviews: list) -> dict | None:
+    """The deck's partner-review verdict for the answer and qa.json: the final review's, or, when the final review
+    did not run (every batch refused, say), the first review's, with a plain note that the final one did not run and
+    why. A review that never ran at all says so too: the score never disappears silently."""
+    if not reviews:
+        return None
+    from engines.forge import review as RV
+    last = reviews[-1]
+    v = RV.deck_verdict(last)
+    if v.get("status") != "not_run":
+        if last.get("status") == "partial" and last.get("not_run"):
+            v["note"] = (f"partner review partial: slides {', '.join(map(str, last['not_run']))} not reviewed "
+                         f"({_why_not_run(last)})")
+        return v
+    why = _why_not_run(last)
+    earlier = next((r for r in reversed(reviews[:-1]) if RV.deck_verdict(r).get("status") != "not_run"), None)
+    if earlier is None:
+        return dict(v, note=f"partner review not run: {why}")
+    v = RV.deck_verdict(earlier)
+    v["final_status"] = "not_run"
+    v["note"] = (f"final partner review not run: {why}; the score is the first review's, before the repairs it "
+                 "asked for")
+    return v
+
+
+def used_fact_ids(slides) -> set:
+    """Fact ids the deck cites anywhere: every prov and title_prov list, and the facts each calc is computed from."""
+    used: set = set()
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k in ("prov", "title_prov") and isinstance(x, list):
+                    used.update(str(i) for i in x if i)
+                elif k == "calcs" and isinstance(x, list):
+                    for c in x:
+                        if isinstance(c, dict):
+                            used.update(str(i) for i in c.get("from") or [] if i)
+                            if c.get("id"):
+                                used.add(str(c["id"]))
+                else:
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(slides)
+    return used
+
+
+THIN_TAGS = ("[P20]", "[fill]", "[thin]")
+
+
+def substance_hint(slides, facts, limit: int = 14) -> str:
+    """For a thin slide: the facts the deck has NOT used yet, numeric ones first, and what to build from them."""
+    used = used_fact_ids(slides)
+    left = [f for f in facts if f.get("id") and f["id"] not in used]
+    if not left:
+        return ("Every fact is already used in the deck: make the slide denser with what it has (a stats row of its "
+                "own numbers, the comparison or the implication as a callout), or merge it with its neighbour.")
+    num = [f for f in left if re.search(r"\d", f.get("text", ""))]
+    pick = (num + [f for f in left if f not in num])[:limit]
+    return ("The slide is thin: the page ends well above its foot. Add ONE real part built from facts the deck has "
+            "NOT used yet (cite them in prov), never filler: a chart when 3+ of them are numbers in one unit, a stats "
+            "row (2-4 figures with labels) for unrelated headline numbers, or an implication callout that says what "
+            "they mean for the decision. Unused facts:\n" + "\n".join(f"  {f['id']}: {f['text']}" for f in pick)
+            + (f"\n  (+{len(left) - len(pick)} more unused)" if len(left) > len(pick) else ""))
+
+
+def _review_on(client, rules) -> bool:
+    """The partner review runs on live builds (it needs a vision model): off with MH_REVIEW=0 or rules review.enabled
+    false, and for stub clients in tests."""
+    env = os.environ.get("MH_REVIEW", "").strip()
+    if env == "0" or (env != "1" and not (rules.get("review") or {}).get("enabled", True)):
+        return False                  # MH_REVIEW=1 turns it on for a build even while rules have it off
+    try:
+        from meshpool_harness.core.client import LiveClient
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(client, LiveClient)
+
+
+def replan_storyline(client, story_sys: str, story: dict, panel: dict, new_facts: list, research: dict | None,
+                     brief: str, facts: list, n: int, task_id: str) -> dict | None:
+    """The storyline again, with the reviewers' issues, their cuts, merges and additions, and the facts research
+    found (or did not find). Same JSON, same slide count. None when the call fails or returns no slides."""
+    issues = "\n".join(f"- [{i['severity']}, {i['scope']}, {i.get('persona')}] {i.get('where') or 'storyline'}: "
+                       f"{i['issue']} -> {i.get('fix') or ''}" for i in panel.get("issues") or [])
+    cm = "\n".join(f"- {c.get('action')} slides {c.get('slides')}: {c.get('title') or ''}"
+                   for r in panel.get("reviews") or [] for c in r.get("cut_or_merge") or [])
+    found = "\n".join(f"- {f['id']}: {f['text']}" for f in new_facts)
+    none = "\n".join(f"- {q['question']}" for q in (research or {}).get("questions") or []
+                     if isinstance(q, dict) and q.get("status") != "found")
+    skipped = (research or {}).get("skipped")
+    head = ("REVISION. A senior partner and a bank MD reviewed your storyboard and did not sign it off. Re-plan it: fix "
+            "every blocking and major issue below, apply the cuts, merges and additions that keep the slide count, "
+            "and use the new facts (cite their ids in evidence) where they carry a point. Where research found "
+            "nothing, do not plan a slide that needs that number: merge the point or make it with the facts in hand. "
+            "Never invent a fact. Keep exactly the number of slides asked for, the opening and closing rules and the "
+            "house style. Return the full storyboard JSON.\n\n")
+    user = (f"Brief:\n{brief[:12000]}\n\nFacts (cite by id):\n" + "\n".join(f"{f['id']}: {f['text']}" for f in facts)
+            + f"\n\nCurrent storyboard ({len(story.get('slides') or [])} slides, must stay {n}):\n{json.dumps(story)}"
+            + f"\n\nReviewers' issues:\n{issues or '- none listed'}"
+            + (f"\n\nCut, merge or add:\n{cm}" if cm else "")
+            + (f"\n\nNew facts from research:\n{found}" if found else "")
+            + (f"\n\nResearch found nothing for:\n{none}" if none else "")
+            + (f"\n\nResearch was not run ({skipped}): plan only what the facts in hand support." if skipped else ""))
+    try:
+        again = _call(client, STORY_MODEL, head + story_sys, user, task_id, 6000)
+    except Exception:  # noqa: BLE001
+        return None
+    sl = [x for x in again.get("slides") or [] if isinstance(x, dict)] if isinstance(again, dict) else []
+    if len(sl) < max(2, n - 2):
+        return None
+    again["slides"] = sl
+    return again
+
+
+REPLAN_DECK = """You are the engagement manager. A senior partner and a bank MD reviewed the built deck below and
+raised storyline issues. Re-plan ONLY what the issues need: retitle a slide so the titles tell the story, reorder,
+merge two slides into one, cut one, or add a missing slide in the place a cut or merge freed. The deck keeps exactly
+the same number of slides. Locked slides (marked) stay exactly as they are; the cover stays first and the closing slide
+stays last. Return JSON {"slides": [{"from": [original slide numbers], "title": str, "archetype": str,
+"needs": "what the page must show"}]} listing every slide in the new order: "from" is the slide whose content the
+new slide keeps (one number), two numbers to merge them, [] for a new slide (only where a cut or merge freed the
+slot). Titles: the takeaway in one sentence with a verb, <= 15 words, using only numbers the slides already show."""
+
+
+def check_replan(entries, slides: list, locked) -> tuple[list, str]:
+    """A deck re-plan is applied only when it keeps the count, every locked page once and unchanged, the cover first
+    and the closing slide last, and uses no slide twice. Returns (entries, "") or ([], why)."""
+    n = len(slides)
+    if not isinstance(entries, list) or len(entries) != n:
+        return [], f"re-plan has {len(entries) if isinstance(entries, list) else 0} slides, the deck {n}"
+    out, used = [], []
+    for e in entries:
+        if not isinstance(e, dict):
+            return [], "re-plan entry is not an object"
+        src = [int(x) for x in e.get("from") or [] if isinstance(x, (int, float, str)) and str(x).strip().isdigit()]
+        if any(not 1 <= k <= n for k in src):
+            return [], f"re-plan names a slide outside 1-{n}"
+        if not src and (e.get("archetype") not in ARCHETYPES or e.get("archetype") in ("cover", "agenda")
+                        or not str(e.get("title") or "").strip()):
+            return [], "a new slide needs a title and a content archetype"
+        used += src
+        out.append(dict(e, **{"from": src}))
+    if len(used) != len(set(used)):
+        return [], "re-plan uses a slide twice"
+    for i in range(n):
+        if locked(i) and not any(e["from"] == [i + 1] for e in out):
+            return [], f"locked slide {i + 1} moved, merged or cut"
+    if slides[0].get("archetype") == "cover" and out[0]["from"] != [1]:
+        return [], "the cover must stay first"
+    if slides[-1].get("archetype") in ("closing", "end") and n not in out[-1]["from"]:
+        return [], "the closing slide must stay last"
+    return out, ""
+
+
+def panel_report(sb: dict, deck_hist: list, final: dict | None, research_log: list, on: bool, insert: bool) -> dict:
+    """The reviewers' record for qa.json and the answer: every storyboard and deck round (scores, verdicts, what was
+    done), the research done, the final verdict line, and, when they could not run, why. Never a made-up score."""
+    if not on:
+        return {"status": "off", "why": sb.get("off") or "reviewers off"}
+    from engines.forge import critics
+
+    def rnd(e, extra=()):
+        pn = e.get("panel") or {}
+        d = {"round": e.get("round"), "score": e.get("score"), "signed_off": e.get("signed_off"),
+             "scores": pn.get("scores"), "verdicts": {r["persona"]: r.get("verdict") for r in pn.get("reviews") or []},
+             "not_run": pn.get("not_run"), "issues": len(pn.get("issues") or [])}
+        if pn.get("not_run"):
+            d["why_not_run"] = critics.why_not_run(pn)
+        for k in extra:
+            if e.get(k) is not None:
+                d[k] = e[k]
+        return d
+    sbr = sb.get("rounds") or []
+    sb_last = sbr[-1]["panel"] if sbr else None
+    if final is None or not any(r.get("status") == "ok" for r in final.get("reviews") or []):
+        status = "not_run"
+    elif final.get("signed_off"):
+        status = "signed_off" if not final.get("not_run") else "partial"
+    else:
+        status = "revise"
+    return {
+        "status": status, "line": critics.verdict_line(final),
+        "storyboard": {"rounds": [dict(rnd(e, ("replanned",)), new_facts=[f["id"] for f in e.get("new_facts") or []],
+                                       research=[{k: q.get(k) for k in ("question", "status", "facts")}
+                                                 for q in (e.get("research") or {}).get("questions") or []
+                                                 if isinstance(q, dict)] or (e.get("research") or {}).get("skipped"))
+                                  for e in sbr],
+                       "signed_off": sb.get("signed_off"), "final": critics.compact(sb_last),
+                       "line": critics.verdict_line(sb_last, "storyboard")},
+        "deck": {"rounds": [rnd(e, ("reverted_to", "kept", "actions", "note")) for e in deck_hist],
+                 "final": critics.compact(final)},
+        "research": {"allowed": sb.get("research_allowed"), "why_not": sb.get("why_no_research"),
+                     "steps": [{"step": r.get("step"), "seconds": r.get("seconds"),
+                                "questions": [{k: q.get(k) for k in ("question", "status", "facts", "sources")}
+                                              for q in r.get("questions") or []],
+                                "new_facts": [{k: f.get(k) for k in ("id", "text", "url")} for f in r.get("facts") or []]}
+                               for r in research_log]},
+    }
+
+
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
-          insert: bool = False) -> dict:
-    """density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
+          insert: bool = False, research: bool | None = None, design: str | None = None,
+          design_images=None) -> dict:
+    """research: allow the reviewers' research step (None: on for live builds, see research.allowed()).
+    design: "image" | "auto" | "archetype" (None: env MH_DESIGN, then rules design.mode): content slides drawn
+    design-first (an image model designs the page, a vision model reads it back, the page is rebuilt natively;
+    engines/forge/design.py), the archetype renderer as the fallback per slide. design_images: an image client
+    (tests pass a stub).
+    density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
     help_ = arch_help(density)
@@ -714,7 +995,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     calls = 0
 
     # ---- stage 2: storyline (ghost deck)
-    story = _call(client, STORY_MODEL, f"""You are an engagement manager at a top strategy firm. Plan the storyline
+    story_sys = f"""You are an engagement manager at a top strategy firm. Plan the storyline
 before any slide exists. Return JSON: {{"governing_thought": str, "structure": "SCR",
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "section_icon": "one-word meaning", "title": str,
 "archetype": str, "visual": str, "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
@@ -729,7 +1010,9 @@ is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
-{help_}""", f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}", task_id + "-story", 6000)
+{help_}"""
+    story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}",
+                  task_id + "-story", 6000)
     calls += 1
     notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
     if notes and len(story.get("slides") or []) >= 4:
@@ -745,6 +1028,57 @@ supports it. Choose varied archetypes that prove each title.
                 story = again
         except Exception:
             pass
+
+    # ---- stage 2b: the storyboard loop. The senior partner and the MD read the ghost deck before any slide is
+    # written; what they say is missing goes to a focused research step, and the storyline is re-planned with their
+    # issues and the new facts, until both sign off or the round cap (engines/forge/critics.py, research.py)
+    from engines.forge import critics, research as RS
+    cfg = critics.settings(rules)
+    panel_on = critics.personas_on(client, rules) and not insert
+    rs_ok, rs_why = RS.allowed(client, rules, brief, research)
+    rcaps = RS.caps(rules)
+    research_steps = 0
+    research_log: list[dict] = []
+    sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
+    if panel_on:
+        max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
+        for rnd in range(1, max_sb + 1):
+            mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
+            pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
+                                   timeout=float(cfg["timeout_s"]), task_id=f"{task_id}-sb{rnd}", who=cfg["who"])
+            calls += len(pn["reviews"])
+            entry = {"round": rnd, "storyline": story, "panel": pn, "score": critics.score(pn),
+                     "signed_off": pn["signed_off"]}
+            sb["rounds"].append(entry)
+            if pn["signed_off"] or len(pn["not_run"]) == len(pn["reviews"]) or rnd == max_sb:
+                break
+            new: list[dict] = []
+            qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
+            if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
+                res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
+                                      rules=rules, task_id=f"{task_id}-research-sb{rnd}")
+                research_steps += 1
+                new = res_["facts"]
+                facts.extend(new)
+                entry["research"] = res_
+                research_log.append(dict(res_, step=f"storyboard round {rnd}"))
+            elif qs:
+                entry["research"] = {"skipped": rs_why or "research step cap reached",
+                                     "questions": [q["question"] for q in qs]}
+            entry["new_facts"] = new
+            again = replan_storyline(client, story_sys, story, pn, new, entry.get("research"), brief, facts,
+                                     narrative_n, f"{task_id}-story-r{rnd}")
+            calls += 1
+            if not again:
+                entry["replanned"] = False
+                break
+            entry["replanned"] = True
+            story = again
+        sb["signed_off"] = bool(sb["rounds"]) and sb["rounds"][-1]["signed_off"]
+        critics.dump(out / "storyboard.json", sb)
+    else:
+        sb["off"] = "reviewers off (offline client, MH_REVIEW=0, MH_PERSONAS=0 or rules)" if not insert else \
+            "slides added to an existing deck"
     (out / "storyline.json").write_text(json.dumps(story, indent=1))
     nodes = [{"id": s.get("node"), "title": s.get("title")} for s in story.get("slides", [])]
 
@@ -756,6 +1090,12 @@ supports it. Choose varied archetypes that prove each title.
         # The model often plans more than asked when model pages exist, and the extra slides restate (or worse,
         # re-estimate) those pages' numbers. Keep the opening slides and the closing one, at the asked length.
         plan = plan[:narrative_n - 1] + plan[-1:]
+    # The brief's slide count is a hard limit (P16): the storyline model often plans one or two slides more than
+    # asked, and the bookends add one; the agenda and the executive summary fit inside the count, never on top.
+    plan, cut = fit_count(plan, narrative_n)
+    if cut:
+        story["cut_to_fit_count"] = cut
+        (out / "storyline.json").write_text(json.dumps(story, indent=1))
     if agenda:
         plan = add_agenda(plan)
     nodes = [{"id": x.get("node"), "title": x.get("title")} for x in plan]
@@ -794,14 +1134,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     from engines.forge import clarity                          # a second, smaller model reads every line once
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
-    rounds = []
-    pptx = out / "deck.pptx"
-    for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
-                   brand=brand)          # the brief's slide count is a hard limit
-        prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
-                       provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+    def collect(r, res):                                   # every content check, after a render
         fails = _content_failures(res)
         calcs_ok, calcs_bad = verify_calcs(slides, facts, rules)
         for n, msgs in calcs_bad.items():
@@ -817,6 +1150,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
         for n, msgs in prose_checks(slides).items():
             fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
+        for n, msgs in variety_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
             if m and int(m.group(1)) - 1 < len(slides):
@@ -830,20 +1165,47 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         for i in range(len(slides)):                         # computed pages are not rewritten by a model
             if is_fixed(i):
                 fails.pop(i + 1, None)
-        rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
-        if not fails or rnd == rules["repair"]["max_rounds"]:
-            break
-        if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
-            break                                            # two rounds without progress: stop paying for repairs
-        repaired = set()
+        return fails
 
-        def fix_one(item):                                     # one call per failing slide, all in parallel
+    rounds = []
+    pptx = out / "deck.pptx"
+    # design-first pages (engines/forge/design.py): an image model designs each content slide, a vision model reads
+    # it back as a layout spec, and the renderer rebuilds it natively; the archetype draws any slide it cannot
+    from engines.forge import design as DZ
+    dmode = DZ.resolve_mode(design, rules)
+    designer = None
+    if not insert and (dmode == "image" or (dmode == "auto" and isinstance(client, LiveClient))):
+        designer = DZ.Designer(client, rules, str(out), theme=theme, density=density, mode=dmode,
+                               images=design_images, task_id=task_id)
+
+    def designed():
+        specs = designer.specs(slides) if designer else {}
+        return specs, [dict(s_, _design=specs[i]) if i in specs else s_ for i, s_ in enumerate(slides)]
+
+    def draw():
+        for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
+            specs, view_ = designed()
+            r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
+                       brand=brand)          # the brief's slide count is a hard limit
+            prov = json.loads(Path(r["provenance"]).read_text())
+            res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
+                           provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            if not specs or not designer.check(str(pptx), r, res, slides, specs):
+                break
+        return r, res
+
+    def repair(fails, tag):                                    # one call per failing slide, all in parallel
+        nonlocal calls
+
+        def fix_one(item):
             n, msgs = item
             s = slides[n - 1]
             ev = set(next((x.get("evidence", []) for x in story.get("slides", []) if x.get("node") == s.get("node")), []))
             rel = [f for f in facts if f["id"] in ev] or facts
-            if any(m.startswith(("[P20]", "[fill]", "[schema]")) for m in msgs):
+            if any(m.startswith(("[P20]", "[fill]", "[schema]", "[review]", "[variety]")) for m in msgs):
                 rel = facts                                  # a thin slide needs the whole evidence base to fill
+            if any(m.startswith(THIN_TAGS) for m in msgs):   # ... and to know which of it is still unused
+                msgs = list(msgs) + [substance_hint(slides, facts)]
             try:
                 return n, _call(client, MODEL, f"""Fix this one consulting slide. Change only words, numbers, archetype
 choice or the number of items; never layout. Keep node and keep the point of the title. Return the full slide JSON.
@@ -851,30 +1213,238 @@ choice or the number of items; never layout. Keep node and keep the point of the
 {WRITE[density]}
 {SLIDE_SHAPE}
 {help_}""", "Failures to fix:\n- " + "\n- ".join(msgs) + f"\n\nSlide:\n{json.dumps(s)}\n\nFacts:\n" +
-                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-r{rnd}", 6000)
+                    "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-fix{n}-{tag}", 6000)
             except Exception:
                 return n, None
-        todo = [(n, m) for n, m in sorted(fails.items()) if n - 1 < len(slides)]
+        repaired = set()
+        todo = [(n, m) for n, m in sorted(fails.items()) if n - 1 < len(slides) and not is_fixed(n - 1)]
+        if not todo:
+            return repaired
         with ThreadPoolExecutor(min(8, max(1, len(todo)))) as ex:
-            for n, fixed in ex.map(fix_one, todo):
+            for n, fixed_ in ex.map(fix_one, todo):
                 calls += 1
-                if isinstance(fixed, dict) and fixed.get("archetype") in ARCHETYPES:
+                if isinstance(fixed_, dict) and fixed_.get("archetype") in ARCHETYPES:
                     for k in ("section", "section_icon"):          # the agenda's page numbers follow the section
                         if slides[n - 1].get(k):
-                            fixed.setdefault(k, slides[n - 1][k])
-                    slides[n - 1] = fixed
+                            fixed_.setdefault(k, slides[n - 1][k])
+                    slides[n - 1] = fixed_
                     repaired.add(n - 1)
         if repaired:                                            # repaired slides get the same clarity read
             clear.append(clarity.review(slides, client, only=repaired, main_model=MODEL,
-                                        task_id=f"{task_id}-clarity-r{rnd}"))
+                                        task_id=f"{task_id}-clarity-{tag}"))
             calls += 1
+        return repaired
+
+    for rnd in range(rules["repair"]["max_rounds"] + 1):
+        r, res = draw()
+        fails = collect(r, res)
+        rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
+        if not fails or rnd == rules["repair"]["max_rounds"]:
+            break
+        if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
+            break                                            # two rounds without progress: stop paying for repairs
+        repair(fails, f"r{rnd}")
+
+    # the review panel: the senior partner and the MD read the rendered pages; every issue goes to the step that can
+    # fix it (content and data -> the writer, layout -> a re-layout or an archetype instruction, storyline -> a re-plan
+    # of the affected slides, research -> a research step and a rewrite); re-render, re-validate, review again until
+    # both sign off, the round cap, or two rounds without a better score. The best-scoring version is kept.
+    reviews = []
+    deck_hist: list[dict] = []
+    panel_final = None
+    if panel_on:
+        import copy
+
+        def ids_for(text):                                   # a slide for a question that names none: the title
+            from engines.research.library import tokens       # sharing most of its words
+            qt = set(tokens(text))
+            best_n, best_k = None, 1
+            for i, s_ in enumerate(slides):
+                if is_fixed(i) or s_.get("archetype") in ("cover", "agenda", "section_divider"):
+                    continue
+                k = len(qt & set(tokens(str(s_.get("title") or ""))))
+                if k > best_k:
+                    best_n, best_k = i + 1, k
+            return best_n
+
+        def replan_deck(issues, tag):
+            nonlocal calls
+            outline = "\n".join(f"{i}. [{s_.get('archetype')}] {s_.get('title')}" + (" (locked)" if is_fixed(i - 1) else "")
+                                 for i, s_ in enumerate(slides, 1))
+            try:
+                d = _call(client, STORY_MODEL, REPLAN_DECK + "\n" + CONSULTING + "\n" + VISUALS,
+                          f"Deck ({len(slides)} slides):\n{outline}\n\nStoryline issues:\n"
+                          + "\n".join(f"- [{i['severity']}, {i.get('persona')}] {i.get('where') or 'storyline'}: "
+                                      f"{i['issue']} -> {i.get('fix') or ''}" for i in issues),
+                          f"{task_id}-replan-{tag}", 4000)
+                calls += 1
+            except Exception as e:  # noqa: BLE001
+                return {"status": "failed", "why": str(e)[:200]}, None, {}
+            plan2, why = check_replan(d.get("slides") if isinstance(d, dict) else None, slides, is_fixed)
+            if why:
+                return {"status": "rejected", "why": why}, None, {}
+            old, new_, asks_ = list(slides), [], {}
+            remap = {}
+            for k, e in enumerate(plan2):
+                src, title, arch = e["from"], str(e.get("title") or "").strip(), e.get("archetype")
+                if len(src) == 1:
+                    s_ = old[src[0] - 1]
+                    remap[src[0]] = k + 1
+                    if is_fixed(src[0] - 1) or ((not title or title == s_.get("title"))
+                                                and (not arch or arch == s_.get("archetype"))):
+                        new_.append(s_)
+                        continue
+                    new_.append(dict(s_))
+                    asks_[k + 1] = [f"[review] (storyline) This page now makes the point: '{title or s_.get('title')}'"
+                                    + (f", as a {arch} page" if arch in ARCHETYPES and arch != s_.get("archetype") else "")
+                                    + f". Rewrite it to prove that title{': ' + e['needs'] if e.get('needs') else ''}."]
+                elif src:
+                    base = dict(old[src[0] - 1])
+                    remap[src[0]] = k + 1
+                    others = [old[j - 1] for j in src[1:]]
+                    new_.append(base)
+                    asks_[k + 1] = [f"[review] (storyline) Merge: this page now carries slides {', '.join(map(str, src))} "
+                                    f"as one, titled '{title}'. Keep the strongest evidence of both. The other slide: "
+                                    + json.dumps([{k_: v for k_, v in o.items() if k_ not in ('notes',)} for o in others])[:3000]]
+                else:
+                    x = {"node": f"R{k + 1}", "section": "", "title": title, "archetype": arch,
+                         "needs": e.get("needs") or "", "evidence": []}
+                    s_ = one(x)
+                    calls += 1
+                    s_.setdefault("node", x["node"])
+                    new_.append(s_)
+            slides[:] = new_
+            fill_agenda(slides, [{} for _ in slides])
+            nodes[:] = [{"id": s_.get("node"), "title": s_.get("title")} for s_ in slides]
+            return {"status": "applied", "plan": [{"from": e["from"], "title": e.get("title")} for e in plan2]}, remap, asks_
+
+        def apply_panel(pn, tag):
+            nonlocal calls, research_steps
+            rt = critics.route(pn, slides, is_fixed)
+            act: dict = {"content": sorted(rt["content"]), "layout": sorted(rt["layout"]), "unplaced": len(rt["unplaced"])}
+            asks: dict[int, list[str]] = {}
+            if rt["storyline"]:
+                act["storyline"], remap, extra = replan_deck(rt["storyline"], tag)
+                if remap is not None:                         # issues follow their slide to its new place
+                    rt["content"] = {remap[n]: m for n, m in rt["content"].items() if n in remap}
+                    rt["layout"] = {remap[n]: m for n, m in rt["layout"].items() if n in remap}
+                    for n, m in extra.items():
+                        asks.setdefault(n, []).extend(m)
+            qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
+            if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
+                res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
+                                      rules=rules, task_id=f"{task_id}-research-{tag}")
+                research_steps += 1
+                facts.extend(res_["facts"])
+                research_log.append(dict(res_, step=f"deck review {tag}"))
+                act["research"] = {"questions": [{k: q[k] for k in ("question", "status", "facts")} for q in res_["questions"]],
+                                   "new_facts": [f["id"] for f in res_["facts"]]}
+                for q in res_["questions"]:
+                    if not q["facts"]:
+                        continue
+                    n = critics.P.slide_of(q.get("where", "")) or ids_for(q["question"])
+                    if n and not is_fixed(n - 1):
+                        asks.setdefault(n, []).append(
+                            f"[review] (research) The reviewers asked: {q['question']}. New sourced facts "
+                            f"{', '.join(q['facts'])} answer it: use them where they prove or correct this page, cite "
+                            "them in prov and add their source to the source line.")
+            elif qs:
+                act["research"] = {"skipped": rs_why or "research step cap reached",
+                                   "questions": [q["question"] for q in qs]}
+            fixed_layout = {}
+            for n, its in rt["layout"].items():
+                done = critics.relayout(slides[n - 1], its)
+                if done:
+                    fixed_layout[n] = done
+                else:
+                    asks.setdefault(n, []).extend(critics.layout_instruction(its))
+            act["layout_fixed"] = fixed_layout
+            for n, msgs in rt["content"].items():
+                asks.setdefault(n, []).extend(msgs)
+            for n in asks:                                     # with the slide's open rule failures, fixed together
+                asks[n] += [m for m in fails.get(n, []) if m not in asks[n]]
+            act["to_writer"] = sorted(asks)
+            act["rewritten"] = sorted(i + 1 for i in repair(asks, tag)) if asks else []
+            return act
+
+        best = None
+        stall = 0
+        max_rv = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"]))
+        for rnd in range(1, max_rv + 1):
+            pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
+                                    task_id=f"{task_id}-panel{rnd}")
+            calls += len(pn["reviews"]) * int(pn.get("batches") or 1)
+            sc = critics.score(pn)
+            entry = {"round": rnd, "panel": pn, "score": sc, "signed_off": pn["signed_off"]}
+            deck_hist.append(entry)
+            if sc is None:                                    # nobody could review: say so, never score
+                entry["note"] = "reviewers did not run: " + critics.why_not_run(pn)
+                break
+            if best is None or sc >= best["score"]:
+                improved = best is None or sc > best["score"]
+                best = {"score": sc, "slides": copy.deepcopy(slides), "round": rnd, "panel": pn,
+                        "nodes": copy.deepcopy(nodes)}
+                stall = 0 if improved else stall + 1
+            else:                                             # worse than the best version: back to it
+                stall += 1
+                slides[:] = copy.deepcopy(best["slides"])
+                nodes[:] = copy.deepcopy(best["nodes"])
+                entry["reverted_to"] = best["round"]
+                r, res = draw()
+                fails = collect(r, res)
+            if pn["signed_off"] or rnd == max_rv or stall >= 2:
+                break
+            entry["actions"] = apply_panel(best["panel"] if entry.get("reverted_to") else pn, f"panel{rnd}")
+            r, res = draw()
+            fails = collect(r, res)
+            if fails and repair(fails, f"panel{rnd}-rules"):   # the rewrites pass the rule checks again
+                r, res = draw()
+                fails = collect(r, res)
+            rounds.append({"round": f"panel{rnd}", "rules": res["rules"],
+                           "content_failures": sum(len(v) for v in fails.values())})
+        if best is not None and slides != best["slides"]:   # keep the best-scoring version
+            slides[:] = copy.deepcopy(best["slides"])
+            nodes[:] = copy.deepcopy(best["nodes"])
+            r, res = draw()
+            fails = collect(r, res)
+            deck_hist[-1]["kept"] = best["round"]
+        panel_final = best["panel"] if best is not None else (deck_hist[-1]["panel"] if deck_hist else None)
+        (out / "review.json").write_text(json.dumps({"rounds": deck_hist, "kept_round": best["round"] if best else None,
+                                                     "bar": cfg["bar"]}, indent=1, default=str))
+    elif _review_on(client, rules):
+        # the single generic partner review (review.personas.enabled false): content complaints go back to the
+        # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
+        from engines.forge import review as RV
+        rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
+                            task_id=f"{task_id}-review")
+        reviews.append(rv)
+        calls += 1
+        asks = RV.as_failures(rv, scopes=("content",))
+        if asks:
+            for n, msgs in asks.items():                     # with the slide's open rule failures, fixed together
+                asks[n] = list(msgs) + [m for m in fails.get(n, []) if m not in msgs]
+            if repair(asks, "review"):
+                r, res = draw()
+                fails = collect(r, res)
+                rounds.append({"round": "review", "rules": res["rules"],
+                               "content_failures": sum(len(v) for v in fails.values())})
+                rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
+                                    task_id=f"{task_id}-review-final")
+                reviews.append(rv)
+                calls += 1
+        for n, msgs in RV.as_failures(rv, severities=("high",)).items():   # what is still high goes to the notes
+            fails.setdefault(n, []).extend(m for m in msgs if m not in fails.get(n, []))
+        (out / "review.json").write_text(json.dumps(reviews, indent=1, default=str))
     # freeze what is left into the notes: nothing passes silently
     left = fails
-    if left and rules["repair"]["flag_in_file"]:
+    open_review = critics.review_notes(panel_final, len(slides)) if panel_final else {}
+    if (left or open_review) and rules["repair"]["flag_in_file"]:
         for n, msgs in left.items():
             if n - 1 < len(slides):
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
+        for n, msgs in open_review.items():                  # the reviewers' blocking and major issues still open
+            slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join(msgs)).strip()
+        r = render(designed()[1], str(pptx), carry=False, theme=theme, density=density, template=template,
                    brand=brand)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
@@ -885,8 +1455,21 @@ choice or the number of items; never layout. Keep node and keep the point of the
     res.pop("measurement", None)
     (out / "qa.json").write_text(json.dumps(dict(res, rounds=rounds, unresolved=left), indent=1, default=str))
     (out / "clarity.json").write_text(json.dumps(clear, indent=1, default=str))
+    verdict = review_verdict(reviews)
+    panel = panel_report(sb, deck_hist, panel_final, research_log, panel_on, insert)
+    qa = json.loads((out / "qa.json").read_text())
+    if verdict is not None:                                  # the verdict travels with the QA record too
+        qa["review"] = verdict
+    qa["panel"] = panel                                      # the reviewers' history, scores and open issues
+    dz = None
+    if designer:                                             # which path drew each slide, and why
+        dz = designer.report()
+        (out / "design.json").write_text(json.dumps(dz, indent=1, default=str))
+        qa["design"] = dz
+    (out / "qa.json").write_text(json.dumps(qa, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
-            "unresolved": {k: v for k, v in left.items()}}
+            "unresolved": {k: v for k, v in left.items()}, "review": verdict, "panel": panel,
+            "slides": len(slides), "design": dz}
 
 
 if __name__ == "__main__":
@@ -898,6 +1481,7 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("--slides", type=int, default=12)
     ap.add_argument("--density", choices=["present", "balanced", "read"], default=None)
+    ap.add_argument("--design", choices=["archetype", "image", "auto"], default=None)
     a = ap.parse_args()
-    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density)
+    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design)
     print(json.dumps(r, indent=1, default=str))

@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import copy
 import difflib
 import http.client
 import itertools
@@ -27,6 +28,7 @@ from pathlib import Path
 from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
+from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -36,6 +38,7 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
+
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
@@ -210,6 +213,106 @@ Rules
 - Write plainly: short sentences, no filler."""
 
 
+def _set_read_timeout(resp, seconds: float) -> None:
+    """Change the read timeout of an open urllib response (CPython keeps the socket at fp.raw._sock)."""
+    try:
+        resp.fp.raw._sock.settimeout(seconds)
+    except Exception:  # noqa: BLE001  another runtime or a test double: keep the timeout it was opened with
+        pass
+
+
+class _Track:
+    """urllib handler mixin: hand each new connection to a callback, so Stop can shut its socket even while the
+    request is still waiting for the response headers (a gateway that never answers)."""
+    def __init__(self, sink, *a, **kw):
+        super().__init__(*a, **kw)
+        self.sink = sink
+
+    def do_open(self, http_class, req, **kw):
+        sink = self.sink
+
+        def make(host, **k):
+            c = http_class(host, **k)
+            sink(c)
+            return c
+        return super().do_open(make, req, **kw)
+
+
+class _TrackHTTP(_Track, urllib.request.HTTPHandler):
+    pass
+
+
+class _TrackHTTPS(_Track, urllib.request.HTTPSHandler):
+    pass
+
+
+class _EndpointDown(RuntimeError):
+    """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
+
+
+def _urlopen(req, timeout: float, sink):
+    """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
+    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
+
+
+def _probe_once(base: str, key: str, model: str, sink=None) -> str:
+    """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
+    A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
+    body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        t = float(os.environ.get("MH_PROBE_S", "30"))
+        with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
+            r.read()
+        return "ok"
+    except urllib.error.HTTPError as e:
+        return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001
+        return f"HTTP 0: {e}"
+
+
+def _image_in_newest_ask(messages: list) -> bool:
+    """Whether the newest message the user typed (not a tool's screenshot, not a Meshpool note) carries an image."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(str(p.get("text") or "") for p in c or []
+                                                       if isinstance(p, dict) and p.get("type") == "text")
+        if text.startswith(("Image returned by", "[Meshpool]")):
+            continue                                    # attached by a tool (_attach_images) or a harness note
+        return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    return False
+
+
+def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
+    """Shorten user messages over `keep` characters to their start and end, with a note in the middle. A message too
+    big for the endpoint otherwise goes with every later request too and the chat cannot recover. True if cut."""
+    def shorten(c: str) -> str:
+        return (c[:keep * 3 // 4] + f"\n\n[... {len(c) - keep} characters left out: the message was too large for "
+                "the endpoint ...]\n\n" + c[-keep // 4:])
+    cut = False
+    for m in messages:
+        c = m.get("content")
+        if m.get("role") != "user":
+            continue
+        if isinstance(c, str) and len(c) > keep:
+            m["content"], cut = shorten(c), True
+        elif isinstance(c, list):                       # text sent along with an image
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "text" and len(str(p.get("text") or "")) > keep:
+                    p["text"], cut = shorten(str(p["text"])), True
+    return cut
+
+
+def _lighten(messages: list) -> None:
+    """After an outage: elide older tool outputs only when the conversation is very large (over 150k characters),
+    keeping the last eight verbatim. Smaller conversations are left whole, so a long task keeps its context."""
+    if _context_size(messages) > 150000:
+        _compact(messages, keep_recent=8)
+
+
 def _retry_text(msg: str, attempt: int) -> str:
     """One calm line per retry instead of the raw network error."""
     m = msg.lower()
@@ -339,7 +442,7 @@ def _shrink_args(messages: list, keep: int = 200) -> None:
             f["arguments"] = json.dumps(a, ensure_ascii=False)
 
 
-def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
+def _shrink_context(messages: list, limit: int, hard: bool = False, keep_images: int = 0) -> None:
     """Make the conversation fit: elide older tool outputs, keeping fewer recent ones verbatim until it is under
     `limit`, then shorten long tool-call arguments. hard (the endpoint said the request is over the model's context):
     all of that at once, whatever the size, keeping only the outputs of the latest step."""
@@ -352,7 +455,7 @@ def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
                 m["content"] = (c[:T.HEAD] + f"\n... [{len(c) - T.HEAD - T.TAIL} chars cut: the conversation was "
                                 "over the model's context] ...\n" + c[-T.TAIL:])
         _shrink_args(messages)
-        _drop_images(messages, keep=0)
+        _drop_images(messages, keep=keep_images)
         return
     for keep in (12, 4, 1):
         _compact(messages, keep_recent=keep)
@@ -475,6 +578,25 @@ class Agent:
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
 
+    def _run_subtasks(self, name: str, args: dict):
+        """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
+        its permission mode and its project. Nothing crosses to another process, so nothing there can be forged:
+        any secret handed to another process of the same user can be read by a harness model's shell command
+        (review rounds 6 to 8). The assistant server's run_subtasks, used by Hermes, Codex and Pi, never trusts a
+        parent. Stop here stops them within a fraction of a second."""
+        from meshpool_harness import assistant as AS
+        gen = getattr(self, "_gen", 0)
+        stopped = lambda: self._stop or getattr(self, "_gen", 0) != gen   # noqa: E731
+
+        def run():
+            try:
+                return AS.run_subtasks(args.get("tasks") or [], str(self.root), int(args.get("max_parallel") or 0),
+                                       parent={"model": self.current_model() or "", "mode": self.mode,
+                                               "root": str(self.root)}, trusted=True, cancelled=stopped), False
+            except (ValueError, KeyError, TypeError) as e:
+                return str(e), True
+        return self._wait(run)
+
     def _exists(self, path: str) -> bool:
         try:
             return self.ws._path(path, write=True).exists()
@@ -496,6 +618,7 @@ class Agent:
         while t.is_alive():
             t.join(0.15)
             if self._stop:
+                self._abort_live()                 # close the model stream now, not when it next sends a byte
                 raise Interrupted()
         if "e" in box:
             raise box["e"]
@@ -660,13 +783,25 @@ class Agent:
         except Exception as e:
             self._repair()
             msg = raw = str(e)
-            if re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
-                msg = ("Couldn't reach the model. Check your internet connection, or the endpoint in Settings, then "
-                       "send your message again.")
+            if "endpoint could not take this request" in msg:
+                head = msg.split(" (HTTP", 1)[0]         # already says what to do; keep only the status
+                code = re.search(r"HTTP \d+", msg)
+                msg = raw = head + (f" ({code.group(0)})" if code else "")
+            elif re.search(r"rejected the API key|stopped accepting the API key", msg):
+                msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
+                msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
+                       "to try again; the next try starts on a fresh route."
+                       if "answers small requests" not in msg else
+                       "The endpoint answers small requests, but this conversation's requests keep failing. Send a "
+                       "message to try again, or start a new chat.")
             elif re.search(r"HTTP 429", msg):
                 msg = "The model is busy right now. Wait a minute, then send your message again."
             elif re.search(r"HTTP 5\d\d", msg):
                 msg = "The model service had a problem. Send your message again in a moment."
+            if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
+                _lighten(self.messages)                # the next message starts lighter, on a fresh route
+                self.rotate_route()
             if msg != raw:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
@@ -710,6 +845,18 @@ class Agent:
         two images stay in the conversation; older ones become a short note to keep requests small."""
         if os.environ.get("MH_VISION", "1") == "0" or getattr(self, "_no_vision", False):
             return
+        # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
+        # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
+        cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
+        shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
+        if big:
+            self.messages.append({"role": "user", "content": "[Meshpool] The image from " + ", ".join(sorted(set(big)))
+                                  + " was too large for the model endpoint and was left out, so you did not see it. "
+                                  "Ask the tool for a smaller image (a region, a lower resolution or a JPEG) or go on "
+                                  "without it."})
+        if not shots:
+            return
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
         for _, im in shots[-2:]:
@@ -735,12 +882,19 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
+        keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
+        if sum(1 for m in msgs if isinstance(m.get("content"), list)
+               for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
+            # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
+            # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
+            msgs = [dict(m) if isinstance(m.get("content"), list) else m for m in msgs]
+            _drop_images(msgs, keep=keep)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
         if os.environ.get("MH_CACHE_KEY", "1") == "1":
-            body["prompt_cache_key"] = self.id
-            body["user"] = self.id
+            body["prompt_cache_key"] = self.route_id()
+            body["user"] = self.route_id()
         return body
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
@@ -757,7 +911,12 @@ class Agent:
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
-        for attempt in range(8):
+        attempt, recoveries, swapped = -1, 0, False
+        self._first_scale = 1.0
+        while True:
+            attempt += 1
+            if attempt >= 8:                               # every attempt waited or withheld: report the last error
+                raise last or RuntimeError("HTTP 0: the model call did not go through")
             self._check_stop()
             try:
                 if wire == "chatgpt":                  # the user's ChatGPT sign-in (core/chatgpt.py)
@@ -777,20 +936,54 @@ class Agent:
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
-                    resp, streamed = self._wait(self._post, base, key, body, stream)
+                    h = GW.health(base, key, body["model"])
+                    if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
+                        raise _EndpointDown("HTTP 0: the model endpoint did not come back")
+                    slot = h.acquire(self._check_stop, self.emit)
+                    ok = False
+                    try:
+                        resp, streamed = self._wait(self._post, base, key, body, stream)
+                        ok = True
+                    finally:
+                        h.release(ok, slot)
+                self._first_scale = 1.0
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
             except RuntimeError as e:
                 last, msg = e, str(e)
+                if isinstance(e, _EndpointDown):           # it already waited the whole recovery time
+                    raise
                 if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
+                if kind == "model_missing":
+                    # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
+                    # its provider, once per call. Otherwise say so at once; retrying the same model cannot help.
+                    C.load_into_env(override=True)
+                    if prov == "chatgpt":
+                        from meshpool_harness.core import chatgpt as CG
+                        now = "chatgpt:" + CG.default_model()
+                    else:
+                        now = os.environ.get("MH_MODEL") or DEFAULT_MODEL
+                    if not swapped and PV.split(now)[0] == prov and PV.split(now)[1] != body["model"]:
+                        swapped, old_model = True, body["model"]
+                        self.model = now
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        self.emit({"type": "status", "text": f"This chat's model ({old_model}) is no longer available "
+                                                             f"on your endpoint, so it continues on {body['model']}. "
+                                                             "You can pick another model for it any time."})
+                        continue
+                    raise RuntimeError(f"The endpoint does not serve the model {body['model']}. Choose another model "
+                                       f"for this chat. ({msg[:160]})")
                 if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
                     shrunk = True
-                    _shrink_context(self.messages, 0, hard=True)
+                    # Too long, or too big a request (413): elide older outputs and all but the latest two images,
+                    # so a screenshot the user just attached still goes with the retry.
+                    _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
                     body["model"] = PV.split(body["model"])[1]
                     self.emit({"type": "status", "text": "The conversation was longer than the model can take; "
@@ -822,21 +1015,105 @@ class Agent:
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         continue
-                if attempt >= 5:
-                    raise
-                if re.search(r"HTTP 5\d\d", msg) and attempt >= 1:   # a big request that keeps failing upstream:
-                    if _context_size(self.messages) > 150000:   # shrink it instead of resending the same thing
-                        _compact(self.messages, keep_recent=8)
+                net = bool(re.search(r"HTTP 0|timed out|connection|HTTP 5\d\d|upstream", msg, re.I))
+                if net and wire == "chat":
+                    # One probe says which it is: the endpoint is down or stuck for this key (the probe fails too),
+                    # or it is up and this request is slow or stuck on its route (the probe answers).
+                    h = GW.health(base, key, body["model"])
+                    state = h.check(lambda: self._wait(self._probe, base, key, body["model"]),
+                                    check_stop=self._check_stop)
+                    if state == "auth":                    # not the network: say so, not "can't reach"
+                        raise RuntimeError("The endpoint rejected the API key. Check it in settings. (HTTP 401 on a "
+                                           "check after the call failed)")
+                    if state == "down":
+                        if recoveries >= 3:
+                            raise
+                        recoveries += 1                    # no blind retries: they only pile up behind a stuck key
+                        if not self._await_endpoint(h, base, key, body["model"]):
+                            raise _EndpointDown(msg)
+                        _lighten(self.messages)            # an outage is not about size: trim only a very large one
+                        self.rotate_route()
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
-                        self.emit({"type": "status", "text": "The request was very large; older tool outputs were "
-                                                             "shortened before trying again."})
+                        attempt, self._first_scale = -1, 1.0
+                        continue
+                    big = len(json.dumps(body)) > int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                    if big and re.search(r"HTTP 5\d\d", msg) and not shrunk:
+                        # Up for a small probe, failing for this big request: the real gateway answers an oversized
+                        # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
+                        shrunk = True
+                        _shrink_context(self.messages, 0, hard=True, keep_images=2)
+                        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                        if len(json.dumps(self._body())) > lim:
+                            _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
+                        if self._size_with(self.messages) > lim:
+                            # Try each remedy on a copy and apply only one that makes the request fit: never cut
+                            # the user's text when an image is the problem, or the other way round.
+                            cut = copy.deepcopy(self.messages)
+                            did_cut = _cut_long_user_text(cut)
+                            noimg = copy.deepcopy(self.messages)
+                            _drop_images(noimg, keep=0)
+                            both = copy.deepcopy(cut)
+                            _drop_images(both, keep=0)
+                            has_img = _has_images(self.messages)
+                            newest = _image_in_newest_ask(self.messages)
+                            if has_img and not newest and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # an older or tool image: the cheapest remedy
+                                note = ("An image from earlier in the chat, or a tool's screenshot, made the "
+                                        "request too large for the endpoint, so it was left out.")
+                            elif did_cut and self._size_with(cut) <= lim:
+                                self.messages[:] = cut
+                                note = ("Your message was too large for the endpoint, so its middle was left out. "
+                                        "Attach long text as a file to keep all of it.")
+                            elif has_img and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # gone from the chat, so the next message works
+                                raise RuntimeError("The endpoint could not take this request: the attached image "
+                                                   "was too large, so it was removed from the chat. Attach a "
+                                                   "smaller one (a screenshot of part of the screen, or a JPEG) "
+                                                   "and send it again. (" + msg[:120] + ")")
+                            elif did_cut and has_img and self._size_with(both) <= lim:
+                                self.messages[:] = both
+                                note = ("Your message and its image were too large for the endpoint: the middle of "
+                                        "the text and the image were left out.")
+                            else:
+                                raise RuntimeError("The endpoint could not take this request: the conversation is "
+                                                   "too large even after it was shortened. Start a new chat to "
+                                                   "carry on. (" + msg[:120] + ")")
+                        else:
+                            note = ("The request was too large for the endpoint; older images and tool outputs were "
+                                    "left out before trying again.")
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        self.emit({"type": "status", "text": note})   # one line, saying what was done
+                        continue
+                    if attempt >= 5:                       # up, yet this conversation's requests keep failing
+                        raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
+                                           "requests keep failing]")
+                    if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
+                        self._first_scale = min(5.0, self._first_scale * 2.5)
+                    if attempt == 1:                       # a stuck sticky route (cache affinity) upstream: new route
+                        self.rotate_route()
+                        if "prompt_cache_key" in body:     # only when this endpoint gets cache keys (MH_CACHE_KEY)
+                            body["prompt_cache_key"] = body["user"] = self.route_id()
+                    if attempt == 2 and stream:            # a gateway that mishandles the stream: ask for one reply
+                        stream = False
+                        self.emit({"type": "status", "text": "Trying again without streaming."})
+                elif attempt >= 5:
+                    raise
+                stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
+                if stalled and attempt >= 1:               # a big request that keeps failing upstream:
+                    before = _context_size(self.messages)
+                    if before > 150000:                    # shrink it instead of resending the same thing
+                        _compact(self.messages, keep_recent=8)
+                        if _context_size(self.messages) < before:
+                            body = self._body()
+                            body["model"] = PV.split(body["model"])[1]
+                            self.emit({"type": "status", "text": "The request was very large; older tool outputs "
+                                                                 "were shortened before trying again."})
                 self.emit({"type": "status", "text": _retry_text(msg, attempt)})
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
-        else:                                              # every attempt waited or withheld: report the last error
-            raise last or RuntimeError("HTTP 0: the model call did not go through")
         self.emit({"type": "model_end"})
         self._n429 = 0
         u = resp.get("usage") or {}
@@ -855,6 +1132,55 @@ class Agent:
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
 
+    def _size_with(self, messages: list) -> int:
+        """How big the request would be with these messages (the body _post sends)."""
+        saved = self.messages
+        self.messages = messages
+        try:
+            return len(json.dumps(self._body()))
+        finally:
+            self.messages = saved
+
+    def route_id(self) -> str:
+        """The id the endpoint sees for this chat (cache affinity, gateway session). Changes after a stuck route."""
+        return self.id + getattr(self, "_route", "")
+
+    def rotate_route(self):
+        n = getattr(self, "_route_n", 0) + 1
+        self._route_n, self._route = n, f"-r{n}"
+
+    def _abort_live(self):
+        c, self._live = getattr(self, "_live", None), None
+        if c is not None:
+            c._mh_abort = True                           # still connecting: checked_connect closes it (_post)
+        sock = getattr(c, "sock", None)
+        if sock is not None:
+            try:
+                import socket
+                sock.shutdown(socket.SHUT_RDWR)          # wakes a read blocked on headers or on the stream
+            except Exception:  # noqa: BLE001  already closed
+                pass
+
+    def _probe(self, base: str, key: str, model: str) -> str:
+        def sink(c):                                     # Stop shuts the probe's socket too (_abort_live)
+            self._live = c
+            connect = c.connect
+
+            def checked_connect():
+                connect()
+                if getattr(c, "_mh_abort", False):
+                    c.close()
+                    raise ConnectionAbortedError("stopped while connecting")
+            c.connect = checked_connect
+        return _probe_once(base, key, model, sink)
+
+    def _await_endpoint(self, h, base: str, key: str, model: str) -> bool:
+        """Wait, shared with every other chat on this endpoint, until it answers a probe again: up to
+        MH_RECOVER_MIN minutes (30). False when it did not come back in time, or recovery is off."""
+        budget = max(0.0, float(os.environ.get("MH_RECOVER_MIN", "30")) * 60)   # 0: one probe, no waiting
+        return h.wait_until_up(lambda: self._wait(self._probe, base, key, model), self._sleep, self.emit, budget,
+                               self._check_stop)
+
     def _sleep(self, s: float):
         end = time.time() + s
         while time.time() < end:
@@ -868,18 +1194,50 @@ class Agent:
             b["stream_options"] = {"include_usage": True}
         req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": self.id, "session_id": self.id})
-        timeout = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
+                                              "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
+        # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
+        # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
+        # long task the same way ("The read operation timed out").
+        idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
+        first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
         got_text = False
         gen = getattr(self, "_gen", 0)
+        live = []
+
+        def sink(c):
+            live.append(c)
+            self._live = c                               # Stop shuts this socket, before or after the headers
+            connect = c.connect
+
+            def checked_connect():                       # Stop while connecting: close before sending anything
+                connect()
+                if getattr(c, "_mh_abort", False):
+                    c.close()
+                    raise ConnectionAbortedError("stopped while connecting")
+            c.connect = checked_connect
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _urlopen(req, first, sink) as r:
                 if not stream:
-                    return json.loads(r.read().decode("utf-8", "replace")), False
+                    raw_body = r.read()
+                    try:
+                        return json.loads(raw_body.decode("utf-8", "replace")), False
+                    except ValueError:                   # a gateway that streams anyway, or sends an error page
+                        if raw_body.lstrip().startswith(b"data:"):
+                            return sse_to_chat(raw_body.splitlines(keepends=True)), False
+                        raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
 
                 def tee(lines):
                     nonlocal got_text
+                    started, t_data = False, time.time()
                     for raw in lines:
+                        if not started:                  # bytes are flowing: from here on, a gap is the idle clock
+                            started = True
+                            _set_read_timeout(r, idle)
+                        if raw.startswith(b"data:"):
+                            t_data = time.time()
+                        elif time.time() - t_data > first:   # only keep-alives: they must not hold a slot forever
+                            raise RuntimeError(f"HTTP 0: connection problem (timed out: only keep-alives for "
+                                               f"{int(first)} s)")
                         if self._stop or getattr(self, "_gen", 0) != gen:
                             raise Interrupted()
                         line = raw.decode("utf-8", "replace").strip()
@@ -900,12 +1258,21 @@ class Agent:
                         not resp["choices"][0]["message"].get("tool_calls"):
                     raise RuntimeError("HTTP 0: the stream ended before the reply")
                 return resp, got_text
+        except RuntimeError:
+            if got_text:                             # a reply cut short after some text: the retry starts clean
+                self.emit({"type": "stream_reset"})
+            raise
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}")
+            ra = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
+            raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}"
+                               + (f" [retry-after: {ra}]" if ra else ""))
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
             raise RuntimeError(f"HTTP 0: connection problem ({e})")
+        finally:
+            if live and getattr(self, "_live", None) is live[-1]:   # never clear a newer call's handle
+                self._live = None
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:
@@ -1082,6 +1449,10 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+            elif is_mcp and name.endswith("run_subtasks"):
+                out, err = self._run_subtasks(name, args)
+                ok = not err
+                out = self.ws._cap(str(out), "mcp")
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
                 ok = not err

@@ -239,3 +239,49 @@ def test_live_review_flags_a_words_only_topic_slide(tmp_path):
     rules = {c["rule"] for c in s1["complaints"]}
     assert rules & {"S1", "V1"}, s1["complaints"]
     assert R.as_failures(rv)[1][0].startswith("[review] ")
+
+
+def test_build_sends_review_complaints_to_the_writer_and_reports_the_verdict(tmp_path, monkeypatch):
+    """The partner review runs after the rule repairs: its content complaints go back to the writer once, the deck
+    is reviewed again, and the build returns the verdict."""
+    import json as _json
+    from engines.forge import build as B, review as RV
+    asked = []
+
+    class Stub:
+        def chat(self, *, model, messages, **kw):
+            sys_, user = messages[0]["content"], messages[-1]["content"]
+            if isinstance(user, list):
+                user = " ".join(p.get("text", "") for p in user if isinstance(p, dict))
+            if "engagement manager" in sys_:
+                body = {"slides": [{"node": "0", "title": "Northwind plan", "archetype": "cover"},
+                                   {"node": "1.1", "title": "North revenue grew 18% to $120m", "archetype": "bar_takeaway",
+                                    "evidence": ["F1"]}]}
+            elif "Fix this one consulting slide" in sys_:
+                asked.append(user)
+                body = _json.loads(user.split("Slide:\n", 1)[1].split("\n\nFacts", 1)[0])
+            elif "ONE consulting slide" in sys_:
+                x = _json.loads(user.split("This slide: ", 1)[1].split("\n\nFacts", 1)[0])
+                body = dict(x, subtitle="Board", date="2026") if x["archetype"] == "cover" else dict(
+                    x, subtitle="Revenue by region, $m, 2025", takeaway={"text": "North leads growth", "prov": ["F1"]},
+                    chart={"kind": "bar", "categories": ["North", "South", "East"],
+                           "series": [{"name": "Revenue", "values": [120, 90, 60], "prov": ["F1"]}], "unit": "$m"},
+                    bullets=[{"text": "North revenue was $120m", "prov": ["F1"]}],
+                    source={"text": "Company data", "prov": ["F1"]})
+            else:
+                body = {"edits": []}
+            return {"choices": [{"message": {"content": _json.dumps(body)}}]}
+
+    reviews = iter([
+        {"status": "ok", "slides": [{"slide": 2, "verdict": "fix", "score": 5, "complaints": [
+            {"severity": "high", "category": "story", "issue": "title not proved", "fix": "show the growth rate",
+             "scope": "content"}]}]},
+        {"status": "ok", "slides": [{"slide": 2, "verdict": "ship", "score": 8, "complaints": []}]}])
+    monkeypatch.setattr(B, "_review_on", lambda client, rules: True)
+    monkeypatch.setenv("MH_PERSONAS", "0")               # the generic single review (personas: test_forge_panel.py)
+    monkeypatch.setattr(RV, "review_deck", lambda *a, **k: next(reviews))
+    brief = "Facts\n- North revenue $120m, South $90m, East $60m in 2025; North grew 18%"
+    res = B.build(brief, str(tmp_path), slides_wanted=2, client=Stub(), task_id="t")
+    assert any("[review] title not proved" in a for a in asked)
+    assert res["review"]["score"] == 8 and res["review"]["verdict"] == "ship"
+    assert (tmp_path / "review.json").exists()

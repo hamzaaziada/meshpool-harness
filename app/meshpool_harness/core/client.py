@@ -48,7 +48,7 @@ _CONTEXT_RX = None
 
 def classify_error(msg: str) -> str:
     """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
-    'auth' (key refused), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
     at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
     context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
     connection lost, timeout) or 'fatal'."""
@@ -62,6 +62,13 @@ def classify_error(msg: str) -> str:
     m = msg or ""
     if "HTTP 401" in m or "HTTP 403" in m:
         return "auth"
+    if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
+            r"(?:invalid|unknown|unsupported|no such|not a valid) model|model[ _-]?not[ _-]?found|model\b[^.\n]{0,80}?"
+            r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)"
+            r"|key_model_access_denied", m, re.I):
+        return "model_missing"                      # an old chat on a model the endpoint no longer serves
+    if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
+        return "context"                            # the request is too big: shrink it like a context overflow
     if "HTTP 429" in m:
         return "rate_limit"
     if "rejected as invalid" in m:
@@ -84,6 +91,9 @@ def rate_limit_wait(msg: str, n429: int, backoff: bool = True) -> float:
     import re
     import time
     wait = min(60, 3 * 2 ** (max(1, n429) - 1)) if backoff else 65
+    ra = re.search(r"\[retry-after: (\d+(?:\.\d+)?)\]", msg or "")   # the gateway said how long
+    if ra:
+        return max(1.0, min(300.0, float(ra.group(1))))
     mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg or "")
     if mt:
         reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
@@ -102,6 +112,9 @@ class LiveClient:
 
     def chat(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
              max_tokens=8192, temperature=None, extra=None):
+        allow = [m.strip() for m in os.environ.get("MH_MODEL_ALLOW", "").split(",") if m.strip()]
+        if allow and model not in allow:                 # a cost cap: only these models may be called; a fallback
+            raise RuntimeError(f"model {model} not allowed (MH_MODEL_ALLOW={','.join(allow)})")   # chain moves on
         from meshpool_harness.profiles import apply, for_model
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         if prof["family"] != "deepseek":

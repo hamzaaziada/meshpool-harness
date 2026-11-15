@@ -30,10 +30,26 @@ class Tool:
         self.schema = {"type": "object", "properties": props or {}, "required": required or []}
 
 
+_CALL = threading.local()
+
+
+def cancelled() -> bool:
+    """Inside a tool call: whether the client sent notifications/cancelled for it (a harness's Stop)."""
+    ev = getattr(_CALL, "cancel", None)
+    return bool(ev and ev.is_set())
+
+
+def cancel_check():
+    """A function a tool can hand to its own threads: true once the client cancelled this call."""
+    ev = getattr(_CALL, "cancel", None)
+    return (lambda: bool(ev and ev.is_set()))
+
+
 def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions: str = "") -> None:
     """Read requests from stdin until it closes. serial=True runs tool calls one at a time, in arrival order
     (needed when the tools drive one shared browser or one mouse)."""
     out_lock, call_lock = threading.Lock(), threading.Lock()
+    running: dict = {}                                   # request id -> Event, set on notifications/cancelled
 
     def reply(obj):
         with out_lock:
@@ -43,6 +59,10 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
     def handle(msg: dict):
         m, rid = msg.get("method"), msg.get("id")
         if rid is None:
+            if m == "notifications/cancelled":           # the client gave up on a call (Stop): tell the tool
+                ev = running.get((msg.get("params") or {}).get("requestId"))
+                if ev:
+                    ev.set()
             return
         try:
             if m == "initialize":
@@ -68,6 +88,7 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                 props = t.schema.get("properties") or {}
                 extra = sorted(k for k in args if k not in props) if props else []
                 args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument costs a turn
+                _CALL.cancel = running[rid] = threading.Event()
                 try:
                     if serial:
                         with call_lock:
@@ -85,6 +106,7 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                         content[0] = text(f"{note}\n{content[0].get('text', '')}")
                     else:
                         content.insert(0, text(note))
+                running.pop(rid, None)
                 res = {"content": content, "isError": err}
             else:
                 return reply({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {m}"}})
