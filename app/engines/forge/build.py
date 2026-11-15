@@ -147,6 +147,11 @@ brief asks a question or a decision, one slide weighs the options against criter
 plan is a roadmap or process (or the closing steps), not bullets."""
 
 
+TEXT_LED = {"challenge_matrix", "text_matrix", "argument_only", "table_focus"}
+CHART_LED = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "benchmark",
+             "football_field", "exhibit_argument"}
+
+
 def story_variety(slides: list, brief: str = "") -> list[str]:
     """What a senior partner would send back about the storyboard's visual plan, slide numbers 1-based."""
     body = [x for x in slides if isinstance(x, dict) and x.get("archetype") not in ("cover", "agenda", "section_divider")]
@@ -166,6 +171,18 @@ def story_variety(slides: list, brief: str = "") -> list[str]:
                         "another form (big numbers, 2x2, options vs criteria, roadmap, icon rows, exhibit + argument)")
     if len(body) >= 7 and len({v for v in vis if v}) < 5:
         msgs.append(f"only {len({v for v in vis if v})} different visuals in {len(slides)} slides; use at least 5")
+    content = [(i, x) for i, x in enumerate(slides, 1) if isinstance(x, dict) and x.get("archetype") not in
+               ("cover", "agenda", "section_divider", "executive_summary", "closing", "next_steps", "end")]
+    wordy = [i for i, x in content if x.get("archetype") in TEXT_LED or
+             re.search(r"text|words|bullets|icon rows|argument only", (x.get("visual") or "").lower())]
+    charts = [i for i, x in content if x.get("archetype") in CHART_LED or
+              re.search(r"chart|bars?\b|waterfall|bridge|football|line|column", (x.get("visual") or "").lower())]
+    if len(content) >= 2 and len(wordy) > 1:            # the deck reads as the same page of words again and again
+        msgs.append(f"slides {', '.join(map(str, wordy))} are pages of words; keep at most one and turn the others "
+                    "into exhibits from the facts (a bar or column chart, a waterfall bridge, a benchmark)")
+    if len(content) >= 2 and len(charts) * 3 < len(content):
+        msgs.append(f"only {len(charts)} of {len(content)} content slides show a chart; at least a third must plot "
+                    "the facts (bar, column, line, waterfall, benchmark)")
     if re.search(r"\?|\bshould\b|\bwhether\b|\boptions?\b|\bdecide\b|\bchoose\b", brief or "", re.I) and len(body) >= 6 \
             and not any(re.search(r"option|criteria|2x2|matrix|harvey", v) for v in vis):
         msgs.append("the brief asks for a decision: add one slide that weighs the options against criteria "
@@ -756,7 +773,7 @@ def prose_checks(slides) -> dict[int, list[str]]:
     return out
 
 
-WORDS_LED = {"argument_only"}
+WORDS_LED = {"argument_only", "challenge_matrix", "text_matrix"}     # pages of words, however they are arranged
 NO_VARIETY = {"cover", "section_divider", "agenda", "executive_summary", "closing", "next_steps", "end"}
 
 
@@ -788,6 +805,17 @@ def variety_checks(slides) -> dict[int, list[str]]:
     if body and len(words) > max(1, len(body) // 3):
         for i in words[max(1, len(body) // 3):]:
             out.setdefault(i, []).append(f"{len(words)} of {len(body)} content slides are words with icons; {ask}")
+
+    def plots(s):
+        return bool(s.get("chart") or s.get("charts") or any(isinstance(p, dict) and p.get("type") == "chart"
+                                                             for p in s.get("parts") or []))
+    charted = [i for i, s in body if plots(s)]
+    if len(body) >= 2 and len(charted) * 3 < len(body):  # at least a third of the content pages plot the facts
+        need = -(-len(body) // 3) - len(charted)
+        for i, s in [(i, s) for i, s in body if not plots(s)][:need]:
+            out.setdefault(i, []).append(f"only {len(charted)} of {len(body)} content slides show a chart; make this "
+                                         "one plot its numeric facts (bar_takeaway, column_trend, waterfall_bridge, "
+                                         "benchmark, or a grid with a chart part) and keep the point in the title")
     return out
 
 

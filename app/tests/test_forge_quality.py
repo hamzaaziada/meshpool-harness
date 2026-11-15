@@ -123,7 +123,9 @@ def test_variety_sends_back_look_alike_pages_and_text_led_neighbours_alternate(t
     deck = [{"archetype": "cover", "title": "Deck"}, arg("Debt rises as revenue grows"), arg("Risks are regulatory"),
             arg("The board should act now"), {"archetype": "closing", "title": "Next steps", "steps": []}]
     v = variety_checks(deck)
-    assert 3 in v and 4 in v and 2 not in v and any("same layout" in m for m in v[3])
+    assert 3 in v and 4 in v and any("same layout" in m for m in v[3])
+    assert not any("same layout" in m for m in v.get(2, []))         # the first of a run is not a repeat
+    assert any("show a chart" in m for m in v[2])                    # no content slide plots a fact: half must
     out = tmp_path / "v.pptx"
     render(deck[1:3], str(out), carry=False, density="balanced")
     tops = []

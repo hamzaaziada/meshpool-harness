@@ -683,10 +683,14 @@ def _footer(ctx, s, sl, n):
     for k, tag in enumerate(reversed(getattr(ctx, "stamps", None) or [])):   # the deck's stamp, on every content
         tw = 0.12 + _need_w(tag, T["tag"], True)                               # slide, above the title glyphs
         x -= tw
-        _write(_box(sl, x, 0.02, tw, 0.18, f"ov_Tag{k}", MSO_ANCHOR.BOTTOM),
+        _write(_box(sl, x, 0.02, tw, 0.2 if FRAME_TOP else 0.18, f"ov_Tag{k}", MSO_ANCHOR.MIDDLE if FRAME_TOP
+                    else MSO_ANCHOR.BOTTOM),
                [{"text": tag, "size": T["tag"], "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
-        _rule(sl, x, 0.21, tw, TC.TEXT_1, 0.75, f"ov_TagRule{k}")
-        x -= 0.3
+        if not FRAME_TOP:
+            _rule(sl, x, 0.21, tw, TC.TEXT_1, 0.75, f"ov_TagRule{k}")
+        x -= 0.3 if not FRAME_TOP else 0.12
+    if FRAME_TOP:                                       # the deck's frame: a hairline across the top of every content
+        _rule(sl, LEFT, 0.12, snap(x - LEFT) if x < RIGHT else RIGHT - LEFT, TC.TEXT_1, 0.75, "FrameTop")
     if right - colx(10) >= 0.3:
         _write(_box(sl, colx(10), SRC_Y, right - colx(10), 0.25, "Firm"),
                [{"text": label, "size": T["src"] + 1, "numbers": False, "align": PP_ALIGN.RIGHT}])
@@ -3048,6 +3052,7 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
+FRAME_TOP = os.environ.get("FORGE_FRAME", "lines") == "lines"   # a rule on top and the source rule at the foot
 COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
 NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
 RTL_FONT = "Arial"           # the complex-script face: ships Arabic glyphs on Windows and macOS
