@@ -200,6 +200,11 @@ def _result_text(res) -> str:
     return str(res or "")
 
 
+def _before_turn(agent) -> list:
+    from meshpool_harness.harnesses.acp import before_turn
+    return before_turn(agent)
+
+
 class PiAgent:
     """One Pi process serving one Meshpool thread. Same surface as ACPAgent."""
 
@@ -261,6 +266,8 @@ class PiAgent:
                 "-e", str(Path(__file__).with_name("pi_gate.js"))]
         if self.resume and any(sess.glob("*.jsonl")):
             args.append("--continue")
+        elif any(e.get("type") in ("user", "assistant") for e in _before_turn(self)):
+            self._carry = True                   # Pi's own session is gone (an old chat): carry the history over
         env = dict(os.environ)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE"):
             env.pop(k, None)
@@ -524,6 +531,7 @@ class PiAgent:
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
+        self._turn_at = len(self.events)                 # the chat before this turn (earlier_context)
         self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
                     "plan": self.plan})
         self.save()                                       # the thread survives a restart mid-turn
@@ -538,6 +546,12 @@ class PiAgent:
         try:
             self._emit({"type": "model_start"})
             self._start()
+            if getattr(self, "_carry", False):
+                self._carry = False
+                from meshpool_harness.harnesses.acp import earlier_context
+                body = earlier_context(_before_turn(self)) + body
+                self._emit({"type": "status", "text": "Pi could not reopen its own session for this chat, so the "
+                                                      "conversation so far went along with your message."})
             self._done.clear()
             cmd = {"type": "prompt", "message": body}
             if images:

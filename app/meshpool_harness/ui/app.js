@@ -40,6 +40,8 @@ function modelName(id) {
 function connMsg(d) {
   d = String(d || "");
   if (/reject|401|403/i.test(d)) return "The endpoint didn't accept this key. Check that you copied all of it.";
+  if (/read operation timed out/i.test(d) && !/urlopen error|refused|resolve|getaddrinfo|ssl|certificate/i.test(d)) return "The endpoint took the connection but didn't answer in time: the gateway is up but isn't serving this key right now. Running tasks wait for it and carry on by themselves. Try the test again in a minute.";
+  if (/429|rate.?limit|too many|parallel/i.test(d)) return "The endpoint says this key is at its limit right now (too many requests at once). Running tasks wait and carry on. Try again in a minute.";
   if (/HTTP 0|timed out|connection|refused|resolve|getaddrinfo/i.test(d)) return "Can't reach that address. Check the base URL and your internet connection.";
   if (/404/.test(d)) return "That address answered, but it isn't a model endpoint. Check the base URL (it usually ends in /v1).";
   return "The connection test didn't work: " + d.slice(0, 160);
@@ -1933,7 +1935,7 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["read", "Read and research"], ["edit", "Read and edit files"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
