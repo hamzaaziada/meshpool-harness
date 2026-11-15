@@ -13,8 +13,9 @@ from pathlib import Path
 APP = Path(__file__).resolve().parents[1]
 
 # Proves to the assistant server that run_subtasks' "parent" (model, mode, project) came from this app's own agent.
-# It lives only in this process's memory and in the environment of the assistant server the app itself starts
-# (agent/mcp.py), never in os.environ: harness models (Codex, Hermes, Pi) run shell commands and could read it there.
+# It lives only in this process's memory and goes to the assistant server the app itself starts once, in the MCP
+# initialize request over that server's stdin (agent/mcp.py). Never in an environment or a file: any process of the
+# same user can read another's environment (/proc/<pid>/environ), and harness models run shell commands.
 import secrets as _secrets  # noqa: E402
 PARENT_TOKEN = _secrets.token_hex(16)
 

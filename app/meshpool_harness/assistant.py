@@ -508,6 +508,37 @@ def subagent_settings() -> dict:
             "minutes": num("MH_SUBAGENT_MINUTES", 20, 1, 25)}     # under the tool's 30 min timeout (mcp.json)
 
 
+_TRUSTED = {"token": ""}
+
+
+def trust_parent_token(token: str) -> None:
+    """Set once, from the initialize request of the app that started this server (assistant_mcp_server)."""
+    if token and not _TRUSTED["token"]:
+        _TRUSTED["token"] = token
+
+
+def _known_project(root: str) -> bool:
+    """A sub-agent root must be a folder the app knows as a project (its projects list or this server's project),
+    never just any path a caller names."""
+    import os
+    try:
+        r = Path(root).expanduser().resolve()
+    except (OSError, ValueError):
+        return False
+    known = [os.environ.get("MESHPOOL_PROJECT") or ""]
+    try:
+        known += [str(x.get("path") or "") for x in json.loads((C.home() / "projects.json").read_text("utf-8"))]
+    except (OSError, ValueError, AttributeError):
+        pass
+    for k in known:
+        try:
+            if k and Path(k).expanduser().resolve() == r:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 READ_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
 EDIT_TOOLS = READ_TOOLS + ["write_file", "edit"]
 
@@ -527,9 +558,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     C.load_into_env(override=False)
     cfg = subagent_settings()
     parent = parent if isinstance(parent, dict) else {}
-    token = os.environ.get("MH_PARENT_TOKEN", "")
+    token = _TRUSTED["token"]                                # from initialize, never the environment or config
     if not token or parent.get("token") != token:            # written by a model, not by Meshpool's agent: ignore
         parent = {}
+    if parent.get("root") and not _known_project(str(parent["root"])):
+        parent = {**parent, "root": ""}                      # only a project the app knows
     if not cfg["on"]:
         raise ValueError("Sub-agents are off in Settings, Advanced. Do the parts one after another yourself.")
     rows = []

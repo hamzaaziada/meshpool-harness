@@ -97,5 +97,11 @@ TOOLS = {
                          ["tasks"]),
 }
 
+def _initialize(params: dict):
+    """The app that started this server passes the parent token in initialize (agent/mcp.py); a harness that
+    started it does not, so its run_subtasks parents are never trusted."""
+    A.trust_parent_token(str(((params.get("_meta") or {}).get("meshpool/parentToken")) or ""))
+
+
 if __name__ == "__main__":
-    serve("meshpool-assistant", TOOLS)
+    serve("meshpool-assistant", TOOLS, on_initialize=_initialize)

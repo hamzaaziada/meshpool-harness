@@ -178,7 +178,8 @@ def test_a_request_too_large_keeps_the_screenshot_just_attached(agent, monkeypat
 def test_a_request_too_big_for_the_gateway_answered_with_502_is_trimmed(agent, monkeypatch):
     """The real gateway answers an oversized body with a plain 502 'upstream request failed', not a 413."""
     monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
-    monkeypatch.setenv("MH_BIG_REQUEST", "60000")
+    lim = len(__import__("json").dumps(agent._body())) + 45000    # room for two 20 KB images over the base
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
     agent._probe = lambda b, k, m: "ok"                            # small requests get through
     big = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "B" * 20000}}
     for i in range(6):
@@ -189,9 +190,21 @@ def test_a_request_too_big_for_the_gateway_answered_with_502_is_trimmed(agent, m
     def post(base, key, body, stream):
         n = len(__import__("json").dumps(body))
         sizes.append(n)
-        if n > 60000:
+        if n > lim:
             raise RuntimeError("HTTP 502: upstream request failed")
         return _ok()
     agent._post = post
     agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    assert len(sizes) == 2 and sizes[0] > 60000 >= sizes[1]       # trimmed once, then it went through
+    assert len(sizes) == 2 and sizes[0] > lim >= sizes[1]         # trimmed once, then it went through
+
+
+def test_one_image_too_big_alone_is_kept_and_the_user_told(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    monkeypatch.setenv("MH_BIG_REQUEST", str(len(__import__("json").dumps(agent._body())) + 40000))
+    agent._probe = lambda b, k, m: "ok"
+    huge = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "H" * 80000}}
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "what is this?"}, huge]})
+    agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(RuntimeError("HTTP 502: upstream request failed"))
+    with pytest.raises(RuntimeError, match="attached image is too large"):
+        agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert any(p.get("type") == "image_url" for p in agent.messages[-1]["content"])   # never silently removed

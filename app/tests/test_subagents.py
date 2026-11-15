@@ -1,5 +1,6 @@
 """Sub-agents (run_subtasks): the settings, the parent chat's model and permission mode, read or edit access, how
 many run at once, and the time limit and Stop that end them. No network, no model."""
+import json
 import threading
 import time
 
@@ -15,7 +16,10 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.delenv("MESHPOOL_PROJECT", raising=False)          # other tests leave it set (agent/mcp.py)
-    monkeypatch.setenv("MH_PARENT_TOKEN", "tok")
+    monkeypatch.setitem(A._TRUSTED, "token", "tok")              # what the app's initialize handed this server
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "projects.json").write_text(json.dumps([{"path": str(tmp_path / "proj")}]))
     for k in ("MH_SUBAGENTS", "MH_SUBAGENT_MODEL", "MH_SUBAGENT_ACCESS", "MH_SUBAGENT_PARALLEL", "MH_SUBAGENT_STEPS",
               "MH_SUBAGENT_MINUTES"):
         monkeypatch.delenv(k, raising=False)
@@ -259,31 +263,58 @@ def test_the_mcp_server_hands_a_clients_cancel_to_the_tool(tmp_path):
         p.kill()
 
 
-def test_the_parent_token_never_reaches_a_harness_or_another_server(tmp_path, monkeypatch):
-    """Review round 6: the token sat in os.environ, so a Codex, Hermes or Pi model could read it with a shell
-    command and forge a parent with edit rights anywhere. Only Meshpool's own assistant server may get it."""
+def test_the_parent_token_is_in_no_environment_and_only_the_apps_own_server_gets_it(tmp_path, monkeypatch):
+    """Review rounds 6 and 7: in os.environ any harness model could read it, and in a server's environment any
+    process of the same user can (/proc/<pid>/environ). It now goes only in the MCP initialize the app sends to
+    the assistant server it starts itself."""
     import os
-    import sys
     from meshpool_harness.agent import mcp as M
-    monkeypatch.delenv("MH_PARENT_TOKEN", raising=False)          # this file's fixture plays the server's role
-    core_src = open(K.__file__, encoding="utf-8").read()
-    assert "os.environ.setdefault(\"MH_PARENT_TOKEN\"" not in core_src   # importing the agent never sets it
-    assert len(K.C.PARENT_TOKEN) >= 32
+    monkeypatch.delenv("MH_PARENT_TOKEN", raising=False)
+    assert "MH_PARENT_TOKEN" not in os.environ and len(K.C.PARENT_TOKEN) >= 32
     seen = {}
 
     class P:
         def __init__(self, args, env=None, **kw):
             seen[args[-1]] = env
-
-        def poll(self):
-            return None
     monkeypatch.setattr(M.subprocess, "Popen", P)
     monkeypatch.setattr(M.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
     monkeypatch.setenv("MH_PARENT_TOKEN", "leaked")               # even if something put one there
-    for mod in ("meshpool_harness.agent.assistant_mcp_server", "meshpool_harness.agent.web_mcp_server"):
-        M._Stdio(mod, {"command": "python", "args": ["-m", mod]}, tmp_path, [str(tmp_path)])
-    assert seen["meshpool_harness.agent.assistant_mcp_server"]["MH_PARENT_TOKEN"] == K.C.PARENT_TOKEN
-    assert "MH_PARENT_TOKEN" not in seen["meshpool_harness.agent.web_mcp_server"]
+    own = {"command": "python", "args": ["-m", "meshpool_harness.agent.assistant_mcp_server"]}
+    web = {"command": "python", "args": ["-m", "meshpool_harness.agent.web_mcp_server"]}
+    for spec in (own, web):
+        M._Stdio("x", spec, tmp_path, [str(tmp_path)])
+    assert all("MH_PARENT_TOKEN" not in env for env in seen.values())
+    srv = M.Server.__new__(M.Server)
+    srv.spec = own
+    assert srv._init_params()["_meta"]["meshpool/parentToken"] == K.C.PARENT_TOKEN
+    srv.spec = web
+    assert "_meta" not in srv._init_params()
     src = open(os.path.join(os.path.dirname(M.__file__), "..", "harnesses", "acp.py")).read() + \
         open(os.path.join(os.path.dirname(M.__file__), "..", "harnesses", "pi_rpc.py")).read()
-    assert src.count('env.pop("MH_PARENT_TOKEN", None)') == 2      # harness processes never inherit it
+    assert src.count('env.pop("MH_PARENT_TOKEN", None)') == 2      # harness processes never inherit one
+
+
+def test_a_forged_token_from_the_config_file_or_a_harness_server_is_ignored(monkeypatch, _env):
+    from meshpool_harness import config as C
+    from meshpool_harness.agent import assistant_mcp_server as S
+    monkeypatch.setitem(A._TRUSTED, "token", "")                   # started by a harness: no initialize token
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
+    C.write({"MH_PARENT_TOKEN": "forged"})                         # a model wrote one into the settings file
+    seen = []
+    _record(monkeypatch, seen)
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"token": "forged", "mode": "auto"})
+    assert "write_file" not in seen[-1]["tools"]
+    S._initialize({"_meta": {"meshpool/parentToken": "real"}})     # the app's own initialize sets it once
+    S._initialize({"_meta": {"meshpool/parentToken": "other"}})    # and nothing replaces it later
+    assert A._TRUSTED["token"] == "real"
+
+
+def test_a_root_that_is_not_a_known_project_is_ignored(monkeypatch, _env, tmp_path):
+    roots = []
+
+    def post(self, base, key, body, stream):
+        roots.append(str(self.root))
+        return _reply()
+    monkeypatch.setattr(K.Agent, "_post", post)
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(root="/", mode="auto"))
+    assert roots == [str(_env.resolve())]                          # not "/": the chat's folder instead

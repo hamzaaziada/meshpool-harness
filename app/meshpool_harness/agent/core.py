@@ -757,7 +757,9 @@ class Agent:
         except Exception as e:
             self._repair()
             msg = raw = str(e)
-            if re.search(r"rejected the API key|stopped accepting the API key", msg):
+            if "attached image is too large" in msg:
+                msg = msg.rsplit(" (", 1)[0]            # already says what to do
+            elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
                 msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
@@ -1001,13 +1003,18 @@ class Agent:
                         # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
                         shrunk = True
                         _shrink_context(self.messages, 0, hard=True, keep_images=2)
-                        if len(json.dumps(self._body())) > int(os.environ.get("MH_BIG_REQUEST", "3000000")):
-                            _drop_images(self.messages, keep=0)   # still too big: no images this time
+                        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                        if len(json.dumps(self._body())) > lim:
+                            _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
+                        if len(json.dumps(self._body())) > lim:
+                            raise RuntimeError("The endpoint could not take this request: the attached image is "
+                                               "too large. Attach a smaller one (a screenshot of part of the "
+                                               "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         self.emit({"type": "status", "text": "The request was too large for the endpoint; older "
-                                                             "screenshots and tool outputs were left out before "
-                                                             "trying again."})
+                                                             "images and tool outputs were left out before trying "
+                                                             "again."})
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
