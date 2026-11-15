@@ -435,3 +435,25 @@ def test_market_facts_skip_a_ticker_the_feed_cannot_serve():
     def fetch(sym, rng, iv):
         raise OSError("down")
     assert R.market_facts([("ACME CORP", "ACME")], 1, fetch=fetch) == []
+
+
+def test_economics_facts_compute_the_capital_allocation_arithmetic_with_their_inputs():
+    from engines.forge import research as R
+    co = "ACME CORP"
+    def f(i, label, value, annual=True):
+        return {"id": f"F{i}", "company": co, "label": label, "value": value, "annual": annual, "text": label}
+    facts = [f(1, "operating cash flow", 15e9), f(2, "capital expenditure", 5e9), f(3, "cash and cash equivalents", 20e9),
+             f(4, "share price", 100.0), f(5, "shares outstanding", 1e9), f(6, "diluted EPS", 5.0),
+             f(7, "operating income", 10e9), f(8, "income tax expense", 2e9), f(9, "net income (loss)", 6e9),
+             f(10, "shareholders' equity", 30e9), f(11, "long-term debt (non-current)", 10e9),
+             f(12, "dividends paid", 1e9, annual=False)]
+    got = {x["label"]: x["text"] for x in R.economics_facts(facts, 20)}
+    assert "$10.00B" in got["free cash flow"] and "F1" in got["free cash flow"] and "F2" in got["free cash flow"]
+    assert "4.0x" in got["cash cover of capex"]
+    assert "$100.00B" in got["market capitalisation"]
+    assert "10.00M shares" in got["per $1B returned"] and "$1.00 per share" in got["per $1B returned"]
+    assert "5.00%" in got["earnings yield"]
+    assert "$5.05" in got["diluted EPS after a $1B buyback"]          # 5 x 1000M / 990M
+    assert "18.8%" in got["after-tax return on capital"]               # 10B x (1 - 25%) / 40B
+    assert all(x["derived"] and x["research"] for x in R.economics_facts(facts, 20))
+    assert R.economics_facts([f(1, "operating cash flow", 15e9)], 20) == []    # a missing input skips the line

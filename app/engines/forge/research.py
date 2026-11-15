@@ -344,7 +344,9 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
             url = SP._filing_url(cik, u.get("accn", ""))
             out.append({"id": f"F{no + len(out)}", "text": f"{hit['title']} {label} {_money(float(u['val']), unit)} "
                         f"{per} ({u.get('form')} filed {u.get('filed')}; SEC XBRL {tag}; {url})",
-                        "source": url, "research": True})
+                        "source": url, "research": True, "company": hit["title"], "label": label,
+                        "value": float(u["val"]), "annual": not u.get("start") or
+                        _days_between(u["start"], u["end"]) > 330, "end": u.get("end", "")})
             seen.add(label)
     return out
 
@@ -380,8 +382,8 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
     out: list[dict] = []
     day = lambda t: _dt.datetime.fromtimestamp(int(t), _dt.timezone.utc).date().isoformat()   # noqa: E731
 
-    def add(text, url):
-        out.append({"id": f"F{no + len(out)}", "text": text, "source": url, "research": True})
+    def add(text, url, **kw):
+        out.append({"id": f"F{no + len(out)}", "text": text, "source": url, "research": True, **kw})
     try:
         idx = get("^GSPC", "2y", "1wk")
     except Exception:  # noqa: BLE001
@@ -398,7 +400,8 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
         if not closes:
             continue
         t, last = closes[-1]
-        add(f"{name} ({tic}) share price ${last:,.2f} at close on {day(t)} (Yahoo Finance daily close; {url})", url)
+        add(f"{name} ({tic}) share price ${last:,.2f} at close on {day(t)} (Yahoo Finance daily close; {url})", url,
+            company=name, label="share price", value=float(last))
         hi, lo = max(c for _, c in closes), min(c for _, c in closes)
         add(f"{name} ({tic}) 52-week closing range ${lo:,.2f} to ${hi:,.2f} to {day(t)} (Yahoo Finance; {url})", url)
         if idx:
@@ -415,7 +418,8 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
             cl = [(t, c) for t, c in zip(tn.get("timestamp") or [], tn["indicators"]["quote"][0].get("close") or []) if c]
             if cl:
                 add(f"US 10-year Treasury yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance ^TNX; "
-                    "https://finance.yahoo.com/quote/%5ETNX)", "https://finance.yahoo.com/quote/%5ETNX")
+                    "https://finance.yahoo.com/quote/%5ETNX)", "https://finance.yahoo.com/quote/%5ETNX",
+                    label="treasury yield", value=float(cl[-1][1]))
         except Exception:  # noqa: BLE001
             pass
     return out
@@ -436,6 +440,61 @@ def _tickers(names: list[str], ticker_map: dict | None = None) -> list[tuple[str
             (r for r in rows if str(r.get("title", "")).lower().startswith(low)), None)
         if hit:
             out.append((str(hit["title"]), str(hit["ticker"])))
+    return out
+
+
+def economics_facts(facts: list[dict], no: int) -> list[dict]:
+    """The capital-allocation arithmetic a banker checks first, computed here from filed and market facts (never by a
+    model): free cash flow, market cap, earnings yield, after-tax return on capital, cash cover of capex, and what
+    each $1B returned does (shares retired at the price, dividend per share, EPS after a buyback). Each fact states
+    its formula and the F ids it uses. Only annual flows are used; a missing input skips that line."""
+    out: list[dict] = []
+    by: dict[str, dict] = {}
+    for f in facts:
+        if f.get("company") and f.get("label") and isinstance(f.get("value"), (int, float)) and f.get("annual", True):
+            by.setdefault(f["company"], {}).setdefault(f["label"], f)
+    def v(c, k):
+        return c[k]["value"] if k in c else None
+    def add(company, label, text, used):
+        out.append({"id": f"F{no + len(out)}", "research": True, "company": company, "label": label,
+                    "text": f"{company} {label} {text} (computed: " + "; ".join(f"{c[k]['label']} {c[k]['id']}" for c, k in used)
+                    + ")", "derived": True})
+    for co, c in by.items():
+        ocf, capex, cash = v(c, "operating cash flow"), v(c, "capital expenditure"), v(c, "cash and cash equivalents")
+        price, shares, eps = v(c, "share price"), v(c, "shares outstanding"), v(c, "diluted EPS")
+        oi, tax, ni = v(c, "operating income"), v(c, "income tax expense"), v(c, "net income (loss)")
+        eq = v(c, "shareholders' equity")
+        debt = v(c, "long-term debt (non-current)") or v(c, "long-term debt")
+        if ocf is not None and capex is not None:
+            add(co, "free cash flow", f"{_money(ocf - capex, 'USD')} = operating cash flow {_money(ocf, 'USD')} less "
+                f"capital expenditure {_money(capex, 'USD')}", [(c, "operating cash flow"), (c, "capital expenditure")])
+        if cash is not None and capex:
+            add(co, "cash cover of capex", f"{cash / capex:.1f}x = cash {_money(cash, 'USD')} / capital expenditure "
+                f"{_money(capex, 'USD')}", [(c, "cash and cash equivalents"), (c, "capital expenditure")])
+        if price and shares:
+            add(co, "market capitalisation", f"{_money(price * shares, 'USD')} = share price ${price:,.2f} x "
+                f"{shares / 1e6:,.1f}M shares", [(c, "share price"), (c, "shares outstanding")])
+            add(co, "per $1B returned", f"a buyback retires {1e9 / price / 1e6:,.2f}M shares ({1e9 / price / shares:.2%} of "
+                f"{shares / 1e6:,.1f}M) at ${price:,.2f}; a special dividend pays ${1e9 / shares:,.2f} per share",
+                [(c, "share price"), (c, "shares outstanding")])
+        if price and eps:
+            add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (the "
+                "return a buyback earns on each dollar, before lost interest on the cash)",
+                [(c, "diluted EPS"), (c, "share price")])
+        if price and eps and shares and ni:
+            left = shares - 1e9 / price
+            add(co, "diluted EPS after a $1B buyback", f"${eps * shares / left:,.2f} "
+                f"= EPS ${eps:,.2f} x {shares / 1e6:,.1f}M / {left / 1e6:,.1f}M shares (before lost interest on the cash)",
+                [(c, "diluted EPS"), (c, "shares outstanding"), (c, "share price")])
+        if oi and tax is not None and ni and eq is not None:
+            rate = tax / (ni + tax) if ni + tax else 0
+            cap = eq + (debt or 0)
+            if cap > 0:
+                add(co, "after-tax return on capital", f"{oi * (1 - rate) / cap:.1%} = operating income {_money(oi, 'USD')} "
+                    f"x (1 - {rate:.1%} effective tax rate) / (equity {_money(eq, 'USD')} + long-term debt "
+                    f"{_money(debt or 0, 'USD')})", [(c, "operating income"), (c, "income tax expense"),
+                                                     (c, "net income (loss)"), (c, "shareholders' equity")]
+                    + ([(c, "long-term debt (non-current)")] if "long-term debt (non-current)" in c else []))
     return out
 
 
@@ -488,10 +547,13 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
         for q in qs:
             names += [w for w in _keywords(q["question"], 8).split() if w[:1].isupper() and len(w) > 2
                       and not re.match(r"^(EV|NTM|GW|DCF|WACC|EPS|IC|CEO|CFO|FY\d*|Q\d)$", w)][:3]
-        known0 = {re.sub(r"\W+", "", f.get("text", "").lower())[:200] for f in facts}
+        known0 = {re.sub(r"\W+", "", f.get("text", "").lower())[:200]: f for f in facts}
         for f in xbrl_facts(names, next_fact_no(facts)):
-            if re.sub(r"\W+", "", f["text"].lower())[:200] not in known0:
+            same = known0.get(re.sub(r"\W+", "", f["text"].lower())[:200])
+            if same is None:
                 new_facts.append(f)
+            else:                                        # already a fact: give it the value so it can be computed on
+                same.update({k: f[k] for k in ("company", "label", "value", "annual", "end") if k in f})
         if os.environ.get("MH_RESEARCH_MARKET", "1") != "0":   # price, range, beta, risk-free: what a valuation needs
             have = " ".join(f.get("text", "") for f in facts)
             tics = [t for t in _tickers(names) if f"({t[1]}) share price" not in have]
@@ -499,6 +561,10 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
                 new_facts.append(f)
         for i, f in enumerate(new_facts):              # one F sequence across both sources
             f["id"] = f"F{next_fact_no(facts) + i}"
+        if os.environ.get("MH_RESEARCH_ECONOMICS", "1") != "0":   # after numbering: the texts cite the inputs' ids
+            have = {(f.get("company"), f.get("label")) for f in facts if f.get("derived")}
+            new_facts += [f for f in economics_facts(facts + new_facts, next_fact_no(facts + new_facts))
+                          if (f["company"], f["label"]) not in have]
     dead: set = set()
     log = []
     no = next_fact_no(facts + new_facts)                # web facts continue after the filed and market ones
