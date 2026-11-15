@@ -279,3 +279,19 @@ def test_a_workbook_that_never_passes_the_checks_is_still_graded_but_not_deliver
     assert out["ok"] is False
     rep = rv.report(None)
     assert "fails the engine checks" in rep and "MD 3.5/10 (revise)" in rep and "Precedents!D5" in rep
+
+
+def test_formulas_with_unformatted_python_placeholders_are_named(tmp_path):
+    import openpyxl
+    from engines.sheets import qa
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Calc"
+    ws["B1"], ws["B2"] = 10, 20
+    for r in range(3, 11):
+        ws[f"B{r}"] = "=B{ocf_row}+B{capex_row}"
+    wb.save(tmp_path / "m.xlsx")
+    got = [i for i in qa.check(str(tmp_path / "m.xlsx"))["issues"] if isinstance(i, dict)
+           and i["check"] == "unformatted_placeholder"]
+    assert len(got) == 6 and "{ocf_row}" in got[0]["detail"] and "f-string" in got[0]["detail"]
+    assert "8 formulas" in got[-1]["detail"]
