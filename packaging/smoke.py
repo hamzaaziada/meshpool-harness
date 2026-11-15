@@ -1,6 +1,6 @@
 """Smoke test of a built Meshpool, run with the app's own bundled Python before a release is published.
 
-    <bundled python> packaging/smoke.py --app <the app's code folder> --version 0.0.5
+    <bundled python> packaging/smoke.py --app <the app's code folder> --version 0.0.6
 
 Checks what a user would hit first, with no network and no paid calls:
   1. the packages the app ships with import (PDF, Word, Excel, PowerPoint, browser),
