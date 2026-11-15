@@ -45,13 +45,18 @@ def _max_inflight() -> int:
         return 4
 
 
+def default_slots_dir() -> str:
+    """The folder every Meshpool process shares for its slot lock files unless MH_SLOTS_DIR names another."""
+    import tempfile
+    return os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
+
+
 class _Slots:
     """MH_MAX_INFLIGHT across processes: the app and every assistant server (where sub-agents run) take one of N
     lock files per endpoint and key. The operating system drops a lock when its process ends, so a crash never
-    leaks a slot."""
+    leaks a slot. MH_SLOTS_DIR moves the folder (tests point it at their own tmp_path)."""
     def __init__(self, name: str):
-        import tempfile
-        self.dir = os.environ.get("MH_SLOTS_DIR") or os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
+        self.dir = os.environ.get("MH_SLOTS_DIR") or default_slots_dir()
         self.name = name
 
     def _try(self, i: int):
