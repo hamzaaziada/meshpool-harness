@@ -37,9 +37,7 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
-# Proves to the assistant server (a child process, which inherits it) that run_subtasks' parent details came from
-# this app's agent and not from a model: only then may sub-agents use the parent's model, mode and stop file.
-os.environ.setdefault("MH_PARENT_TOKEN", uuid.uuid4().hex)
+
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
@@ -560,7 +558,7 @@ class Agent:
         for old in self.dir.glob("stop-subtasks-*") if self.dir.is_dir() else ():
             old.unlink(missing_ok=True)              # left by an earlier Stop
         args["parent"] = {"model": self.current_model() or "", "mode": self.mode, "stop_file": str(stop_file),
-                          "root": str(self.root), "token": os.environ.get("MH_PARENT_TOKEN", "")}
+                          "root": str(self.root), "token": C.PARENT_TOKEN}
         self._sub_stops.add(str(stop_file))
         if self._stop:                               # Stop landed just before it was registered
             self.dir.mkdir(parents=True, exist_ok=True)
@@ -996,6 +994,20 @@ class Agent:
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         attempt, self._first_scale = -1, 1.0
+                        continue
+                    big = len(json.dumps(body)) > int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                    if big and re.search(r"HTTP 5\d\d", msg) and not shrunk:
+                        # Up for a small probe, failing for this big request: the real gateway answers an oversized
+                        # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
+                        shrunk = True
+                        _shrink_context(self.messages, 0, hard=True, keep_images=2)
+                        if len(json.dumps(self._body())) > int(os.environ.get("MH_BIG_REQUEST", "3000000")):
+                            _drop_images(self.messages, keep=0)   # still too big: no images this time
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        self.emit({"type": "status", "text": "The request was too large for the endpoint; older "
+                                                             "screenshots and tool outputs were left out before "
+                                                             "trying again."})
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "

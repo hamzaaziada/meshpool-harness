@@ -283,6 +283,7 @@ class ACPAgent:
             raise ACPError(f"{m.get('name', 'This harness')} is not installed (command '{cmd}' not found). "
                            + (m.get("install") or ""))
         env = dict(os.environ)
+        env.pop("MH_PARENT_TOKEN", None)                # never readable by a harness model's commands
         env.update({k: str(v) for k, v in (m.get("env") or {}).items()})
         env.update(extra)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX"):

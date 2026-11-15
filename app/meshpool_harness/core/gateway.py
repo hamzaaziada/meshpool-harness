@@ -51,7 +51,7 @@ class _Slots:
     leaks a slot."""
     def __init__(self, name: str):
         import tempfile
-        self.dir = os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
+        self.dir = os.environ.get("MH_SLOTS_DIR") or os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
         self.name = name
 
     def _try(self, i: int):

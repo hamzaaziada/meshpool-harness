@@ -269,6 +269,7 @@ class PiAgent:
         elif any(e.get("type") in ("user", "assistant") for e in _before_turn(self)):
             self._carry = True                   # Pi's own session is gone (an old chat): carry the history over
         env = dict(os.environ)
+        env.pop("MH_PARENT_TOKEN", None)                # never readable by a harness model's commands
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE"):
             env.pop(k, None)
         from meshpool_harness import providers as PV

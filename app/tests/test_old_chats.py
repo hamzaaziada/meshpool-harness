@@ -173,3 +173,25 @@ def test_a_request_too_large_keeps_the_screenshot_just_attached(agent, monkeypat
     agent._post = post
     agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
     assert len(sent[0]) == 4 and len(sent[1]) == 2 and sent[1][-1] == "ZZZ"   # the new screenshot still goes
+
+
+def test_a_request_too_big_for_the_gateway_answered_with_502_is_trimmed(agent, monkeypatch):
+    """The real gateway answers an oversized body with a plain 502 'upstream request failed', not a 413."""
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    monkeypatch.setenv("MH_BIG_REQUEST", "60000")
+    agent._probe = lambda b, k, m: "ok"                            # small requests get through
+    big = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "B" * 20000}}
+    for i in range(6):
+        agent.messages.append({"role": "user", "content": [{"type": "text", "text": f"shot {i}"}, big]})
+        agent.messages.append({"role": "assistant", "content": "seen"})
+    sizes = []
+
+    def post(base, key, body, stream):
+        n = len(__import__("json").dumps(body))
+        sizes.append(n)
+        if n > 60000:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert len(sizes) == 2 and sizes[0] > 60000 >= sizes[1]       # trimmed once, then it went through
