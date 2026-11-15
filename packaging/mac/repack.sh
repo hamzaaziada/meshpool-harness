@@ -53,7 +53,17 @@ for a in arm64 x64; do
     echo "hdiutil create failed (attempt $try), retrying"; sleep $((try * 10))
   done
   [ -n "$ok" ] || exit 1
-  hdiutil convert -quiet "$W/$NAME-udzo.dmg" -format ULMO -o "$OUT/$NAME.dmg" && rm -f "$W/$NAME-udzo.dmg" && echo "built $NAME.dmg"
+  # convert fails the same way now and then (seen: the Intel image silently missing); retry, then stop the build
+  ok=; for try in 1 2 3 4; do
+    rm -f "$OUT/$NAME.dmg"
+    hdiutil convert -quiet "$W/$NAME-udzo.dmg" -format ULMO -o "$OUT/$NAME.dmg" && [ -s "$OUT/$NAME.dmg" ] && { ok=1; break; }
+    echo "hdiutil convert failed (attempt $try), retrying"; sleep $((try * 10))
+  done
+  [ -n "$ok" ] || { echo "could not build $NAME.dmg"; exit 1; }
+  rm -f "$W/$NAME-udzo.dmg"; echo "built $NAME.dmg"
+done
+for f in Meshpool.dmg Meshpool-Intel.dmg; do        # never hand the publish step half a release
+  [ -s "$OUT/$f" ] || { echo "missing $f"; exit 1; }
 done
 # Notarize, staple and check both disk images. sign.sh does nothing (and exits 0) when the Apple Developer secrets
 # are not set, so this is safe before the owner's accounts are ready.
