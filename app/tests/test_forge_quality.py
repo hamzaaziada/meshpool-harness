@@ -131,3 +131,23 @@ def test_variety_sends_back_look_alike_pages_and_text_led_neighbours_alternate(t
         ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_IconRing")})
         tops.append(len(ys))
     assert tops[0] == 1 and tops[1] > 1           # columns (icons on one line), then rows (icons stacked)
+
+
+def test_libreoffice_draws_segoe_ui_with_the_bundled_selawik(tmp_path):
+    """Without Segoe UI installed, LibreOffice fell back to a wider face and the render check flagged overflows
+    PowerPoint never shows; the throwaway profile now carries Selawik and a substitution for Segoe UI."""
+    import re as _re
+    import pytest as _pt
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from engines.forge.common import find_soffice, soffice_convert
+    if not find_soffice():
+        _pt.skip("LibreOffice not installed")
+    p = Presentation()
+    tb = p.slides.add_slide(p.slide_layouts[6]).shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+    r = tb.text_frame.paragraphs[0].add_run()
+    r.text, r.font.name, r.font.size = "Segoe UI text", "Segoe UI", Pt(28)
+    p.save(tmp_path / "t.pptx")
+    pdf = soffice_convert(str(tmp_path / "t.pptx"), "pdf", str(tmp_path))
+    fonts = set(_re.findall(rb"/BaseFont\s*/([A-Za-z+\-]+)", pdf.read_bytes()))
+    assert any(b"Selawik" in f for f in fonts), fonts
