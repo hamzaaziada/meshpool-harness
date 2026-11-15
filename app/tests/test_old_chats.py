@@ -296,3 +296,25 @@ def test_the_status_survives_a_gateway_text_with_brackets(agent, monkeypatch):
     agent.send("hello")
     err = [e["text"] for e in events if e.get("type") == "error"][-1]
     assert err.endswith("Start a new chat to carry on. (HTTP 502)")
+
+
+def test_an_older_image_is_dropped_quietly_and_the_message_answered(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 40000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "look at this"}, {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64," + "O" * 80000}}]})
+    agent.messages.append({"role": "assistant", "content": "seen"})
+    agent.messages.append({"role": "user", "content": "thanks, and one more question"})
+    events = []
+    agent.emit = events.append
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    assert agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})[0]["content"] == "ok"   # answered
+    assert not K._has_images(agent.messages)
+    assert any("earlier image" in (e.get("text") or "") for e in events)

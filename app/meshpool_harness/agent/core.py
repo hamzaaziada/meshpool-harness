@@ -272,6 +272,20 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
         return f"HTTP 0: {e}"
 
 
+def _image_in_newest_ask(messages: list) -> bool:
+    """Whether the newest message the user typed (not a tool's screenshot, not a Meshpool note) carries an image."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(str(p.get("text") or "") for p in c or []
+                                                       if isinstance(p, dict) and p.get("type") == "text")
+        if text.startswith(("Image returned by", "[Meshpool]")):
+            continue                                    # attached by a tool (_attach_images) or a harness note
+        return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    return False
+
+
 def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
     """Shorten user messages over `keep` characters to their start and end, with a note in the middle. A message too
     big for the endpoint otherwise goes with every later request too and the chat cannot recover. True if cut."""
@@ -1035,6 +1049,11 @@ class Agent:
                                 self.emit({"type": "status", "text": "Your message was too large for the endpoint, "
                                                                      "so its middle was left out. Attach long text "
                                                                      "as a file to keep all of it."})
+                            elif has_img and self._size_with(noimg) <= lim and not _image_in_newest_ask(
+                                    self.messages):
+                                self.messages[:] = noimg          # an older or tool image: drop it and carry on
+                                self.emit({"type": "status", "text": "An earlier image made the request too large "
+                                                                     "for the endpoint, so it was left out."})
                             elif has_img and self._size_with(noimg) <= lim:
                                 self.messages[:] = noimg          # gone from the chat, so the next message works
                                 raise RuntimeError("The endpoint could not take this request: the attached image "
