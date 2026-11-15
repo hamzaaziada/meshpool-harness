@@ -104,7 +104,11 @@ A number the facts do not state but that follows from them by arithmetic (an off
 and the premium, a change, a ratio, a share) goes in "calcs": [{"id": "C1", "value": "$65.37", "formula":
 "48.42 * (1 + 0.35)", "from": ["F33"]}] and is cited by its C id in prov. The formula uses only numbers written in the
 "from" facts (plus 1, 2, 4, 12, 100, 1000), + - * / and parentheses; the engine recomputes every calc and rejects one
-that does not match. Never estimate: no calc, no number."""
+that does not match. Never estimate: no calc, no number.
+A recommendation must be sized. The sizes the board would choose between (a buyback amount, a reserve in months of
+capex, a payout ratio, a price) are not facts: declare them as "options": [{"id": "O1", "value": "$5B", "label":
+"buyback size proposed"}], cite them by O id, label them as options or illustrative choices on the page, and use them
+in calcs with facts ("20.21 - 5" from F5 and O1) to show what each choice implies. Recommend one, with the reason."""
 
 # The house style every deck gets without being asked: how a top strategy firm's slide reads.
 CONSULTING = """House style (always, whatever the brief says about look):
@@ -548,9 +552,15 @@ def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int,
     bad_out: dict[int, list[str]] = {}
     for n, s in enumerate(slides, 1):
         calcs = [c for c in s.get("calcs") or [] if isinstance(c, dict)]
-        if not calcs:
+        opts = [o for o in s.get("options") or [] if isinstance(o, dict) and str(o.get("value") or "").strip()]
+        if not calcs and not opts:
             continue
         ren = {}
+        for o in opts:                                        # O1 -> S<n>O1: a choice put to the board, not a claim
+            oid = str(o.get("id") or "")
+            if oid and not re.match(r"S\d+O", oid):
+                ren[oid] = f"S{n}{oid if oid.startswith('O') else 'O' + oid}"
+                o["id"] = ren[oid]
         for c in calcs:                                       # C1 on every slide -> S<n>C1, prov rewritten to match
             cid = str(c.get("id") or "")
             if cid and not re.match(r"S\d+C", cid):
@@ -569,6 +579,14 @@ def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int,
                         fix(v)
             fix(s)
         local = dict(by_id)
+        for o in opts:                                        # options are labelled as choices on the page and in notes
+            if not _numbers(str(o.get("value")), None):
+                bad_out.setdefault(n, []).append(f"option {o.get('id')}: value '{o.get('value')}' has no number")
+                continue
+            fact = {"id": o.get("id"), "text": f"{o['value']} (option for the board to choose: "
+                    f"{str(o.get('label') or 'a choice, not a fact')[:120]})", "option": True}
+            local[fact["id"]] = fact
+            ok_out.setdefault(n, []).append(fact)
         for c in calcs:
             cid, formula, value = c.get("id"), str(c.get("formula") or ""), str(c.get("value") or "")
             src = [x for x in c.get("from") or [] if x in local]
