@@ -121,68 +121,6 @@ def test_goals_are_checked_and_batches_capped(_env):
     assert not ok and "Too many tasks" in out
 
 
-def test_background_returns_at_once_and_the_reports_arrive_as_a_message(monkeypatch, _env):
-    def child(b):
-        time.sleep(0.3)
-        return _msg("background report")
-    fake(monkeypatch, child)
-    a = _agent(_env, mode="ask")
-    got = []
-    a.deliver = got.append
-    t0 = time.time()
-    out, ok = D.run_tool(a, {"tasks": [{"goal": "Research company Acme"}, {"goal": "Research company Globex"}]})
-    assert ok and json.loads(out)["status"] == "dispatched" and time.time() - t0 < 0.3
-    for _ in range(50):
-        if got:
-            break
-        time.sleep(0.1)
-    assert got and got[0].startswith("Sub-agent results are in (2 tasks).") and "background report" in got[0]
-    assert "​" in got[0]                                       # only the first line shows in the chat
-
-
-def test_stop_in_the_chat_stops_background_sub_agents_without_a_new_turn(monkeypatch, _env):
-    calls = []
-
-    def child(b):
-        calls.append(time.time())
-        time.sleep(0.2)
-        return _msg("", [("glob", {"pattern": "*"})])               # never finishes on its own
-    fake(monkeypatch, child)
-    events, got = [], []
-    a = _agent(_env, mode="ask", emit=events.append)
-    a.deliver = got.append
-    D.run_tool(a, {"tasks": [{"goal": "Keep listing files forever"}]})
-    time.sleep(0.6)
-    a.stop()
-    t_stop = time.time()
-    for _ in range(40):
-        if any(e.get("type") == "status" and "stopped" in (e.get("text") or "") for e in events):
-            break
-        time.sleep(0.1)
-    assert not got                                                   # no new turn after the user's Stop
-    assert not [c for c in calls if c > t_stop + 1.0]
-
-
-def test_list_steer_and_stop_actions(monkeypatch, _env):
-    steered = threading.Event()
-
-    def child(b):
-        if any("[From the agent that started you] focus on pricing" in str(m.get("content")) for m in b["messages"]):
-            steered.set()
-            return _msg("done, focused on pricing")
-        time.sleep(0.1)
-        return _msg("", [("glob", {"pattern": "*"})])
-    fake(monkeypatch, child)
-    a = _agent(_env, mode="ask")
-    a.deliver = lambda t: None
-    sid = json.loads(D.run_tool(a, {"tasks": [{"goal": "Research company Acme in depth"}]})[0])["subagent_ids"][0]
-    rows = json.loads(D.run_tool(a, {"action": "list"})[0])
-    assert rows[0]["subagent_id"] == sid and rows[0]["status"] == "running"
-    assert D.run_tool(a, {"action": "steer", "subagent_id": sid, "message": "focus on pricing"})[1]
-    assert steered.wait(5)
-    assert "No running sub-agent" in D.run_tool(a, {"action": "stop", "subagent_id": "sa-x"})[0]
-
-
 def test_output_schema_is_checked_with_one_correction(monkeypatch, _env):
     replies = iter(['{"name": "Acme"}', '{"name": "Acme", "price": 20}'])
     fake(monkeypatch, lambda b: _msg(next(replies)))
@@ -222,19 +160,6 @@ def test_the_chat_calls_it_as_a_tool_end_to_end(monkeypatch, _env):
     assert "1 sub-agent report" in a.send("research acme")
 
 
-def test_background_reports_reach_the_chat_session_after_the_turn():
-    from meshpool_harness.ui import agent_api as API
-    s = API.Session.__new__(API.Session)
-    s.lock, s.queue, s.state = threading.RLock(), [], "working"
-    started = []
-    s._start_turn = lambda text, images: started.append(text)
-    s._deliver_background("reports")
-    assert s.queue == [("reports", None)] and not started            # after the current turn, never into it
-    s.state, s.queue = "idle", []
-    s._deliver_background("reports")
-    assert started == ["reports"]
-
-
 def test_children_use_the_chats_mcp_tools_minus_memory_scheduling_and_sub_agents():
     class Mcp:
         last_images = ["img"]
@@ -269,26 +194,6 @@ def test_children_never_read_outside_the_project_even_in_full_access(monkeypatch
     fake(monkeypatch, child)
     out, _ = D.run_tool(_agent(_env, mode="auto"), {"tasks": [{"goal": "Read the secret file"}]})
     assert "only read inside the project" in out and "KEY" not in out.split("```json")[0]
-
-
-def test_sub_agents_that_may_change_files_work_inside_the_turn_others_in_the_background(monkeypatch, _env):
-    seen = []
-    fake(monkeypatch, lambda b: _msg("done"), seen=seen)
-    a = _agent(_env, mode="edits")                                  # they could edit: inside the turn
-    a.deliver = lambda t: pytest.fail("must not go to the background")
-    out, ok = D.run_tool(a, {"tasks": [{"goal": "Fix the typo in README"}]})
-    assert ok and "1 sub-agent report" in out
-    b = _agent(_env, mode="ask")                                    # Supervised: they cannot change anything
-    got = []
-    b.deliver = got.append
-    seen.clear()
-    assert json.loads(D.run_tool(b, {"tasks": [{"goal": "Read the README"}]})[0])["status"] == "dispatched"
-    for _ in range(50):
-        if got:
-            break
-        time.sleep(0.05)
-    tools = [x["tools"] for x in seen if x["child"]][0]
-    assert got and "bash" not in tools and "write_file" not in tools  # background ones only read
 
 
 def test_children_follow_the_chats_mode_and_plan_mode_as_they_change(monkeypatch, _env):
@@ -345,71 +250,55 @@ def test_only_goals_that_are_nothing_but_a_placeholder_are_refused(_env):
         D.check_goals([{"goal": "{task}"}])
 
 
-def _session(monkeypatch):
+def test_stop_during_delegation_returns_the_finished_reports(monkeypatch, _env):
+    def child(b):
+        if "slow" in _goal(b):
+            time.sleep(0.2)
+            return _msg("", [("glob", {"pattern": "*"})])            # never finishes on its own
+        return _msg("fast report: acme sells widgets")
+
+    def parent(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("unreachable")
+        return _msg("", [("delegate_task", {"tasks": [{"goal": "Research fast Acme"}, {"goal": "Research slow Globex"}]})])
+    fake(monkeypatch, child, parent=parent)
+    a = _agent(_env)
+    threading.Timer(1.0, a.stop).start()
+    t0 = time.time()
+    a.send("research both")
+    assert time.time() - t0 < 4
+    tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
+    assert "fast report: acme sells widgets" in tool and "stopped by Stop" in tool    # not "Not run"
+
+
+def test_nested_sub_agents_follow_the_chats_mode_too(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_DEPTH", "2")
+    a = _agent(_env, mode="auto")
+
+    def child(b):
+        names = [t["function"]["name"] for t in b["tools"]]
+        if "delegate_task" in names and b["messages"][-1]["role"] == "user":
+            return _msg("", [("delegate_task", {"tasks": [{"goal": "Make the file as the grandchild"}]})])
+        if "delegate_task" in names:
+            return _msg("child done: " + b["messages"][-1]["content"][:400])
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("grandchild result: " + b["messages"][-1]["content"][:100])
+        a.mode = "ask"                                              # the user tightens the chat meanwhile
+        return _msg("", [("bash", {"command": "echo x > nested.txt"})])
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(a, {"tasks": [{"goal": "Delegate the file work"}]})
+    assert "cannot ask for approval" in out and not (_env / "nested.txt").exists()
+
+
+def test_progress_steps_are_live_only_and_do_not_crowd_the_saved_transcript(tmp_path, monkeypatch):
     from meshpool_harness.ui import agent_api as API
     s = API.Session.__new__(API.Session)
-    s.lock, s.queue, s.state, s._held, s.pendings = threading.RLock(), [], "working", [], {}
-    s.events, s.id = [], "t"
-    s.emit = lambda ev: s.events.append(ev)
-    return API, s
+    s.lock, s.id, s.agent, s.events = threading.RLock(), "keep-test", None, []
+    monkeypatch.setattr(API, "SESSIONS", tmp_path)
+    s.events = [{"type": "user", "text": "hi", "i": 0}] + [
+        {"type": "subagent", "kind": "tool", "text": "step", "i": n} for n in range(1, 4000)] + [
+        {"type": "subagent", "kind": "done", "text": "completed", "i": 4000}]
+    s._persist()
+    saved = json.loads((tmp_path / "keep-test" / "transcript.json").read_text())["events"]
+    assert saved[0]["text"] == "hi" and len(saved) == 2 and saved[-1]["kind"] == "done"
 
-
-def test_stop_keeps_reports_that_arrived_and_they_go_with_the_next_message(monkeypatch):
-    API, s = _session(monkeypatch)
-    s._deliver_background(API.REPORT_HEAD + " (1 task).\n\n\u200b[Meshpool] Results of delegate_task deleg_1. ok")
-    s.queue.append(("a user note", None))
-    s.agent = None
-    s.stop()
-    assert s.queue == [] and len(s._held) == 1                       # the report is kept, the rest dropped
-    sent = []
-    monkeypatch.setattr(API.C, "load_into_env", lambda **k: None)
-    s.agent, s.cp, s.plan, s.workdir, s.harness = type("X", (), {})(), None, False, None, {"type": "x"}
-    s._start_turn.__func__  # exists
-    started = []
-
-    def fake_start(text, images):
-        with s.lock:
-            held, s._held = s._held, []
-        started.append(text + "".join(held))
-    s._start_turn = fake_start
-    s._start_turn("next question", None)
-    assert "Results of delegate_task deleg_1" in started[0]
-
-
-def test_a_chat_with_working_sub_agents_is_not_closed_when_idle(monkeypatch):
-    API, s = _session(monkeypatch)
-    s.state, s.touched = "idle", 0
-    s.agent = type("A", (), {"_delegations": {"deleg_1": object()}})()
-    monkeypatch.setitem(API.LIVE, "sess-x", s)
-    try:
-        assert "sess-x" not in API._reap_once(1)
-    finally:
-        API.LIVE.pop("sess-x", None)
-
-
-def test_after_a_restart_lost_background_sub_agents_are_reported(monkeypatch, _env):
-    API, s = _session(monkeypatch)
-    a = _agent(_env)
-    a.messages += [{"role": "assistant", "content": "", "tool_calls": [{"id": "d", "type": "function", "function": {
-        "name": "delegate_task", "arguments": "{}"}}]},
-        {"role": "tool", "tool_call_id": "d", "content": json.dumps({"status": "dispatched",
-                                                                      "delegation_id": "deleg_abc"})}]
-    s.agent = a
-    s._note_lost_subagents()
-    assert any("were lost" in (e.get("text") or "") for e in s.events) and "deleg_abc" in s._held[0]
-
-
-def test_a_message_that_replaces_the_turn_does_not_stop_background_sub_agents(monkeypatch, _env):
-    a = _agent(_env)
-    stopped = []
-
-    class Dl:
-        background = True
-
-        def stop_all(self, why):
-            stopped.append(why)
-    a._delegations = {"d": Dl()}
-    a.stop(background=False)
-    assert stopped == []
-    a.stop()
-    assert stopped == ["Stop"]

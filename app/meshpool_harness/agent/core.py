@@ -586,12 +586,12 @@ class Agent:
         return self.model or os.environ.get("MH_MODEL") or DEFAULT_MODEL
 
     # ---------- public -----------------------------------------------------------------------------------------
-    def stop(self, background: bool = True):
+    def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
-        if getattr(self, "_delegations", None):          # sub-agents it started (background ones on a full Stop)
+        if getattr(self, "_delegations", None):          # the sub-agents it is running
             from meshpool_harness.agent import delegate as DL
-            DL.stop_all(self, background=background)
+            DL.stop_all(self)
 
     def _run_subtasks(self, name: str, args: dict):
         """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
@@ -1470,7 +1470,7 @@ class Agent:
                     " Do not retry it. Take another approach or ask the user."
             elif name == "delegate_task":
                 from meshpool_harness.agent import delegate as DL
-                out, ok = self._wait(DL.run_tool, self, args)
+                out, ok = DL.run_tool(self, args)      # not _wait: on Stop it returns the finished reports
             elif is_mcp and name.endswith("run_subtasks"):
                 out, err = self._run_subtasks(name, args)
                 ok = not err

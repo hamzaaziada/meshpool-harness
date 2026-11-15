@@ -2,15 +2,17 @@
 
 A chat hands self-contained parts of a job to sub-agents. Each starts fresh (it knows nothing of the chat), gets its
 goal and context, works with the chat's own tools and permission mode, and returns one report. They run in this
-process (nothing is trusted across processes), several at once, and the chat sees their progress live.
+process (nothing is trusted across processes), several at once, and the chat shows their progress live.
 
 - Tools: the chat's tools minus what needs a person or is the chat's own: ask_user, memory, scheduling and (beyond
   the allowed depth) delegate_task. MCP tools come along, minus the assistant server's memory and scheduling.
-- Permissions: the chat's mode. A sub-agent cannot ask, so anything that would need a yes is refused (or, with
-  "Sub-agents approve their own actions" on, allowed once), as in Hermes.
-- Background: in the app, a top-level delegation returns at once and the reports arrive as a message after the
-  turn; the chat goes on meanwhile. Headless runs, and sub-agents that delegate, wait for the reports instead.
-- Control: action list | steer | stop for running sub-agents; Stop in the chat stops them all.
+  Settings can limit them to editing without commands, or to reading and research.
+- Permissions: the chat's mode and plan mode as they are at each step. A sub-agent cannot ask, so anything that
+  would need a yes is refused (or, with "Sub-agents approve their own actions" on, allowed once), as in Hermes.
+  Sub-agents never read outside the project.
+- They work inside the chat's turn, unlike Hermes's background delegation: the turn's checkpoint, diff and Undo
+  cover what they change, Stop stops them (finished reports still come back), and goals, scheduled tasks and
+  restarts need nothing special.
 - Results: per task a status, the report (capped; the full text goes to a file), steps, time, tokens, files
   written and a short tool trace. Their tokens count toward the chat's usage.
 """
@@ -56,7 +58,7 @@ def settings() -> dict:
         except ValueError:
             return default
     access = str(get("MH_SUBAGENT_ACCESS", "inherit")).strip().lower()
-    s.update(background=flag("MH_SUBAGENT_BACKGROUND", "1"), auto_approve=flag("MH_SUBAGENT_AUTO_APPROVE", "0"),
+    s.update(auto_approve=flag("MH_SUBAGENT_AUTO_APPROVE", "0"),
              depth=num("MH_SUBAGENT_DEPTH", 1, 1, 3),
              summary_chars=num("MH_SUBAGENT_SUMMARY_CHARS", 24000, 2000, 200000),
              # in-process sub-agents have no MCP call timeout to stay under: Hermes-sized limits
@@ -79,17 +81,12 @@ def schema(max_children: int) -> dict:
         "your tools and permissions; only each one's final report comes back. Use it for independent parts: "
         "researching several companies or sources, reviewing several files, trying alternatives. Do not use it "
         "for a single quick step or for work that needs the user (sub-agents cannot ask questions). "
-        f"Up to {max_children} tasks per call. In the app the call returns at once and the reports arrive as a "
-        "message after your turn: finish what does not depend on them, say what you started, and END YOUR TURN; "
-        "do not wait or poll. action=list shows running sub-agents, action=steer sends one a message "
-        "(subagent_id, message), action=stop stops one. Sub-agents know nothing of this chat, so put everything "
-        "they need in goal and context. Their reports are their own account: check important claims (a file, a "
-        "link) before you rely on them."),
+        f"Up to {max_children} tasks per call; the call returns when all have reported. Sub-agents know nothing of "
+        "this chat, so put everything they need in goal and context. Their reports are their own account: check "
+        "important claims (a file, a link) before you rely on them."),
         "parameters": {"type": "object", "properties": {
             "tasks": {"type": "array", "minItems": 1, "items": task,
-                      "description": f"The tasks, up to {max_children}. Required to start sub-agents."},
-            "action": {"type": "string", "enum": ["spawn", "list", "steer", "stop"], "description": "Default spawn."},
-            "subagent_id": {"type": "string"}, "message": {"type": "string"}}, "required": []}}}
+                      "description": f"The tasks, up to {max_children}."}}, "required": ["tasks"]}}}
 
 
 def check_goals(tasks) -> list[dict]:
@@ -183,7 +180,6 @@ class Delegation:
     def __init__(self, parent, rows: list[dict], cfg: dict, depth: int):
         self.parent, self.rows, self.cfg, self.depth = parent, rows, cfg, depth
         self.id = "deleg_" + uuid.uuid4().hex[:8]
-        self.background = False
         self.children: dict[str, dict] = {}            # subagent_id -> {agent, row, index, status, ...}
         self.lock = threading.Lock()
         self.stopped = False
@@ -217,12 +213,12 @@ class Delegation:
         from meshpool_harness.agent import core as K
         parent, cfg, depth = self.parent, self.cfg, self.depth
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
-        background = self.background
-        if cfg["access"] == "read" or background:        # read and research only (background: see run_tool)
+        if cfg["access"] == "read":                      # read and research only
             names = [n for n in names if n in K.READ_ONLY and n != "office_task"]
         elif cfg["access"] == "edit":                    # read and edit files, never run commands
             names = [n for n in names if n not in NO_COMMANDS]
         nested = depth + 1 < cfg["depth"]                # this child may delegate in turn
+        top = getattr(parent, "_delegate_top", parent)   # the chat itself, however deep this sub-agent is
         deleg = self
 
         def approve(kind, title, detail):                # nobody to ask: refuse, or allow once
@@ -238,20 +234,21 @@ class Delegation:
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
                 if self._outside(name, args):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
-                self.mode = parent.mode                  # the chat's mode now: the user may have tightened it
-                if getattr(parent, "plan", False) and name not in K.READ_ONLY:
+                self.mode = top.mode                     # the chat's mode now: the user may have tightened it
+                if getattr(top, "plan", False) and name not in K.READ_ONLY:
                     return False, "the chat is in plan mode now: nothing may change"
                 return super()._permit(name, args)
 
-            def _check_stop(self):                       # Stop, the time limit, or action=stop
+            def _check_stop(self):                       # Stop or the time limit
                 if deleg.stopped or rec.get("stop"):
                     raise K.Interrupted()
                 super()._check_stop()
 
         a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
-                  mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" and not background else None)
+                  mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_depth = depth + 1
+        a._delegate_top = top
         a.model = cfg["model"] or parent.current_model()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
@@ -396,12 +393,6 @@ class Delegation:
             if a is not None and not getattr(a, "_stop", False):
                 a.stop()
 
-    def listing(self) -> list[dict]:
-        with self.lock:
-            return [{"subagent_id": sid, "task_index": r["index"], "goal": r["goal"][:120], "status": r["status"],
-                     "seconds": round(time.time() - r["t0"]), "tools_used": len(r["trace"]),
-                     "last_tool": (r["trace"][-1]["tool"] if r["trace"] else "")} for sid, r in self.children.items()]
-
 
 # ---------- the tool -------------------------------------------------------------------------------------------------
 def report(result: dict) -> str:
@@ -421,29 +412,9 @@ def report(result: dict) -> str:
 
 
 def run_tool(parent, args: dict) -> tuple[str, bool]:
-    """delegate_task for an Agent. Returns (text for the model, ok)."""
+    """delegate_task for an Agent: runs the sub-agents and returns (text for the model, ok) when all have reported,
+    or as soon as they stop (Stop in the chat, the time limit): finished reports always come back."""
     cfg = settings()
-    reg = parent.__dict__.setdefault("_delegations", {})
-    action = str(args.get("action") or "spawn").lower()
-    if action == "list":
-        rows = [dict(c, delegation_id=d.id) for d in reg.values() for c in d.listing()]
-        return (json.dumps(rows, indent=1) if rows else "No sub-agents are running."), True
-    if action in ("stop", "steer"):
-        sid = str(args.get("subagent_id") or "")
-        for d in reg.values():
-            rec = d.children.get(sid)
-            if rec:
-                if action == "stop":
-                    rec["stop"] = True
-                    if rec.get("agent"):
-                        rec["agent"].stop()
-                    return f"Stopping {sid}; its report (what it had so far) still arrives.", True
-                msg = str(args.get("message") or "").strip()
-                if not msg or not rec.get("agent") or rec["status"] != "running":
-                    return f"{sid} is not running, or there is no message.", False
-                rec["agent"].steer("[From the agent that started you] " + msg)
-                return f"Sent to {sid}; it reads it before its next step.", True
-        return f"No running sub-agent {sid!r}. Use action=list.", False
     if not cfg["on"]:
         return "Sub-agents are off in Settings, Advanced. Do the parts yourself, one after another.", False
     depth = getattr(parent, "_delegate_depth", 0)
@@ -454,39 +425,11 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     except ValueError as e:
         return str(e), False
     if len(rows) > cfg["max_tasks"]:
-        return (f"Too many tasks ({len(rows)}): at most {cfg['max_tasks']} per call (Settings, Advanced). Split the "
-                "work into fewer, larger parts, or call again for the rest."), False
+        return (f"Too many tasks ({len(rows)}): at most {cfg['max_tasks']} per call. Split the work into fewer, "
+                "larger parts, or call again for the rest."), False
     d = Delegation(parent, rows, cfg, depth)
+    reg = parent.__dict__.setdefault("_delegations", {})
     reg[d.id] = d
-    deliver = getattr(parent, "deliver", None)
-    # Only sub-agents that cannot change anything run in the background (read and research). Ones that may edit
-    # files work inside this turn, so its checkpoint, diff and Undo cover what they change.
-    could_change = cfg["access"] != "read" and (parent.mode in ("edits", "auto") or cfg["auto_approve"])
-    if cfg["background"] and depth == 0 and callable(deliver) and not could_change:
-        d.background = True
-        def bg():
-            try:
-                res = d.run()
-                if d.stopped and getattr(d, "why", "") == "Stop":   # the user stopped them: no new turn
-                    parent.emit({"type": "status", "text": f"Sub-agents stopped ({len(rows)} task"
-                                                           f"{'s' if len(rows) != 1 else ''})."})
-                    return
-                text = report(res)
-            except Exception as e:  # noqa: BLE001
-                text = f"The sub-agents of {d.id} failed: {type(e).__name__}: {e}"
-            finally:
-                reg.pop(d.id, None)
-            n = len(rows)
-            deliver(f"Sub-agent results are in ({n} task{'s' if n != 1 else ''}).\n\n​[Meshpool] Results of "
-                    f"delegate_task {d.id}. Read them, check what matters, and carry on with the user's request.\n\n"
-                    + text)
-        threading.Thread(target=bg, daemon=True, name=d.id).start()
-        time.sleep(0.05)
-        ids = [s for s in d.children]
-        return json.dumps({"status": "dispatched", "delegation_id": d.id, "count": len(rows), "subagent_ids": ids,
-                           "note": "The sub-agents are working. Their reports arrive as a message after your turn. "
-                                   "Finish what does not depend on them, tell the user what you started, and end "
-                                   "your turn; do not wait or poll. action=list / steer / stop control them."}), True
     gen = getattr(parent, "_gen", 0)
     try:
         res = d.run(cancelled=lambda: parent._stop or getattr(parent, "_gen", 0) != gen)
@@ -496,13 +439,7 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     return report(res), ok
 
 
-def stop_all(parent, background: bool = True):
-    """Stop in the chat: every sub-agent it started; background ones only when the user asked for a full Stop
-    (not when a new message replaces the current turn)."""
+def stop_all(parent):
+    """Stop in the chat: every sub-agent it is running."""
     for d in list(getattr(parent, "_delegations", {}).values()):
-        if background or not d.background:
-            d.stop_all("Stop")
-
-
-def running(parent) -> bool:
-    return bool(getattr(parent, "_delegations", None))
+        d.stop_all("Stop")

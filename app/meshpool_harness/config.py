@@ -33,14 +33,12 @@ FIELDS = [
      "starts them."),
     ("MH_SUBAGENT_ACCESS", "What sub-agents may do", "inherit", "Same as the chat: the chat's tools and permission "
      "mode; anything that would need your yes is refused (they cannot ask), unless they may approve their own "
-     "actions below. Read and edit files: no commands. Read and research: files and the web only, and they work in "
-     "the background. Sub-agents that may change files work inside the turn, so Undo covers them. Sub-agents "
-     "started from Hermes, Codex or Pi only read."),
+     "actions below. Read and edit files: no commands. Read and research: files and the web only. They work inside "
+     "the chat's turn, so Undo covers what they change and Stop stops them. Sub-agents started from Hermes, Codex "
+     "or Pi only read."),
     ("MH_SUBAGENT_AUTO_APPROVE", "Sub-agents approve their own actions", "0", "On: what would need your yes in the "
      "chat (a command in Supervised, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
      "reports it."),
-    ("MH_SUBAGENT_BACKGROUND", "Sub-agents work in the background", "1", "On: the chat goes on while sub-agents "
-     "work, and their reports arrive as a message. Off: the chat waits for them."),
     ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10."),
     ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "50", "The most tool steps one sub-agent takes before it reports "
      "(5 to 250)."),
