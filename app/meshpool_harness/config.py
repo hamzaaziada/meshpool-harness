@@ -12,13 +12,6 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
 
-# Proves to the assistant server that run_subtasks' "parent" (model, mode, project) came from this app's own agent.
-# It lives only in this process's memory and goes to the assistant server the app itself starts once, in the MCP
-# initialize request over that server's stdin (agent/mcp.py). Never in an environment or a file: any process of the
-# same user can read another's environment (/proc/<pid>/environ), and harness models run shell commands.
-import secrets as _secrets  # noqa: E402
-PARENT_TOKEN = _secrets.token_hex(16)
-
 # Keys the web app shows and edits, in display order. (key, label, default, help)
 FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),

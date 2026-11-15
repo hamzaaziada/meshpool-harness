@@ -542,34 +542,25 @@ class Agent:
     def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
-        for f in list(getattr(self, "_sub_stops", ())):  # sub-agents run in the assistant server: tell them too
-            try:
-                Path(f).write_text("stop", encoding="utf-8")
-            except OSError:
-                pass
 
     def _run_subtasks(self, name: str, args: dict):
-        """run_subtasks with what only this chat knows, never what the model wrote: its model, its permission mode
-        and a stop file that stop() creates, so Stop here stops the sub-agents too."""
-        if not hasattr(self, "_sub_stops"):
-            self._sub_stops = set()
-        stop_file = self.dir / f"stop-subtasks-{uuid.uuid4().hex[:8]}"
-        args = {k: v for k, v in args.items() if k != "parent"}
-        for old in self.dir.glob("stop-subtasks-*") if self.dir.is_dir() else ():
-            old.unlink(missing_ok=True)              # left by an earlier Stop
-        args["parent"] = {"model": self.current_model() or "", "mode": self.mode, "stop_file": str(stop_file),
-                          "root": str(self.root), "token": C.PARENT_TOKEN}
-        self._sub_stops.add(str(stop_file))
-        if self._stop:                               # Stop landed just before it was registered
-            self.dir.mkdir(parents=True, exist_ok=True)
-            stop_file.write_text("stop", encoding="utf-8")
-        try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            return self._wait(self.mcp.call, name, args)
-        finally:
-            self._sub_stops.discard(str(stop_file))
-            if not self._stop:                       # after Stop, leave it for the sub-agents to see
-                stop_file.unlink(missing_ok=True)
+        """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
+        its permission mode and its project. Nothing crosses to another process, so nothing there can be forged:
+        any secret handed to another process of the same user can be read by a harness model's shell command
+        (review rounds 6 to 8). The assistant server's run_subtasks, used by Hermes, Codex and Pi, never trusts a
+        parent. Stop here stops them within a fraction of a second."""
+        from meshpool_harness import assistant as AS
+        gen = getattr(self, "_gen", 0)
+        stopped = lambda: self._stop or getattr(self, "_gen", 0) != gen   # noqa: E731
+
+        def run():
+            try:
+                return AS.run_subtasks(args.get("tasks") or [], str(self.root), int(args.get("max_parallel") or 0),
+                                       parent={"model": self.current_model() or "", "mode": self.mode,
+                                               "root": str(self.root)}, trusted=True, cancelled=stopped), False
+            except (ValueError, KeyError, TypeError) as e:
+                return str(e), True
+        return self._wait(run)
 
     def _exists(self, path: str) -> bool:
         try:
@@ -757,7 +748,7 @@ class Agent:
         except Exception as e:
             self._repair()
             msg = raw = str(e)
-            if "attached image is too large" in msg:
+            if "endpoint could not take this request" in msg:
                 msg = msg.rsplit(" (", 1)[0]            # already says what to do
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
@@ -1007,9 +998,14 @@ class Agent:
                         if len(json.dumps(self._body())) > lim:
                             _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
                         if len(json.dumps(self._body())) > lim:
-                            raise RuntimeError("The endpoint could not take this request: the attached image is "
-                                               "too large. Attach a smaller one (a screenshot of part of the "
-                                               "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
+                            if _has_images(self.messages):
+                                raise RuntimeError("The endpoint could not take this request: the attached image "
+                                                   "is too large. Attach a smaller one (a screenshot of part of the "
+                                                   "screen, or a JPEG) and send it again. (" + msg[:120] + ")")
+                            raise RuntimeError("The endpoint could not take this request: the message is too "
+                                               "large even after older outputs were shortened. Send a shorter "
+                                               "message (attach long text as a file) or start a new chat. ("
+                                               + msg[:120] + ")")
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         self.emit({"type": "status", "text": "The request was too large for the endpoint; older "

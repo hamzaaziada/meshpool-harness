@@ -208,3 +208,14 @@ def test_one_image_too_big_alone_is_kept_and_the_user_told(agent, monkeypatch):
     with pytest.raises(RuntimeError, match="attached image is too large"):
         agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
     assert any(p.get("type") == "image_url" for p in agent.messages[-1]["content"])   # never silently removed
+
+
+def test_a_too_big_text_only_request_says_so_without_mentioning_an_image(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    agent.messages.append({"role": "user", "content": "log:\n" + "x" * 90000})
+    monkeypatch.setenv("MH_BIG_REQUEST", str(len(__import__("json").dumps(agent._body())) - 1000))
+    agent._probe = lambda b, k, m: "ok"
+    agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(RuntimeError("HTTP 502: upstream request failed"))
+    with pytest.raises(RuntimeError, match="message is too large") as e:
+        agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert "image" not in str(e.value).split("(")[0]

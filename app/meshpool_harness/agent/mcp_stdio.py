@@ -45,8 +45,7 @@ def cancel_check():
     return (lambda: bool(ev and ev.is_set()))
 
 
-def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions: str = "",
-          on_initialize=None) -> None:
+def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions: str = "") -> None:
     """Read requests from stdin until it closes. serial=True runs tool calls one at a time, in arrival order
     (needed when the tools drive one shared browser or one mouse)."""
     out_lock, call_lock = threading.Lock(), threading.Lock()
@@ -67,8 +66,6 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
             return
         try:
             if m == "initialize":
-                if on_initialize:
-                    on_initialize(msg.get("params") or {})
                 ver = (msg.get("params") or {}).get("protocolVersion") or "2025-06-18"
                 res = {"protocolVersion": ver, "capabilities": {"tools": {}},
                        "serverInfo": {"name": name, "version": "1.0.0"}}

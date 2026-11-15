@@ -508,61 +508,29 @@ def subagent_settings() -> dict:
             "minutes": num("MH_SUBAGENT_MINUTES", 20, 1, 25)}     # under the tool's 30 min timeout (mcp.json)
 
 
-_TRUSTED = {"token": ""}
-
-
-def trust_parent_token(token: str) -> None:
-    """Set once, from the initialize request of the app that started this server (assistant_mcp_server)."""
-    if token and not _TRUSTED["token"]:
-        _TRUSTED["token"] = token
-
-
-def _known_project(root: str) -> bool:
-    """A sub-agent root must be a folder the app knows as a project (its projects list or this server's project),
-    never just any path a caller names."""
-    import os
-    try:
-        r = Path(root).expanduser().resolve()
-    except (OSError, ValueError):
-        return False
-    known = [os.environ.get("MESHPOOL_PROJECT") or ""]
-    try:
-        known += [str(x.get("path") or "") for x in json.loads((C.home() / "projects.json").read_text("utf-8"))]
-    except (OSError, ValueError, AttributeError):
-        pass
-    for k in known:
-        try:
-            if k and Path(k).expanduser().resolve() == r:
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
-
-
 READ_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
 EDIT_TOOLS = READ_TOOLS + ["write_file", "edit"]
 
 
 def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps: int = 0,
-                 parent: dict | None = None, cancelled=None) -> str:
+                 parent: dict | None = None, cancelled=None, trusted: bool = False) -> str:
     """Run independent parts of a job in parallel with Meshpool's own agent.
 
     Settings (Settings, Advanced): on or off, the model (empty: the parent chat's model), read-only or edit access,
-    how many at once, steps per sub-agent and a time limit for the whole call. `parent` comes from the chat that
-    calls the tool, not from the model: its model, its permission mode and a stop file that appears when the user
-    presses Stop. At the time limit or on Stop every sub-agent stops and the parts report what they have."""
+    how many at once, steps per sub-agent and a time limit for the whole call. `parent` (with trusted=True) comes
+    from Meshpool's own chat in its own process: its model, permission mode and project. `cancelled` reports Stop
+    (the chat's, or a harness's notifications/cancelled). At the time limit or on Stop every sub-agent stops and
+    the parts report what they have."""
     import os
     import shutil
     from concurrent.futures import ThreadPoolExecutor
     from meshpool_harness.agent import core as K
     C.load_into_env(override=False)
     cfg = subagent_settings()
-    parent = parent if isinstance(parent, dict) else {}
-    token = _TRUSTED["token"]                                # from initialize, never the environment or config
-    if not token or parent.get("token") != token:            # written by a model, not by Meshpool's agent: ignore
-        parent = {}
-    if parent.get("root") and not _known_project(str(parent["root"])):
-        parent = {**parent, "root": ""}                      # only a project the app knows
+    # A parent (model, mode, project) only from Meshpool's own agent, calling in its own process (trusted=True,
+    # agent/core.py _run_subtasks). From the assistant server (Hermes, Codex, Pi) it is ignored: read-only
+    # sub-agents on the configured model, in the server's project.
+    parent = parent if (trusted and isinstance(parent, dict)) else {}
     if not cfg["on"]:
         raise ValueError("Sub-agents are off in Settings, Advanced. Do the parts one after another yourself.")
     rows = []
@@ -574,8 +542,6 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
     rows = rows[:12]
-    # The parent chat's own project (token-checked), not the server's MESHPOOL_PROJECT: that is process-wide and
-    # can belong to another chat whose servers started at the same moment.
     root = str(parent.get("root") or "") or folder or os.environ.get("MESHPOOL_PROJECT") or ""
     has_project = bool(root) and Path(root).is_dir()
     if not has_project:                                      # no project: an empty folder, never the home folder
@@ -587,7 +553,6 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     steps = int(max_steps or cfg["steps"])
     workers = max(1, min(int(max_parallel or cfg["parallel"]), cfg["parallel"], 6))
     deadline = time.time() + cfg["minutes"] * 60
-    stop_file = str(parent.get("stop_file") or "")
     live: list = []
     halted = {"why": ""}
 
@@ -614,7 +579,7 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         while not halted.get("done"):
             if not halted["why"]:
                 halted["why"] = ("the time limit" if time.time() >= deadline else
-                                 "Stop" if (stop_file and os.path.exists(stop_file)) or (cancelled and cancelled())
+                                 "Stop" if cancelled and cancelled()
                                  else "")
             if halted["why"]:                                # keep at it: a sub-agent that was still being set
                 for a in list(live):                         # up, or whose send() reset its flag, stops too

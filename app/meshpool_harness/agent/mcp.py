@@ -267,7 +267,6 @@ class _Stdio:
             # own "env" names. Meshpool's settings are all in this process's environment.
             env = {k: v for k, v in env.items() if not _secret_name(k)}
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
-        env.pop("MH_PARENT_TOKEN", None)               # never in an environment (see config.PARENT_TOKEN)
         env.setdefault("PYTHONUTF8", "1")
         if exe == sys.executable:
             env["PYTHONPATH"] = str(C.APP) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -648,14 +647,7 @@ class Server:
         return msg.get("result") or {}
 
     def _init_params(self) -> dict:
-        p = {"protocolVersion": PROTOCOL, "clientInfo": CLIENT, "capabilities": {"roots": {"listChanged": False}}}
-        if (str(self.spec.get("command") or "") in ("python", "python3", "py", sys.executable)
-                and "meshpool_harness.agent.assistant_mcp_server" in [str(a) for a in self.spec.get("args") or []]
-                and not self.spec.get("url")):
-            # Meshpool's own assistant server, started by this app over a pipe only the app writes to: it learns
-            # the parent token here, and only here (see config.PARENT_TOKEN).
-            p["_meta"] = {"meshpool/parentToken": C.PARENT_TOKEN}
-        return p
+        return {"protocolVersion": PROTOCOL, "clientInfo": CLIENT, "capabilities": {"roots": {"listChanged": False}}}
 
     def _handshake(self, timeout):
         res = self._rpc("initialize", self._init_params(), timeout)
