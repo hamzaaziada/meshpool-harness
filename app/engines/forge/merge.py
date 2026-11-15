@@ -271,3 +271,52 @@ def _fix_rid(part, got: str, want: str):
     rel = rels.pop(got)
     rel._rId = want
     rels[want] = rel
+
+
+def insert(target: str, source: str, out: str, at: int) -> int:
+    """Write `out`: `target` with every slide of `source` placed before its slide number `at` (1-based; past the end
+    appends). The new slides take the target's look as in append(); every forge page number in the result is
+    renumbered to its place. Returns how many slides were added."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        tmp = str(Path(d) / "appended.pptx")
+        added = append(target, source, tmp)
+        prs = Presentation(tmp)
+        lst = prs.slides._sldIdLst
+        ids = list(lst)
+        new = ids[len(ids) - added:]
+        pos = max(0, min(int(at) - 1, len(ids) - added))
+        for el in new:
+            lst.remove(el)
+        for k, el in enumerate(new):
+            lst.insert(pos + k, el)
+        renumber(prs)
+        prs.save(out)
+    return added
+
+
+def consolidate(decks: list[str], out: str) -> int:
+    """Write `out`: the first deck, then each other deck's slides in order, all in the first deck's look, page numbers
+    renumbered. Returns the total slide count."""
+    import shutil
+    import tempfile
+    if not decks:
+        raise ValueError("no decks to consolidate")
+    with tempfile.TemporaryDirectory() as d:
+        cur = str(Path(d) / "c0.pptx")
+        shutil.copyfile(decks[0], cur)
+        for i, src in enumerate(decks[1:], 1):
+            nxt = str(Path(d) / f"c{i}.pptx")
+            append(cur, src, nxt)
+            cur = nxt
+        prs = Presentation(cur)
+        renumber(prs)
+        prs.save(out)
+        return len(prs.slides)
+
+
+def renumber(prs) -> None:
+    """Every forge "Firm" footer gets its slide's place in this deck."""
+    for i, sl in enumerate(prs.slides, 1):
+        for el in sl.shapes._spTree.iterchildren():
+            _renumber(el, i)
