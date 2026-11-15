@@ -208,3 +208,62 @@ def test_loop_reports_any_tool_exception_to_the_model(tmp_path, monkeypatch):
     outs = [m["content"] for m in client.requests[-1]["messages"] if m["role"] == "tool"]
     assert r.ok and outs[0].startswith("ERROR: IsADirectoryError") and outs[1].startswith("ERROR: NotImplementedError")
 
+
+
+def _sse_server(first_delay, mid_delay):
+    """A local streaming endpoint: waits first_delay before any byte, then sends one chunk, waits mid_delay, ends."""
+    import http.server
+    import threading
+    import time
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(first_delay)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]}
+            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+            self.wfile.flush()
+            time.sleep(mid_delay)
+            done = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+            self.wfile.write(b"data: " + json.dumps(done).encode() + b"\n\ndata: [DONE]\n\n")
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def test_a_slow_first_byte_waits_longer_than_a_stalled_stream(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_AGENT_IDLE_S", "0.5")
+    monkeypatch.setenv("MH_AGENT_FIRST_BYTE_S", "3")
+    a = Agent(str(tmp_path), mode="auto")
+    srv, base = _sse_server(first_delay=1.2, mid_delay=0)      # slow prefill: past the idle clock, inside first-byte
+    resp, streamed = a._post(base, "k", {"model": "m", "messages": []}, True)
+    assert resp["choices"][0]["message"]["content"] == "hi" and streamed
+    srv.shutdown()
+    srv, base = _sse_server(first_delay=0, mid_delay=1.2)      # a stream that goes quiet mid-reply is still cut
+    with pytest.raises(RuntimeError, match="HTTP 0.*timed out"):
+        a._post(base, "k", {"model": "m", "messages": []}, True)
+    srv.shutdown()
+
+
+def test_repeated_timeouts_on_a_large_context_compact_it(tmp_path, monkeypatch):
+    a = Agent(str(tmp_path), mode="auto")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+    for i in range(30):
+        a.messages += [_call("read_file", {"path": f"f{i}"}, cid=f"c{i}"),
+                       {"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 8000}]
+    sizes = []
+
+    def post(base, key, body, stream):
+        sizes.append(core._context_size(body["messages"]))
+        if len(sizes) < 3:
+            raise RuntimeError("HTTP 0: connection problem (The read operation timed out)")
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}, False
+    a._post = post
+    a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert sizes[0] > 150000 and sizes[-1] < sizes[0] // 2

@@ -210,6 +210,14 @@ Rules
 - Write plainly: short sentences, no filler."""
 
 
+def _set_read_timeout(resp, seconds: float) -> None:
+    """Change the read timeout of an open urllib response (CPython keeps the socket at fp.raw._sock)."""
+    try:
+        resp.fp.raw._sock.settimeout(seconds)
+    except Exception:  # noqa: BLE001  another runtime or a test double: keep the timeout it was opened with
+        pass
+
+
 def _retry_text(msg: str, attempt: int) -> str:
     """One calm line per retry instead of the raw network error."""
     m = msg.lower()
@@ -824,7 +832,8 @@ class Agent:
                         continue
                 if attempt >= 5:
                     raise
-                if re.search(r"HTTP 5\d\d", msg) and attempt >= 1:   # a big request that keeps failing upstream:
+                stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
+                if stalled and attempt >= 1:               # a big request that keeps failing upstream:
                     if _context_size(self.messages) > 150000:   # shrink it instead of resending the same thing
                         _compact(self.messages, keep_recent=8)
                         body = self._body()
@@ -869,17 +878,25 @@ class Agent:
         req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
                                               "X-Harness-Task-Id": self.id, "session_id": self.id})
-        timeout = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
+        # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
+        # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
+        # long task the same way ("The read operation timed out").
+        idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
+        first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "300")))
         got_text = False
         gen = getattr(self, "_gen", 0)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=first) as r:
                 if not stream:
                     return json.loads(r.read().decode("utf-8", "replace")), False
 
                 def tee(lines):
                     nonlocal got_text
+                    started = False
                     for raw in lines:
+                        if not started:                  # bytes are flowing: from here on, a gap is the idle clock
+                            started = True
+                            _set_read_timeout(r, idle)
                         if self._stop or getattr(self, "_gen", 0) != gen:
                             raise Interrupted()
                         line = raw.decode("utf-8", "replace").strip()
