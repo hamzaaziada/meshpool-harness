@@ -123,7 +123,8 @@ def _legacy(r: dict, releases: list, cur: str) -> bool:
 def _pick(releases: list, cur: str) -> dict | None:
     """The newest published release this copy may move to, or None. Never a draft, never a release that is not
     newer than this copy, never one from the old 2.x line, and a prerelease only when this copy is a prerelease."""
-    ok = [r for r in releases if isinstance(r, dict) and not r.get("draft") and r.get("tag_name")]
+    ok = [r for r in releases if isinstance(r, dict) and not r.get("draft") and r.get("tag_name")
+          and ("assets" not in r or any((a or {}).get("name") == SUMS for a in r["assets"] or []))]   # still uploading
     if not _is_pre(cur):
         ok = [r for r in ok if not r.get("prerelease") and not _is_pre(r["tag_name"])]
     ok = [r for r in ok if not _legacy(r, releases, cur) and _key(r["tag_name"]) > _key(cur)]
@@ -154,6 +155,14 @@ def _sha256(p: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _fresh_sums(v: dict) -> dict | None:
+    """The checksums read again: a release whose files were being replaced may have new ones by now."""
+    try:
+        return _sums(v)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _sums(v: dict) -> dict | None:
@@ -206,10 +215,11 @@ def _installer(v: dict, why: str) -> dict:
             p = Path(tempfile.gettempdir()) / a["name"]
             part = p.with_name(p.name + ".part")
             _download(a["url"], part)
-        if _sha256(part) != sums[a["name"]]:
+        if _sha256(part) != sums[a["name"]] and _sha256(part) != (_fresh_sums(v) or {}).get(a["name"]):
             part.unlink()
             return {"ok": False, "error": f"The download of {a['name']} did not match the release's checksum, so it "
-                                          "was deleted. Try again.", "url": v["url"]}
+                                          "was deleted. The release may have been updating on GitHub while it "
+                                          "downloaded: try again in a few minutes.", "url": v["url"]}
         C.replace_file(part, p)
     except OSError as e:
         part.unlink(missing_ok=True)
@@ -303,9 +313,9 @@ def install() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         t = Path(tmp)
         tgz = _download(src_url, t / "src.tgz")
-        if want and _sha256(tgz) != want:
+        if want and _sha256(tgz) != want and _sha256(tgz) != (_fresh_sums(v) or {}).get(SRC_ASSET):
             return {"ok": False, "error": "The update did not match the release's checksum, so nothing was changed. "
-                                          "Try again."}
+                                          "The release may have been updating on GitHub: try again in a few minutes."}
         with tarfile.open(tgz) as tf:
             try:
                 tf.extractall(t, filter="data")
