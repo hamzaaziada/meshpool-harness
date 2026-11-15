@@ -1613,11 +1613,14 @@ class Agent:
         same runner and report as the Office MCP server (agent/office_jobs.py)."""
         from meshpool_harness.agent import office_jobs as OJ
         engine = args["engine"]
-        if engine == "slides":
-            args = dict(args, request=self._deck_brief(args))
         paths, missing = OJ.resolve_files(self.root, args.get("files"))
         if missing:
             return f"ERROR: input file not found: {missing}", False
+        why = OJ.check_request(engine, args.get("request", ""))
+        if why:                                  # before the deck brief and the job folder: nothing is built
+            return f"ERROR: office_task refused, nothing was built: {why}", False
+        if engine == "slides":
+            args = dict(args, request=self._deck_brief(args))
         jid = OJ.new_job(engine, args["request"], paths, self.root)
         self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
         OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)

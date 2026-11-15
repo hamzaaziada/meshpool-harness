@@ -22,6 +22,36 @@ REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of o
 REBUILD_WINDOW_S = 45 * 60
 
 
+# What each engine builds. A request that names a Word-type deliverable and none of these goes to make_document.
+_OWN = {
+    "slides": r"deck|slides?|presentation|pptx|powerpoint|keynote|pitch",
+    "sheets": r"spreadsheets?|workbooks?|excel|xlsx|sheets?|models?|budgets?|forecasts?|tables?|formulas?|p&l|"
+              r"cash ?flows?|valuations?|dcf|financials?",
+    "data": r"data|datasets?|charts?|analysis|analy[sz]e|csv|plots?|graphs?|statistics|dashboards?|trends?",
+}
+_WORDISH = re.compile(r"\b(word documents?|word docs?|docx|memos?|memorandum|letters?)\b", re.I)
+_FILLER = {"placeholder", "test", "testing", "todo", "tbd", "xxx", "lorem", "ipsum", "example", "dummy", "na", "n/a",
+           "none", "null", "request", "task", "here", "the", "a", "an"}
+
+
+def check_request(engine: str, request: str) -> str | None:
+    """Why an engine job should not start, or None. Checked before the job folder exists, so a refusal costs nothing
+    and leaves nothing behind. In a 0.0.5 release run the Work agent sent sheets the request "placeholder" for a Word
+    memo, and the engine spent 7 minutes and 50 turns inventing an unrelated valuation workbook."""
+    text = (request or "").strip()
+    words = re.findall(r"[a-z0-9&/$%.]+", text.lower())
+    if not [w for w in (x.strip(".") for x in words) if w not in _FILLER and len(w) > 1]:
+        return (f"the request {text[:60]!r} does not describe a deliverable. Describe the whole file you want "
+                "(what it is for, what goes in it, the numbers or sources to use) in `request`.")
+    own = _OWN.get(engine)
+    if own and _WORDISH.search(text) and not re.search(r"\b(" + own + r")\b", text, re.I):
+        return (f"the request asks for a Word-type document ({_WORDISH.search(text).group(0)}), which the {engine} "
+                "engine does not make. Make memos, letters, reports and other Word documents with make_document "
+                "(or python-docx through bash); the engines make decks (slides), spreadsheets and models (sheets) "
+                "and data analysis (data).")
+    return None
+
+
 def resolve_files(root: Path, files: list | None) -> tuple[list[str], str]:
     """Input files (relative to root, or absolute) -> (absolute paths, "" or the first file not found)."""
     paths = []

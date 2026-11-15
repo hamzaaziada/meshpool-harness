@@ -74,6 +74,9 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     paths, missing = OJ.resolve_files(_project(), files)
     if missing:
         return f"Input file not found: {missing}", True
+    why = OJ.check_request(engine, request)
+    if why:                                      # before the job folder: nothing is built
+        return f"Refused, nothing was built: {why}", True
     jid = OJ.new_job(engine, request, paths, _project())
     t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
     t.start()
