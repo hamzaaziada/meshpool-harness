@@ -337,6 +337,9 @@ def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeyp
     import time
     from meshpool_harness.core import gateway as GW
     monkeypatch.setattr(GW, "BACKOFF_S", 0.1)
+    monkeypatch.setenv("MESHPOOL_CONFIG", "/nonexistent/meshpool.config")   # not this machine's settings
+    monkeypatch.delenv("MH_MAX_INFLIGHT", raising=False)
+    GW._CFG["t"] = 0
     h = GW.health("http://x/v1", "key-12345678")
     assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 4
     assert h.check(lambda: "HTTP 0: timed out") == "down" and h.limit == 1
@@ -722,6 +725,7 @@ def test_the_call_limit_follows_settings_without_a_restart(tmp_path, monkeypatch
 def test_a_model_that_cannot_be_replaced_fails_at_once(tmp_path, monkeypatch):
     slept = []
     monkeypatch.setattr(Agent, "_sleep", lambda self, s: slept.append(s))
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))   # not this machine's settings
     monkeypatch.setenv("MH_MODEL", "gone-model")                   # today's default is the same model
     a = Agent(str(tmp_path), mode="auto")
     a.model = "gone-model"
