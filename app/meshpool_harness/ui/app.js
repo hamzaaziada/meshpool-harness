@@ -727,6 +727,7 @@ const SLASH = [
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
   ["/terminal", "Open the terminal", () => togglePanel("term", true)],
   ["/git", "Branch, commit, push and pull request", () => togglePanel("git", true)],
+  ["/prs", "Pull requests: what each changes, its checks (CI) and deployments (CD)", () => openPRView()],
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
   ["/schedule", "Scheduled tasks", () => openSettings("scheduled")],
@@ -1518,7 +1519,7 @@ async function drawCI(root, fresh) {
   S.ciCache = {...(S.ciCache || {}), [root]: {t: Date.now(), ci}};
   if (!$("#ciBox")) return;
   const pr = ci.pr; const failingRuns = ci.runs.filter(r => r.conclusion === "failure");
-  box.innerHTML = `<h4>Pull request, checks and deployments <button class="iconbtn" id="ciRef" title="Refresh" aria-label="Refresh checks">${ICON.refresh}</button></h4>
+  box.innerHTML = `<h4>Pull request, checks and deployments <button class="iconbtn" id="ciRef" title="Refresh" aria-label="Refresh checks">${ICON.refresh}</button> <button class="linkbtn" id="ciView">Open the full view</button></h4>
     ${!ci.connected ? `<div class="stat">Connect GitHub to see private repositories and to rerun or merge. <button class="linkbtn" id="ciConn">Connect GitHub</button></div>` : ""}
     ${ci.error ? `<div class="stat">${esc(ci.error)}</div>` : ""}
     ${pr ? `<div class="prcard"><a href="${esc(pr.url)}" target="_blank" rel="noopener"><b>#${pr.number} ${esc(pr.title)}</b></a><span class="badge ${pr.state === "open" ? "added" : pr.state === "merged" ? "modified" : "deleted"}">${pr.draft ? "Draft" : pr.state === "open" ? "Open" : pr.state === "merged" ? "Merged" : "Closed"}</span><small>${esc(ci.branch)} into ${esc(pr.base)}${pr.author ? " by " + esc(pr.author) : ""}</small>
@@ -1529,6 +1530,7 @@ async function drawCI(root, fresh) {
     <div class="cil"><b>Deployments (CD)</b>${ci.deployments.length ? `<ul>${ci.deployments.map(d => `<li><span class="cidot ${d.state === "success" || d.state === "active" ? "ok" : d.state === "failure" || d.state === "error" ? "bad" : d.state === "in_progress" || d.state === "pending" || d.state === "queued" ? "run" : ""}"></span><span class="cn">${esc(d.environment || "deployment")}</span><span class="cs">${esc(d.state)} · ${esc(d.ref || d.sha)}</span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Open</a>` : ""}</li>`).join("")}</ul>` : `<div class="stat">No deployments recorded on GitHub.</div>`}</div>
     ${failingRuns.length ? `<div class="row" style="margin-top:8px"><button class="btn primary" id="ciFix">Ask the agent to fix the failing CI</button></div>` : ""}`;
   $("#ciRef").onclick = () => drawCI(root, true);
+  $("#ciView").onclick = () => openPRView(root, pr?.number);
   $("#ciConn")?.addEventListener("click", () => openSettings("connectors"));
   $("#ciMerge")?.addEventListener("click", async () => { if (!await ask({title: `Merge #${pr.number}?`, text: `Squash and merge ${ci.branch} into ${pr.base} on GitHub.`, ok: "Merge"})) return; try { await post("/api/git/ci", {root, action: "merge", pr: pr.number}); toast("Pull request merged"); drawCI(root, true); } catch (e) { toast(e.message, 5000); } });
   $$("[data-rerun]", box).forEach(b => b.onclick = async () => { try { await post("/api/git/ci", {root, action: "rerun", run: b.dataset.rerun}); toast("Rerunning the failed jobs"); setTimeout(() => drawCI(root, true), 3000); } catch (e) { toast(e.message, 5000); } });
@@ -2327,3 +2329,163 @@ async function restartApp() {
   conv.addEventListener("scroll", () => { jd.hidden = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 300; });
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();
+
+/* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */
+const PRV = {root: "", n: null, timer: null, list: null};
+function prVerdictChip(v) {
+  const m = {passing: ["ok", "Checks passed"], failing: ["bad", "Checks failing"], running: ["run", "Checks running"], none: ["", "No checks"]}[v] || ["", ""];
+  return `<span class="prv-chk ${v}"><span class="cidot ${m[0]}"></span>${m[1]}</span>`;
+}
+function prStateBadge(p) {
+  const [cl, w] = p.draft && p.state === "open" ? ["draft", "Draft"] : ({open: ["open", "Open"], merged: ["merged", "Merged"], closed: ["closed", "Closed"]}[p.state] || ["", p.state]);
+  return `<span class="prv-state ${cl}">${w}</span>`;
+}
+function ago(t) { if (!t) return ""; const s = (Date.now() - Date.parse(t)) / 1000; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; }
+function diffHTML(patch) {
+  // a GitHub patch: hunks of "@@ -a,b +c,d @@", then lines starting with space, + or -
+  let o = 0, n = 0; const rows = [];
+  for (const ln of String(patch || "").split("\n")) {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/.exec(ln);
+    if (h) { o = +h[1]; n = +h[2]; rows.push(`<tr class="hk"><td></td><td></td><td>${esc(ln)}</td></tr>`); continue; }
+    const c = ln[0];
+    if (c === "+") rows.push(`<tr class="ad"><td></td><td>${n++}</td><td>${esc(ln.slice(1)) || " "}</td></tr>`);
+    else if (c === "-") rows.push(`<tr class="dl"><td>${o++}</td><td></td><td>${esc(ln.slice(1)) || " "}</td></tr>`);
+    else if (c === "\\") rows.push(`<tr class="nt"><td></td><td></td><td>${esc(ln)}</td></tr>`);
+    else rows.push(`<tr><td>${o++}</td><td>${n++}</td><td>${esc(ln.slice(1)) || " "}</td></tr>`);
+  }
+  return `<table class="prv-diff">${rows.join("")}</table>`;
+}
+async function openPRView(root, n) {
+  root = root || curRoot();
+  if (!root) { toast("Open a project first."); return; }
+  $(".scrim")?.remove();
+  PRV.root = root; PRV.n = n || null;
+  const sc = document.createElement("div"); sc.className = "scrim prv-scrim";
+  sc.innerHTML = `<div class="prv" role="dialog" aria-label="Pull requests"><div class="prv-top"><b>Pull requests</b><span class="stat" id="prvRepo"></span><span class="sp"></span>
+      <button class="btn" id="prvNew">New pull request</button><button class="iconbtn" id="prvRef" title="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="iconbtn" id="prvX" aria-label="Close">${ICON.x}</button></div>
+    <div class="prv-body"><aside class="prv-list" id="prvList"><div class="pnote">Loading pull requests...</div></aside><main class="prv-main" id="prvMain"><div class="pnote">Loading...</div></main></div></div>`;
+  document.body.appendChild(sc);
+  sc.onclick = e => { if (e.target === sc) closePRView(); };
+  $("#prvX").onclick = closePRView;
+  $("#prvRef").onclick = () => prLoad(true);
+  $("#prvNew").onclick = async () => {                   // a pull request for the current branch, opened on GitHub
+    const title = await ask({title: "New pull request", text: `Pushes ${PRV.list?.branch || "the current branch"} and opens a pull request for it on GitHub. Title:`, value: PRV.list?.branch || "", ok: "Open"});
+    if (!title) return;
+    try {
+      const r = await post("/api/git", {root: PRV.root, action: "pr", title: typeof title === "string" ? title : "", body: ""});
+      if (r.note) { toast(r.note, 6000); window.open(r.pr, "_blank", "noopener"); return; }
+      toast("Pull request opened"); PRV.n = null; prLoad(true);
+    } catch (e) { toast(e.message, 6000); }
+  };
+  await prLoad();
+}
+function closePRView() { clearTimeout(PRV.timer); $(".prv-scrim")?.remove(); }
+async function prLoad(fresh) {
+  const L = $("#prvList"); if (!L) return;
+  try { PRV.list = await api("/api/git/prs?root=" + encodeURIComponent(PRV.root)); }
+  catch (e) { L.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; $("#prvMain").innerHTML = prEmpty(e.message); return; }
+  const d = PRV.list; $("#prvRepo").textContent = d.slug;
+  if (!d.prs.length) { L.innerHTML = `<div class="pnote">No pull requests yet.</div>`; $("#prvMain").innerHTML = prEmpty(""); return; }
+  if (!PRV.n || !d.prs.some(p => p.number === PRV.n)) PRV.n = d.current || d.prs[0].number;
+  const group = (t, rows) => rows.length ? `<div class="prv-grp">${t}</div>` + rows.map(p => `<button class="prv-item${p.number === PRV.n ? " on" : ""}" data-n="${p.number}">
+      <span class="prv-it-top">${prStateBadge(p)}<span class="stat">#${p.number}</span>${p.checks ? `<span class="cidot ${({passing: "ok", failing: "bad", running: "run"})[p.checks] || ""}" title="${esc(p.checks)}"></span>` : ""}</span>
+      <span class="prv-it-t">${esc(p.title)}</span><span class="stat">${esc(p.head)} · ${ago(p.updated)}</span></button>`).join("") : "";
+  L.innerHTML = (d.connected ? "" : `<div class="pnote">Connect GitHub to see private repositories and to merge. <button class="linkbtn" id="prvConn">Connect</button></div>`)
+    + group("Open", d.prs.filter(p => p.state === "open")) + group("Recently closed", d.prs.filter(p => p.state !== "open"));
+  $("#prvConn")?.addEventListener("click", () => { closePRView(); openSettings("connectors"); });
+  $$(".prv-item", L).forEach(b => b.onclick = () => { PRV.n = +b.dataset.n; $$(".prv-item", L).forEach(x => x.classList.toggle("on", x === b)); prDetail(); });
+  await prDetail();
+}
+function prEmpty(msg) { return `<div class="prv-empty"><h3>Pull requests</h3><p>${esc(msg || "Pull requests Meshpool or you open for this repository show here, with what they change and how their checks are doing.")}</p></div>`; }
+async function prDetail() {
+  clearTimeout(PRV.timer);
+  const M = $("#prvMain"); if (!M) return; const n = PRV.n;
+  let p; try { p = await api(`/api/git/pr?root=${encodeURIComponent(PRV.root)}&n=${n}`); } catch (e) { M.innerHTML = prEmpty(e.message); return; }
+  if (PRV.n !== n || !$("#prvMain")) return;
+  const fails = p.checks.filter(c => ckState(c)[0] === "bad");
+  const ok = p.checks.filter(c => ckState(c)[0] === "ok").length, run = p.checks.filter(c => ckState(c)[0] === "run").length;
+  const why = p.can_merge ? "" : p.state !== "open" ? "" : !p.connected ? "Connect GitHub to merge" : p.draft ? "Mark it ready for review first"
+    : p.verdict === "failing" ? "Fix the failing checks first" : p.verdict === "running" ? "Wait for the checks to finish" : p.mergeable === false ? "It has merge conflicts" : "GitHub is still working out if it can merge";
+  const tot = Math.max(1, p.additions + p.deletions);
+  M.innerHTML = `<header class="prv-head">
+      <div class="prv-title">${prStateBadge(p)}<h2>${esc(p.title)} <span class="stat">#${p.number}</span></h2></div>
+      <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${ago(p.updated)}</div>
+      <div class="prv-acts"><a class="btn" href="${esc(p.url)}" target="_blank" rel="noopener">Open on GitHub</a>
+        ${p.preview_url ? `<button class="btn" id="prvPrev" title="${esc(p.preview_url)}">Preview</button>` : ""}
+        <button class="btn" id="prvRev">Review with the agent</button>
+        ${p.state === "open" && p.draft && p.connected ? `<button class="btn" id="prvReady">Ready for review</button>` : ""}
+        ${p.state === "open" ? `<button class="btn primary" id="prvMerge" ${p.can_merge ? "" : `disabled title="${esc(why)}"`}>Squash and merge</button>${why ? `<span class="stat">${esc(why)}</span>` : ""}` : ""}</div>
+    </header>
+    <section class="prv-sum">
+      <div class="prv-card"><div class="k">Changes</div><div class="v"><span class="plus">+${p.additions}</span> <span class="minus">−${p.deletions}</span></div><div class="stat">${p.changed_files} file${p.changed_files === 1 ? "" : "s"}</div>
+        <div class="prv-bar"><i class="a" style="width:${100 * p.additions / tot}%"></i><i class="d" style="width:${100 * p.deletions / tot}%"></i></div></div>
+      <div class="prv-card"><div class="k">CI checks</div><div class="v">${prVerdictChip(p.verdict)}</div><div class="stat">${ok} passed${fails.length ? `, ${fails.length} failing` : ""}${run ? `, ${run} running` : ""}</div></div>
+      <div class="prv-card"><div class="k">Reviews</div><div class="v">${p.reviews.length ? p.reviews.map(r => `<span class="prv-rv ${r.state}">${esc(r.user)}: ${r.state === "approved" ? "approved" : r.state === "changes_requested" ? "changes requested" : "commented"}</span>`).join(" ") : `<span class="stat">None yet</span>`}</div></div>
+      <div class="prv-card"><div class="k">Deployments (CD)</div><div class="v">${p.deployments.length ? p.deployments.map(d => `<span class="prv-dep"><span class="cidot ${d.state === "success" || d.state === "active" ? "ok" : d.state === "failure" || d.state === "error" ? "bad" : d.state === "in_progress" || d.state === "pending" || d.state === "queued" ? "run" : ""}"></span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.environment)}</a>` : esc(d.environment)}</span>`).join(" ") : `<span class="stat">None for this commit</span>`}</div></div>
+    </section>
+    <section class="prv-sec"><h4>Checks <span class="stat">${esc(p.sha.slice(0, 7))}</span></h4>${p.checks.length ? `<ul class="prv-ck">${p.checks.map(c => { const [cl, tx] = ckState(c); return `<li class="${cl}"><span class="cidot ${cl}"></span><span class="cn">${esc(c.name)}${c.summary ? ` <span class="stat">${esc(c.summary)}</span>` : ""}</span><span class="cs">${tx}${c.seconds != null ? ` · ${c.seconds < 90 ? c.seconds + " s" : Math.round(c.seconds / 60) + " min"}` : ""}</span>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">Details</a>` : ""}</li>`; }).join("")}</ul>` : `<div class="stat">No checks have run on this commit.</div>`}
+      ${p.runs.length ? `<h4 style="margin-top:14px">Workflow runs</h4><ul class="prv-ck">${p.runs.map(r => { const [cl, tx] = ckState(r); return `<li class="${cl}"><span class="cidot ${cl}"></span><span class="cn">${esc(r.name)} <span class="stat">${esc(r.event || "")}${r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</span></span><span class="cs">${tx}</span><a href="${esc(r.url)}" target="_blank" rel="noopener">Logs</a>${r.conclusion === "failure" && p.connected ? `<button class="linkbtn" data-rerun="${r.id}">Rerun failed jobs</button>` : ""}</li>`; }).join("")}</ul>` : ""}
+      ${fails.length ? `<div class="row" style="margin-top:10px"><button class="btn" id="prvFix">Ask the agent to fix the failing checks</button></div>` : ""}</section>
+    <section class="prv-sec"><h4>Conversation <span class="stat">${p.comments.length}</span></h4>
+      ${p.body ? `<div class="prv-cm"><div class="stat"><b>${esc(p.author)}</b> opened it</div><div class="prv-cmb">${esc(p.body).slice(0, 4000)}</div></div>` : ""}
+      ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${ago(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
+      ${p.connected ? `<div class="prv-cmnew"><textarea id="prvCm" rows="3" placeholder="Comment on GitHub"></textarea><button class="btn" id="prvCmGo">Comment</button></div>` : `<div class="stat">Connect GitHub to comment.</div>`}</section>
+    <section class="prv-sec"><h4>Files changed <span class="stat">${p.files.length}${p.files.length < p.changed_files ? ` of ${p.changed_files}` : ""}</span><span class="sp"></span><button class="linkbtn" id="prvAll">Expand all</button></h4>
+      ${p.files.map((f, i) => { const [cl, w] = CH_BADGE[f.status === "removed" ? "deleted" : f.status === "modified" ? "changed" : f.status] || CH_BADGE.changed;
+        const pv = PRV_KIND(f.path) && f.status !== "removed";
+        return `<details class="prv-file" data-i="${i}"><summary><span class="badge ${cl}">${w}</span><span class="cn">${esc(f.from ? f.from + " → " + f.path : f.path)}</span>${pv ? `<button class="linkbtn prv-pvb" data-pv="${i}">Preview</button>` : ""}<span class="nw"><span class="plus">+${f.added}</span> <span class="minus">−${f.removed}</span></span></summary><div class="prv-fb"></div></details>`; }).join("")}
+    </section>`;
+  $$(".prv-file", M).forEach(d => d.addEventListener("toggle", () => {   // a file's diff is drawn when it is opened
+    const fb = $(".prv-fb", d); if (!d.open || fb.dataset.done) return; fb.dataset.done = 1;
+    const f = p.files[+d.dataset.i];
+    fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">${f.binary ? "A binary file: no text to show." : "Too large to show here. Open it on GitHub."}</div>`;
+  }));
+  if (p.files.length && p.files.length <= 4) $$(".prv-file", M).forEach(d => d.open = true);
+  $$("[data-pv]", M).forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation(); prPreview(p, +b.dataset.pv, b.closest(".prv-file")); });
+  $("#prvPrev")?.addEventListener("click", () => { store("preview", p.preview_url); closePRView(); togglePanel("preview", true); });
+  $("#prvRev").onclick = () => { closePRView(); sendCmd(`Review pull request #${p.number} (${p.url}): ${p.head} into ${p.base}. Read its diff (git fetch, then git diff origin/${p.base}...origin/${p.head}, or the GitHub tools) and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.`); };
+  $("#prvAll").onclick = () => $$(".prv-file", M).forEach(d => d.open = true);
+  $("#prvMerge")?.addEventListener("click", async () => {
+    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. Its checks passed.`, ok: "Merge"})) return;
+    try { await post("/api/git/pr", {root: PRV.root, action: "merge", pr: p.number}); toast("Pull request merged"); prLoad(true); } catch (e) { toast(e.message, 6000); }
+  });
+  $("#prvCmGo")?.addEventListener("click", async () => {
+    const t = $("#prvCm").value.trim(); if (!t) return;
+    try { await post("/api/git/pr", {root: PRV.root, action: "comment", pr: p.number, body: t}); toast("Comment posted on GitHub"); prDetail(); } catch (e) { toast(e.message, 6000); }
+  });
+  $("#prvReady")?.addEventListener("click", async () => { try { await post("/api/git/pr", {root: PRV.root, action: "ready", pr: p.number}); toast("Marked ready for review"); prDetail(); } catch (e) { toast(e.message, 6000); } });
+  $$("[data-rerun]", M).forEach(b => b.onclick = async () => { try { await post("/api/git/pr", {root: PRV.root, action: "rerun", pr: p.number, run: b.dataset.rerun}); toast("Rerunning the failed jobs"); setTimeout(prDetail, 3000); } catch (e) { toast(e.message, 6000); } });
+  $("#prvFix")?.addEventListener("click", () => {
+    closePRView(); const i = $("#input");
+    i.value = `The checks on pull request #${p.number} (${p.url}) are failing: ${fails.map(c => c.name + (c.url ? " (" + c.url + ")" : "")).join(", ")}. Read the logs, find the root cause, fix it, run the tests and push to ${p.head}.`;
+    i.dispatchEvent(new Event("input")); i.focus();
+  });
+  // keep it live while anything is still running
+  if (p.verdict === "running" || p.runs.some(r => r.status !== "completed")) PRV.timer = setTimeout(() => { if ($(".prv-scrim")) prDetail(); }, 20000);
+}
+
+/* File previews in a pull request: images before and after, Markdown rendered, HTML in a sandbox (no scripts). */
+const PRV_KIND = path => /\.(png|jpe?g|gif|webp|svg)$/i.test(path) ? "image" : /\.(md|markdown)$/i.test(path) ? "md" : /\.html?$/i.test(path) ? "html" : "";
+async function prFile(p, path, side) {
+  const r = await fetch(`/api/git/pr/file?root=${encodeURIComponent(PRV.root)}&n=${p.number}&side=${side}&path=${encodeURIComponent(path)}`, {headers: {"X-Meshpool-Token": MP.token}});
+  if (!r.ok) { let m = `Could not load ${side === "head" ? "the new" : "the old"} version.`; try { m = (await r.json()).error || m; } catch (e) {} throw new Error(m); }
+  return r;
+}
+async function prPreview(p, i, det) {
+  const f = p.files[i], kind = PRV_KIND(f.path), fb = $(".prv-fb", det);
+  det.open = true; fb.dataset.done = 1;
+  fb.innerHTML = `<div class="stat" style="padding:10px">Loading the preview...</div>`;
+  try {
+    if (kind === "image") {
+      const sides = [["base", "Before"], ["head", "After"]].filter(([sd]) => !(sd === "base" && f.status === "added"));
+      const urls = await Promise.all(sides.map(async ([sd]) => URL.createObjectURL(await (await prFile(p, sd === "base" && f.from ? f.from : f.path, sd)).blob())));
+      fb.innerHTML = `<div class="prv-img">${sides.map(([, lb], k) => `<figure><figcaption>${lb}</figcaption><img src="${urls[k]}" alt="${esc(lb + " " + f.path)}"></figure>`).join("")}</div>`;
+    } else {
+      const text = await (await prFile(p, f.path, "head")).text();
+      if (kind === "md") fb.innerHTML = `<div class="prv-md md">${md(text)}</div>`;
+      else { fb.innerHTML = `<iframe class="prv-html" sandbox title="${esc(f.path)}"></iframe>`; $(".prv-html", fb).srcdoc = text; }
+    }
+    fb.insertAdjacentHTML("beforeend", `<div class="prv-pvbar"><button class="linkbtn" data-diff="1">Show the diff</button></div>`);
+    $("[data-diff]", fb).onclick = () => { fb.innerHTML = f.patch ? diffHTML(f.patch) : `<div class="stat" style="padding:10px">No text diff.</div>`; };
+  } catch (e) { fb.innerHTML = `<div class="stat" style="padding:10px">${esc(e.message)}</div>`; }
+}

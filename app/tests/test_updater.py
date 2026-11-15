@@ -11,7 +11,8 @@ def test_version_compare():
 
 
 def test_check_reports_newer(monkeypatch):
-    body = json.dumps({"tag_name": "v0.99.0", "html_url": "u", "assets": [{"name": "Meshpool.dmg", "browser_download_url": "d"}]})
+    body = json.dumps({"tag_name": "v0.99.0", "html_url": "u", "assets": [{"name": "Meshpool.dmg", "browser_download_url": "d"},
+                                                                      {"name": "SHA256SUMS.txt", "browser_download_url": "s"}]})
     monkeypatch.setattr(U, "_get", lambda *a, **k: io.BytesIO(body.encode()))
     U._CACHE.clear()
     v = U.check(force=True)
@@ -266,3 +267,12 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
     seen = []
     monkeypatch.setattr(U, "_installer", lambda v, why: seen.append(why) or {"ok": True, "action": "installer"})
     assert U.install()["action"] == "installer" and seen
+
+
+def test_a_release_still_uploading_is_not_offered():
+    """A release without its SHA256SUMS.txt yet is mid-upload: offering it failed every update until it finished."""
+    sums = {"name": "SHA256SUMS.txt", "browser_download_url": "s"}
+    rels = [{"tag_name": "v0.0.5", "assets": [{"name": "Meshpool.dmg"}]},          # files still going up
+            {"tag_name": "v0.0.4", "assets": [{"name": "Meshpool.dmg"}, sums]}]
+    assert U._pick(rels, "0.0.3")["tag_name"] == "v0.0.4"
+    assert U._pick([{"tag_name": "v0.0.5", "assets": []}], "0.0.3") is None

@@ -260,10 +260,25 @@ jobs:
           TAG="v$VER"
           # the in-app code update installs this archive, checked against SHA256SUMS.txt
           git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
-          cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz > SHA256SUMS.txt && cd ..
+          (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz > SHA256SUMS.txt)
+          # Updates check every download against SHA256SUMS.txt, so a release users can see must never be half
+          # uploaded or have its files swapped one by one (a new installer next to the old checksums fails every
+          # update until the last file lands). A new version is built as a draft, which the updater ignores, and made
+          # public only when every file is up. A version that is already public keeps its files: a rebuild only
+          # refreshes the release page; changed code needs a new version number.
+          if gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null | grep -qx false; then
+            echo "$TAG is already public: updating the release page only, its files stay as published."
+            gh release edit "$TAG" --notes-file packaging/release-notes.md
+            exit 0
+          fi
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
           fi
           gh release edit "$TAG" --notes-file packaging/release-notes.md
           gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/Meshpool-src.tar.gz dist/SHA256SUMS.txt --clobber
+          # every file is up and matches the checksums before anyone can see the release
+          gh release view "$TAG" --json assets -q '.assets[].name' | sort > uploaded.txt
+          printf '%s\n' Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz Meshpool.dmg SHA256SUMS.txt | sort | diff - uploaded.txt
+          mkdir -p check && gh release download "$TAG" --dir check --pattern 'SHA256SUMS.txt' --pattern 'Meshpool-src.tar.gz'
+          (cd check && grep Meshpool-src.tar.gz SHA256SUMS.txt | sha256sum -c -)
           gh release edit "$TAG" --draft=false --latest

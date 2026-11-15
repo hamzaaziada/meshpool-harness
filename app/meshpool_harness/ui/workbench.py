@@ -734,6 +734,239 @@ def git_ci(root: str) -> dict:
     return out
 
 
+# ---------------------------------------- the pull request view: a list, then one pull request in full
+
+def _gh_all(path: str, token: str, limit: int = 300) -> list:
+    """Every item of a paginated GitHub list, up to limit."""
+    out, page = [], 1
+    while len(out) < limit:
+        sep = "&" if "?" in path else "?"
+        got = _gh_api(f"{path}{sep}per_page=100&page={page}", token)
+        if not isinstance(got, list) or not got:
+            break
+        out += got
+        if len(got) < 100:
+            break
+        page += 1
+    return out[:limit]
+
+
+def _checks_for(slug: str, sha: str, token: str) -> list[dict]:
+    """Check runs and commit statuses for one commit, newest attempt of each check only."""
+    checks, seen = [], set()
+    try:
+        cr = _gh_api(f"/repos/{slug}/commits/{sha}/check-runs?per_page=100", token)
+        for c in cr.get("check_runs") or []:              # newest first: a rerun replaces the failed attempt
+            if c["name"] in seen:
+                continue
+            seen.add(c["name"])
+            secs = None
+            if c.get("started_at") and c.get("completed_at"):
+                from datetime import datetime
+                f = "%Y-%m-%dT%H:%M:%SZ"
+                secs = int((datetime.strptime(c["completed_at"], f) - datetime.strptime(c["started_at"], f)).total_seconds())
+            checks.append({"name": c["name"], "status": c["status"], "conclusion": c.get("conclusion"),
+                           "url": c.get("html_url") or c.get("details_url"), "app": (c.get("app") or {}).get("name", ""),
+                           "seconds": secs, "summary": ((c.get("output") or {}).get("title") or "")[:200]})
+    except ValueError:
+        pass
+    try:
+        cs = _gh_api(f"/repos/{slug}/commits/{sha}/status", token)
+        for x in cs.get("statuses") or []:
+            if x["context"] in seen:
+                continue
+            seen.add(x["context"])
+            checks.append({"name": x["context"], "status": "completed" if x["state"] != "pending" else "in_progress",
+                           "conclusion": {"success": "success", "failure": "failure", "error": "failure"}.get(x["state"]),
+                           "url": x.get("target_url"), "app": "status", "seconds": None,
+                           "summary": (x.get("description") or "")[:200]})
+    except ValueError:
+        pass
+    return checks
+
+
+def _verdict(checks: list[dict]) -> str:
+    if any(c["conclusion"] in ("failure", "timed_out", "cancelled", "action_required", "startup_failure")
+           for c in checks):
+        return "failing"
+    if any(c["status"] != "completed" for c in checks):
+        return "running"
+    return "passing" if checks else "none"
+
+
+def _pr_row(p: dict) -> dict:
+    return {"number": p["number"], "title": p["title"], "url": p["html_url"],
+            "state": "merged" if p.get("merged_at") else p["state"], "draft": bool(p.get("draft")),
+            "head": p["head"]["ref"], "base": p["base"]["ref"], "sha": p["head"]["sha"],
+            "base_sha": p["base"].get("sha", ""),
+            "author": (p.get("user") or {}).get("login", ""), "updated": p.get("updated_at"),
+            "created": p.get("created_at"), "merged": p.get("merged_at"), "node": p.get("node_id")}
+
+
+def _repo(root: str) -> tuple[str, str]:
+    from meshpool_harness import mcp_apps as CN
+    st = git_status(root)
+    if not st.get("repo"):
+        raise ValueError("This folder is not a Git repository.")
+    if not st.get("github"):
+        raise ValueError("Pull requests show here for repositories on GitHub.")
+    return st["github"], CN.github_token()
+
+
+def pr_list(root: str) -> dict:
+    """Open pull requests, then the most recently closed ones, each with its checks verdict, for the list."""
+    slug, token = _repo(root)
+    rows = [_pr_row(p) for p in _gh_api(f"/repos/{slug}/pulls?state=open&sort=updated&direction=desc&per_page=30", token)]
+    closed = [_pr_row(p) for p in _gh_api(f"/repos/{slug}/pulls?state=closed&sort=updated&direction=desc&per_page=15", token)]
+    rows += closed
+    for r in rows[:20]:                                   # verdicts cost one call each: the first twenty
+        r["checks"] = _verdict(_checks_for(slug, r["sha"], token))
+    branch = git_status(root).get("branch", "")
+    return {"slug": slug, "connected": bool(token), "branch": branch, "prs": rows,
+            "current": next((r["number"] for r in rows if r["head"] == branch and r["state"] == "open"), None)}
+
+
+def pr_detail(root: str, number: int) -> dict:
+    """One pull request in full: what it is, every file it changes with its diff, its checks, the workflow runs for
+    its head commit, its reviews and the deployments of that commit."""
+    slug, token = _repo(root)
+    n = int(number)
+    p = _gh_api(f"/repos/{slug}/pulls/{n}", token)
+    out = _pr_row(p) | {
+        "slug": slug, "connected": bool(token), "body": (p.get("body") or "")[:20000],
+        "additions": p.get("additions", 0), "deletions": p.get("deletions", 0),
+        "changed_files": p.get("changed_files", 0), "commits": p.get("commits", 0),
+        "mergeable": p.get("mergeable"), "mergeable_state": p.get("mergeable_state", ""),
+        "head_repo": ((p.get("head") or {}).get("repo") or {}).get("full_name", slug)}
+    files = []
+    for f in _gh_all(f"/repos/{slug}/pulls/{n}/files", token, 300):
+        files.append({"path": f["filename"], "status": f["status"], "added": f.get("additions", 0),
+                      "removed": f.get("deletions", 0), "from": f.get("previous_filename", ""),
+                      "patch": (f.get("patch") or "")[:200000], "binary": "patch" not in f and f["status"] != "removed"})
+    out["files"] = files
+    out["checks"] = _checks_for(slug, out["sha"], token)
+    out["verdict"] = _verdict(out["checks"])
+    try:
+        runs = _gh_api(f"/repos/{slug}/actions/runs?head_sha={out['sha']}&per_page=10", token)
+        out["runs"] = [{"id": w["id"], "name": w.get("name") or w.get("display_title"), "status": w["status"],
+                        "conclusion": w.get("conclusion"), "url": w["html_url"], "event": w.get("event"),
+                        "created": w.get("created_at"), "attempt": w.get("run_attempt", 1)}
+                       for w in runs.get("workflow_runs") or []]
+    except ValueError:
+        out["runs"] = []
+    try:
+        revs = _gh_api(f"/repos/{slug}/pulls/{n}/reviews?per_page=50", token)
+        last = {}
+        for rv in revs:                                    # each reviewer's latest verdict
+            who = (rv.get("user") or {}).get("login", "")
+            if rv.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
+                last[who] = rv["state"].lower()
+        out["reviews"] = [{"user": k, "state": v} for k, v in last.items()]
+    except ValueError:
+        out["reviews"] = []
+    out["deployments"] = []
+    try:
+        for d in _gh_api(f"/repos/{slug}/deployments?sha={out['sha']}&per_page=5", token):
+            state, url = "unknown", ""
+            try:
+                sts = _gh_api(f"/repos/{slug}/deployments/{d['id']}/statuses?per_page=1", token)
+                if sts:
+                    state = sts[0].get("state", "unknown")
+                    url = sts[0].get("environment_url") or sts[0].get("target_url") or ""
+            except ValueError:
+                pass
+            out["deployments"].append({"environment": d.get("environment"), "state": state, "url": url,
+                                       "created": d.get("created_at")})
+    except ValueError:
+        pass
+    try:                                                  # the conversation on GitHub, newest last
+        cm = _gh_api(f"/repos/{slug}/issues/{n}/comments?per_page=30", token)
+        out["comments"] = [{"user": (c.get("user") or {}).get("login", ""), "body": (c.get("body") or "")[:4000],
+                            "created": c.get("created_at"), "url": c.get("html_url")} for c in cm[-30:]]
+    except ValueError:
+        out["comments"] = []
+    # a preview of the change: a deployment's address, else a preview link a check posted (Vercel, Netlify, ...)
+    out["preview_url"] = next((d["url"] for d in out["deployments"] if d.get("url")), "") or next(
+        (c["url"] for c in out["checks"] if c.get("url") and re.search(r"(?i)preview|vercel|netlify|pages|deploy", c["name"] + c.get("app", ""))
+         and not re.search(r"github\.com/.+/(actions|runs)/", c["url"])), "")
+    # merging from the view: only an open pull request whose checks pass and that GitHub says can merge
+    out["can_merge"] = (out["state"] == "open" and not out["draft"] and out["verdict"] in ("passing", "none")
+                        and out["mergeable"] is True and bool(token))
+    return out
+
+
+PREVIEW_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+                 ".webp": "image/webp", ".svg": "image/svg+xml", ".md": "text/plain; charset=utf-8",
+                 ".markdown": "text/plain; charset=utf-8", ".html": "text/plain; charset=utf-8",
+                 ".htm": "text/plain; charset=utf-8"}
+
+
+def pr_file(root: str, number: int, path: str, side: str = "head") -> tuple[bytes, str]:
+    """One file of a pull request as it is after the change (head) or before it (base), for the preview: images,
+    Markdown and HTML only, at most 5 MB. HTML and Markdown come back as plain text; the page shows them sandboxed."""
+    import base64
+    ext = Path(path).suffix.lower()
+    if ext not in PREVIEW_TYPES:
+        raise ValueError("No preview for this kind of file.")
+    slug, token = _repo(root)
+    p = _gh_api(f"/repos/{slug}/pulls/{int(number)}", token)
+    repo, ref = ((p["head"].get("repo") or {}).get("full_name") or slug, p["head"]["sha"]) if side == "head" \
+        else (slug, p["base"]["sha"])
+    meta = _gh_api(f"/repos/{repo}/contents/{urllib.parse.quote(path)}?ref={ref}", token)
+    if not isinstance(meta, dict) or meta.get("type") != "file":
+        raise ValueError("That file is not in this version.")
+    if meta.get("size", 0) > 5 * 1024 * 1024:
+        raise ValueError("Too large to preview here. Open it on GitHub.")
+    if meta.get("content"):
+        data = base64.b64decode(meta["content"])
+    else:                                                  # over 1 MB: GitHub sends a download address instead
+        h = {"User-Agent": "Meshpool", **({"Authorization": f"Bearer {token}"} if token else {})}
+        with urllib.request.urlopen(urllib.request.Request(meta["download_url"], headers=h), timeout=30) as r:
+            data = r.read(5 * 1024 * 1024 + 1)
+    return data[:5 * 1024 * 1024], PREVIEW_TYPES[ext]
+
+
+def pr_action(root: str, body: dict) -> dict:
+    """Merge (only when the checks pass), mark ready for review, or rerun failed jobs, for one pull request."""
+    slug, token = _repo(root)
+    if not token:
+        raise ValueError("Connect GitHub (Settings, Connectors) first.")
+    n, act = int(body.get("pr") or 0), body.get("action")
+    if act == "merge":
+        d = pr_detail(root, n)
+        if not d["can_merge"]:
+            why = ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
+                "it is a draft" if d["draft"] else "GitHub says it cannot merge yet" if d["mergeable"] is not True \
+                else "it is not open"
+            raise ValueError(f"Not merged: {why}.")
+        _gh_api(f"/repos/{slug}/pulls/{n}/merge", token, "PUT",
+                {"merge_method": body.get("method") or "squash", "sha": d["sha"]})
+    elif act == "ready":
+        d = _gh_api(f"/repos/{slug}/pulls/{n}", token)
+        q = "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}"
+        req = urllib.request.Request("https://api.github.com/graphql", method="POST",
+                                     data=json.dumps({"query": q, "variables": {"id": d["node_id"]}}).encode(),
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                                              "User-Agent": "Meshpool"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                res = json.loads(r.read() or b"{}")
+        except (urllib.error.URLError, OSError) as e:
+            raise ValueError(f"Could not reach GitHub: {e}")
+        if res.get("errors"):
+            raise ValueError("GitHub said: " + "; ".join(e.get("message", "") for e in res["errors"])[:300])
+    elif act == "rerun":
+        _gh_api(f"/repos/{slug}/actions/runs/{int(body['run'])}/rerun-failed-jobs", token, "POST", {})
+    elif act == "comment":
+        text = str(body.get("body") or "").strip()
+        if not text:
+            raise ValueError("Write a comment first.")
+        _gh_api(f"/repos/{slug}/issues/{n}/comments", token, "POST", {"body": text[:60000]})
+    else:
+        raise ValueError("Unknown action.")
+    return pr_detail(root, n)
+
+
 def git_ci_action(root: str, body: dict) -> dict:
     from meshpool_harness import mcp_apps as CN
     st = git_status(root)
@@ -744,8 +977,8 @@ def git_ci_action(root: str, body: dict) -> dict:
     act = body.get("action")
     if act == "rerun":
         _gh_api(f"/repos/{slug}/actions/runs/{int(body['run'])}/rerun-failed-jobs", token, "POST", {})
-    elif act == "merge":
-        _gh_api(f"/repos/{slug}/pulls/{int(body['pr'])}/merge", token, "PUT", {"merge_method": body.get("method") or "squash"})
+    elif act == "merge":                                  # same rule as the pull request view: green and mergeable
+        pr_action(root, {"action": "merge", "pr": body["pr"], "method": body.get("method")})
     elif act == "ready":
         raise ValueError("Mark the pull request ready for review on GitHub.")
     else:
