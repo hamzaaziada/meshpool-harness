@@ -104,3 +104,17 @@ def test_goal_never_gives_up_on_an_outage(monkeypatch):
     n = len(s.events)
     turn(s, "", extra=[down])
     assert s._goal_next(n) is None
+
+
+def test_a_message_queued_during_the_outage_wait_goes_next(monkeypatch):
+    import time
+    monkeypatch.setattr(A, "write_meta", lambda *a, **k: {})
+    monkeypatch.setattr(A, "GOAL_NET_WAIT_S", 5)
+    s = session()
+    s.queue, s._stop_req = [], False
+    s.agent = type("Ag", (), {"_stop": False})()                   # an ACP harness: no steers, a queue instead
+    threading.Timer(0.3, lambda: s.queue.append(("stop the report and summarise", []))).start()
+    turn(s, "", extra=[{"type": "error", "text": "Couldn't reach the model. (HTTP 0: timed out)"}])
+    t0 = time.time()
+    assert s._goal_next(0) == ("stop the report and summarise", []) and time.time() - t0 < 2
+    assert s.queue == []

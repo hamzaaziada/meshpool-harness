@@ -688,6 +688,10 @@ class Session:
                     return None
                 if hasattr(self.agent, "has_steers") and self.agent.has_steers():
                     break                            # the user wrote meanwhile: go now, their message goes along
+                with self.lock:
+                    if getattr(self, "queue", None):  # ACP harnesses queue it instead: send it, not GOAL_NEXT
+                        items, self.queue = self.queue, []
+                        return ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
                 time.sleep(min(0.5, max(0.0, end - time.time())))
             return (GOAL_NEXT, [])
         if not failed:

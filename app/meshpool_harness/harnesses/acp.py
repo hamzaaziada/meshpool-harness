@@ -178,6 +178,12 @@ def _auth_failure(text: str) -> bool:
         re.search(r"(?i)api.?key|bad key|unauthori[sz]ed|authenticat|forbidden|invalid.{0,20}key", s))
 
 
+def before_turn(agent) -> list:
+    """The chat's events before the current turn's user message: status lines emitted since (a model the harness
+    kept, say) must not push that message into the history."""
+    return agent.events[:getattr(agent, "_turn_at", len(agent.events))]
+
+
 def earlier_context(events: list, limit: int = 40000) -> str:
     """The chat so far as plain text for a harness that starts a fresh session on an old chat: the latest turns
     first to fit `limit` characters, written oldest first. Hidden in the chat (after \u200b)."""
@@ -526,6 +532,9 @@ class ACPAgent:
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
 
     # ---------- session ------------------------------------------------------------------------------------------
+    def _before_turn(self) -> list:
+        return before_turn(self)
+
     def _ensure_session(self):
         if self._start() and self.acp_session:
             # The process exited and a new one started: its session is not in the new process. Load it (or start
@@ -564,7 +573,7 @@ class ACPAgent:
         self._apply_model()
         # A fresh session for a chat that already has a history (the harness lost or cannot load its old session,
         # e.g. a chat from weeks ago): it would start with no memory of the chat. Carry the history in the prompt.
-        self._carry = any(e.get("type") in ("user", "assistant") for e in self.events[:-1])
+        self._carry = any(e.get("type") in ("user", "assistant") for e in self._before_turn())
 
     def _models_from(self, r: dict):
         ms = r.get("models") or {}
@@ -652,6 +661,7 @@ class ACPAgent:
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
+        self._turn_at = len(self.events)                 # the chat before this turn (earlier_context)
         self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
                     "plan": self.plan})
         self.save()                                       # the thread survives a restart mid-turn
@@ -670,7 +680,7 @@ class ACPAgent:
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False
-                body = earlier_context(self.events[:-1]) + body
+                body = earlier_context(self._before_turn()) + body
                 self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The agent')} could not reopen "
                                                       "its own session for this chat, so the conversation so far "
                                                       "went along with your message."})
@@ -688,7 +698,7 @@ class ACPAgent:
                 self._ensure_session()
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
-                    prompt[0]["text"] = earlier_context(self.events[:-1]) + prompt[0]["text"]
+                    prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
                 r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
             self._reloaded = False
             final = "".join(self._text)

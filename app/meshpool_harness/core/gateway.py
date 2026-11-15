@@ -33,7 +33,9 @@ def _max_inflight() -> int:
         _CFG["t"] = now
         try:
             from meshpool_harness import config as C
-            _CFG["v"] = C.read().get("MH_MAX_INFLIGHT")
+            vals = C.read()
+            # saved, even empty (cleared, meaning the default): the file decides, not a stale environment
+            _CFG["v"] = (vals.get("MH_MAX_INFLIGHT") or "4") if "MH_MAX_INFLIGHT" in vals else None
         except Exception:  # noqa: BLE001
             _CFG["v"] = None
     raw = _CFG["v"] or os.environ.get("MH_MAX_INFLIGHT") or "4"
@@ -68,14 +70,14 @@ class _Slots:
             f.close()
             return None
 
-    def take(self, n: int, check_stop, waiting):
+    def take(self, n, check_stop, waiting):
         try:
             os.makedirs(self.dir, exist_ok=True)
         except OSError:
             return None                              # no shared folder: the in-process gate still holds
         told = False
         while True:
-            for i in range(n):
+            for i in range(n() if callable(n) else n):         # the setting as it is now, on every pass
                 try:
                     f = self._try(i)
                 except OSError:
@@ -140,7 +142,7 @@ class Gate:
         if self.slots is None:
             return None
         try:
-            return self.slots.take(_max_inflight(), check_stop, lambda: emit and emit({
+            return self.slots.take(_max_inflight, check_stop, lambda: emit and emit({
                 "type": "status", "text": "Waiting for a free slot: sub-agents or another Meshpool window are using "
                                           "this key's model calls (MH_MAX_INFLIGHT)."}))
         except BaseException:

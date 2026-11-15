@@ -409,7 +409,7 @@ def _shrink_args(messages: list, keep: int = 200) -> None:
             f["arguments"] = json.dumps(a, ensure_ascii=False)
 
 
-def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
+def _shrink_context(messages: list, limit: int, hard: bool = False, keep_images: int = 0) -> None:
     """Make the conversation fit: elide older tool outputs, keeping fewer recent ones verbatim until it is under
     `limit`, then shorten long tool-call arguments. hard (the endpoint said the request is over the model's context):
     all of that at once, whatever the size, keeping only the outputs of the latest step."""
@@ -422,7 +422,7 @@ def _shrink_context(messages: list, limit: int, hard: bool = False) -> None:
                 m["content"] = (c[:T.HEAD] + f"\n... [{len(c) - T.HEAD - T.TAIL} chars cut: the conversation was "
                                 "over the model's context] ...\n" + c[-T.TAIL:])
         _shrink_args(messages)
-        _drop_images(messages, keep=0)
+        _drop_images(messages, keep=keep_images)
         return
     for keep in (12, 4, 1):
         _compact(messages, keep_recent=keep)
@@ -941,8 +941,9 @@ class Agent:
                                        f"for this chat. ({msg[:160]})")
                 if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
                     shrunk = True
-                    _drop_images(self.messages, keep=2)    # also too big a request (413): screenshots go first
-                    _shrink_context(self.messages, 0, hard=True)
+                    # Too long, or too big a request (413): elide older outputs and all but the latest two images,
+                    # so a screenshot the user just attached still goes with the retry.
+                    _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
                     body["model"] = PV.split(body["model"])[1]
                     self.emit({"type": "status", "text": "The conversation was longer than the model can take; "

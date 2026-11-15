@@ -23,6 +23,8 @@ ECHO = textwrap.dedent('''
             send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": False}}})
         elif meth == "session/new":
             send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "fresh"}})
+        elif meth == "session/set_model":
+            send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found"}})
         elif meth == "session/prompt":
             text = p["prompt"][0]["text"]
             send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "fresh", "update": {
@@ -135,3 +137,39 @@ def test_the_real_gateways_answers_are_read_right():
                 'maximum context length is 1000000 tokens. Reduce the length of the messages."}}')
     assert classify_error(too_long) == "context"                  # trimmed and retried, not a plain bad request
     assert classify_error("HTTP 502: upstream request failed") == "transient"   # plain-text 502: retried
+
+
+def test_a_new_chat_whose_model_the_harness_refuses_is_not_treated_as_old(home):
+    script = home / "echo_acp.py"
+    script.write_text(ECHO)
+    proj = home / "proj"
+    proj.mkdir()
+    manifest = {"id": "fake", "name": "Fake", "mode": "cowork", "type": "acp", "command": sys.executable,
+                "args": [str(script)], "share_mcp": False, "office": False}
+    a = ACPAgent(manifest, str(proj), emit=lambda e: None, approve=lambda *x, **k: ("allow_once", ""), mode="auto")
+    a.model = "some-model"                                         # set_model fails: a status line is stored
+    try:
+        assert a.send("hello").endswith("SAW:hello")               # no "started earlier" preamble, no repeat
+    finally:
+        a.close()
+
+
+def test_a_request_too_large_keeps_the_screenshot_just_attached(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    img = lambda tag: {"type": "image_url", "image_url": {"url": "data:image/png;base64," + tag * 1000}}  # noqa: E731
+    for i in range(6):
+        agent.messages.append({"role": "user", "content": [{"type": "text", "text": f"old {i}"}, img("A")]})
+        agent.messages.append({"role": "assistant", "content": "seen"})
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "what is wrong here?"}, img("Z")]})
+    sent = []
+
+    def post(base, key, body, stream):
+        imgs = [p["image_url"]["url"][-3:] for m in body["messages"] if isinstance(m.get("content"), list)
+                for p in m["content"] if p.get("type") == "image_url"]
+        sent.append(imgs)
+        if len(sent) == 1:
+            raise RuntimeError("HTTP 413: Request Entity Too Large")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert len(sent[0]) == 4 and len(sent[1]) == 2 and sent[1][-1] == "ZZZ"   # the new screenshot still goes

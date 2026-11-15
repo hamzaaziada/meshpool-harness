@@ -751,3 +751,28 @@ def test_stop_closes_the_probe_connection_too(tmp_path, monkeypatch):
         time.sleep(0.05)
     assert "closed" in log
     srv.close()
+
+
+def test_a_call_waiting_for_a_shared_slot_follows_a_raised_limit(tmp_path):
+    import threading
+    import time
+    from meshpool_harness.core import gateway as GW
+    name = "live-" + tmp_path.name
+    held = GW._Slots(name).take(1, lambda: None, lambda: None)     # slot 0 is busy
+    limit = {"n": 1}
+    threading.Timer(0.5, lambda: limit.update(n=2)).start()        # raised in Settings meanwhile
+    t0 = time.time()
+    got = GW._Slots(name).take(lambda: limit["n"], lambda: None, lambda: None)
+    assert got is not None and time.time() - t0 < 2
+    GW._Slots.give(got)
+    GW._Slots.give(held)
+
+
+def test_a_cleared_call_limit_means_the_default(tmp_path, monkeypatch):
+    from meshpool_harness import config as C
+    from meshpool_harness.core import gateway as GW
+    monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
+    monkeypatch.setenv("MH_MAX_INFLIGHT", "1")                     # an assistant server's copy from start-up
+    C.write({"MH_MAX_INFLIGHT": ""})                               # the user cleared the field since
+    GW._CFG["t"] = 0
+    assert GW._max_inflight() == 4
