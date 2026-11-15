@@ -279,7 +279,8 @@ class Workspace:
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
-    def grep(self, pattern, path=".", glob=None):
+    def grep(self, pattern, path=".", glob=None, inside_only=False):
+        """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved."""
         if self.container and not self.mounted:
             inc = f"--include='{glob}'" if glob else ""
             out, _ = self._run(f"grep -rnE {inc} --exclude-dir=.git --exclude-dir=node_modules -e {json.dumps(pattern)} "
@@ -298,6 +299,12 @@ class Workspace:
                 continue
             if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
                 continue
+            if inside_only:
+                try:
+                    if not f.resolve().is_relative_to(self.root.resolve()):
+                        continue
+                except (OSError, ValueError):
+                    continue
             try:
                 for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
                     if rx.search(line):

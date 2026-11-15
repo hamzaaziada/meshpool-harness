@@ -460,3 +460,63 @@ def test_stopped_reports_are_a_result_and_chat_grants_cover_sub_agents(monkeypat
     (_env / "AGENTS.md").write_text("ALWAYS-USE-TABS")
     D.run_tool(_agent(_env), {"tasks": [{"goal": "Look at the project"}]})
     assert [x["system"] for x in seen if x["child"]][0].count("ALWAYS-USE-TABS") == 1   # once, not twice
+
+
+def _bare_child(a, goal="Read things"):
+    return D.Delegation(a, D.check_goals([{"goal": goal}]), D.settings(), 0)._child(
+        "sa-z", 0, {"trace": [], "files": set(), "errors": [], "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}})
+
+
+def test_grep_skips_links_out_of_the_project_even_with_a_colon_and_in_its_overflow_file(monkeypatch, _env, tmp_path):
+    secret = tmp_path / "outside.txt"
+    secret.write_text("TOPSECRET-KEY-123\n" + "padding TOPSECRET\n" * 600)
+    (_env / "notes:old.txt").symlink_to(secret)                      # ":" is a legal file name character
+    (_env / "link.txt").symlink_to(secret)
+    (_env / "inside.txt").write_text("TOPSECRET inside\n")
+    child = _bare_child(_agent(_env, mode="auto", profile="work"))
+    out = child.ws.grep("TOPSECRET", ".")
+    assert "inside" in out and "KEY-123" not in out and "padding" not in out
+    assert not any("KEY-123" in f.read_text() for f in child.ws.run_dir.glob("out_*"))   # nothing saved either
+
+
+def test_office_task_is_a_command_for_sub_agents_and_home_paths_are_outside(monkeypatch, _env, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "secret.csv").write_text("a,b\n")
+    monkeypatch.setenv("HOME", str(home))
+    (_env / "real.csv").write_text("a,b\n")
+    ask = _bare_child(_agent(_env, mode="ask", profile="work"))
+    assert ask._permit("office_task", {"engine": "data", "request": "x", "files": ["~/secret.csv"]})[0] is False
+    ok, why = ask._permit("office_task", {"engine": "data", "request": "x", "files": ["real.csv"]})
+    assert ok is False and "cannot ask" in why                      # its engines run code: needs a yes
+    auto = _bare_child(_agent(_env, mode="auto", profile="work"))
+    assert auto._permit("office_task", {"engine": "data", "request": "x", "files": ["real.csv"]})[0] is True
+    assert auto._permit("office_task", {"engine": "data", "request": "x", "files": ["~/secret.csv"]})[0] is False
+    monkeypatch.setenv("MH_SUBAGENT_AUTO_APPROVE", "1")
+    assert _bare_child(_agent(_env, mode="ask", profile="work"))._permit(
+        "office_task", {"engine": "data", "request": "x", "files": ["real.csv"]})[0] is True
+    monkeypatch.delenv("MH_SUBAGENT_AUTO_APPROVE")
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")                 # no commands: no office engines either
+    assert "office_task" not in _bare_child(_agent(_env, mode="edits", profile="work"))._tool_names()
+
+
+def test_a_failed_sub_agent_says_why_and_the_turn_counts_its_tokens(monkeypatch, _env):
+    def child(b):
+        if b["messages"][-1]["role"] == "tool":
+            raise RuntimeError("The endpoint rejected the API key (HTTP 401)")
+        return _msg("Looking at the files first.", [("glob", {"pattern": "*"})])
+    fake(monkeypatch, child)
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Review the project layout"}]})
+    head, js = out.split("```json")[0], out.split("```json")[1]
+    assert "API key" in head and "Looking at the files first." in head and '"error"' in js
+
+    def parent(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("all done")
+        return _msg("", [("delegate_task", {"tasks": [{"goal": "Research company Acme"},
+                                                      {"goal": "Research company Globex"}]})])
+    fake(monkeypatch, lambda b: _msg("child report"), parent=parent)
+    ev = []
+    _agent(_env, emit=ev.append).send("go")
+    te = [e for e in ev if e["type"] == "turn_end"][-1]
+    assert te["turn"]["in"] == te["session"]["in"] > 0

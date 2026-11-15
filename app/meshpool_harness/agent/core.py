@@ -705,7 +705,7 @@ class Agent:
         return self._turn()
 
     def _turn(self) -> str:
-        turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,

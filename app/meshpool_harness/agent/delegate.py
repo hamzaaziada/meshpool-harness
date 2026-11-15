@@ -32,7 +32,8 @@ ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, sch
 # format("{user}") inside a real goal are fine (Hermes narrowed its check for the same reason)
 _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
                           re.I)
-NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests"}
+# office_task counts as a command for sub-agents: its engines run model-written code
+NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
 
 
@@ -70,10 +71,12 @@ def settings() -> dict:
 
 
 def _files_outside(root, args) -> bool:
+    from pathlib import Path
     for f in args.get("files") or []:
         try:
-            p = (root / str(f)).resolve() if not os.path.isabs(str(f)) else __import__("pathlib").Path(f).resolve()
-            if not p.is_relative_to(root):
+            p = Path(str(f)).expanduser()                 # "~/x" is the home folder, as office_task reads it
+            p = (p if p.is_absolute() else Path(root) / p).resolve()
+            if not p.is_relative_to(Path(root).resolve()):
                 return True
         except (OSError, ValueError):
             return True
@@ -267,6 +270,11 @@ class Delegation:
                 if getattr(top, "plan", False) and name not in K.PLAN_TOOLS and \
                         name.replace("-", "_") not in K.PLAN_MCP:   # what the chat itself may do in plan mode
                     return False, "the chat is in plan mode now: nothing may change"
+                if name == "office_task" and self.mode != "auto" and "office_task" not in self.always:
+                    # its engines run model-written code: for a sub-agent that is a command, so it needs approval
+                    decision, note = self.approve("bash", "Run an office engine job?",
+                                                  json.dumps(args, ensure_ascii=False)[:3000])
+                    return decision in ("yes", "always"), note or ""
                 return super()._permit(name, args)
 
             def _check_stop(self):                       # Stop or the time limit
@@ -284,17 +292,7 @@ class Delegation:
         grep = a.ws.grep
 
         def grep_in_project(pattern, path=".", glob=None):   # a symlink must not carry a read outside the project
-            out = grep(pattern, path, glob)
-            keep = []
-            for line in str(out).splitlines():
-                rel = line.split(":", 1)[0]
-                try:
-                    inside = (parent.root / rel).resolve().is_relative_to(parent.root)
-                except (OSError, ValueError):
-                    inside = False
-                if inside or not rel:
-                    keep.append(line)
-            return "\n".join(keep) if keep or not out else "(no matches inside the project)"
+            return grep(pattern, path, glob, inside_only=True)
         a.ws.grep = grep_in_project
         a.model = cfg["model"] or parent.current_model()
         row = self.rows[index]
@@ -351,9 +349,14 @@ class Delegation:
             if not reply.strip():                         # stopped or failed: what it had written so far
                 reply = next((m.get("content") for m in reversed(a.messages) if m.get("role") == "assistant"
                               and isinstance(m.get("content"), str) and m["content"].strip()), "")
+                if rec["status"] == "failed" and rec["errors"]:   # say why, so the chat can decide to retry
+                    rec["error"] = rec["errors"][-1]
+                    reply = (f"Error: {rec['error']}" + (f"\n\nWritten before it failed:\n{reply.strip()}"
+                                                         if reply.strip() else ""))
             rec["summary"] = reply.strip() or (rec["errors"][-1] if rec["errors"] else "(no report)")
         except Exception as e:  # noqa: BLE001 - one failed part must not sink the rest
-            rec.update(status="error", exit="error", summary=f"This sub-agent failed: {type(e).__name__}: {e}")
+            rec.update(status="error", exit="error", error=f"{type(e).__name__}: {e}"[:300],
+                       summary=f"This sub-agent failed: {type(e).__name__}: {e}")
         finally:
             if a is not None:
                 shutil.rmtree(a.dir, ignore_errors=True)
@@ -369,8 +372,11 @@ class Delegation:
 
     def _entry(self, sid: str, rec: dict) -> dict:
         p = self.parent
+        turn = getattr(p, "_turn_usage", None)            # and in this turn's total
         for k in ("in", "cached", "out", "calls"):        # the chat pays for its sub-agents: count it there
             p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
+            if isinstance(turn, dict):
+                turn[k] = turn.get(k, 0) + rec["usage"][k]
         if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
             p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
         summary = str(rec.get("summary") or "")
@@ -395,7 +401,7 @@ class Delegation:
              "files_written": sorted(rec["files"])[:50],
              "tool_trace": [f"{t['tool']}({t['target'][:60]}){'' if t['ok'] is not False else ' failed'}"
                             for t in rec["trace"][-30:]]}
-        for k in ("schema_valid", "schema_errors", "schema_retries"):
+        for k in ("error", "schema_valid", "schema_errors", "schema_retries"):
             if k in rec:
                 e[k] = rec[k]
         rec["entry"] = e
