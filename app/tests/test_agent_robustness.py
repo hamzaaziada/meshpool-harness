@@ -251,31 +251,22 @@ def test_a_slow_first_byte_waits_longer_than_a_stalled_stream(tmp_path, monkeypa
     srv.shutdown()
 
 
-def test_repeated_timeouts_on_a_large_context_compact_it(tmp_path, monkeypatch):
-    a = Agent(str(tmp_path), mode="auto")
-    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
-    for i in range(30):
-        a.messages += [_call("read_file", {"path": f"f{i}"}, cid=f"c{i}"),
-                       {"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 8000}]
-    sizes = []
-
-    def post(base, key, body, stream):
-        sizes.append(core._context_size(body["messages"]))
-        if len(sizes) < 3:
-            raise RuntimeError("HTTP 0: connection problem (The read operation timed out)")
-        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}, False
-    a._post = post
-    a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    assert sizes[0] > 150000 and sizes[-1] < sizes[0] // 2
-
-
 def _big(a, n=30):
     for i in range(n):
         a.messages += [_call("read_file", {"path": f"f{i}"}, cid=f"c{i}"),
                        {"role": "tool", "tool_call_id": f"c{i}", "content": "x" * 8000}]
 
 
-def test_an_outage_waits_for_the_endpoint_then_resumes_smaller_on_a_fresh_route(tmp_path, monkeypatch):
+def _turn():
+    return {"in": 0, "cached": 0, "out": 0, "calls": 0}
+
+
+def _ok():
+    return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}, False
+
+
+def test_a_stuck_gateway_is_waited_out_without_blind_retries(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_RECOVER_MIN", "30")
     a = Agent(str(tmp_path), mode="auto")
     monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
     _big(a)
@@ -283,19 +274,37 @@ def test_an_outage_waits_for_the_endpoint_then_resumes_smaller_on_a_fresh_route(
     a.emit = events.append
 
     def post(base, key, body, stream):
-        calls.append((stream, body["prompt_cache_key"], core._context_size(body["messages"])))
-        if len(calls) <= 6:
+        calls.append((body["prompt_cache_key"], core._context_size(body["messages"])))
+        if len(calls) == 1:
             raise RuntimeError("HTTP 0: connection problem (The read operation timed out)")
-        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}, False
+        return _ok()
     a._post = post
     a._probe = lambda base, key, model: next(probes)
-    msg, _ = a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    assert msg["content"] == "ok" and len(calls) == 7
-    assert calls[0][0] and not calls[4][0]                        # streaming is dropped after the fourth failure
-    assert calls[0][1] == a.id and calls[-1][1] != a.id           # a fresh route after a stuck one
-    assert calls[-1][2] < calls[0][2] // 2                        # and a much smaller context
+    msg, _ = a._chat(_turn())
+    assert msg["content"] == "ok" and len(calls) == 2              # one failed call, then wait: no pile-up
+    assert calls[0][0] == a.id and calls[1][0] != a.id             # a fresh route after a stuck one
+    assert calls[1][1] < calls[0][1] // 2                          # and a much smaller context
     texts = " ".join(e.get("text", "") for e in events)
     assert "isn't answering" in texts and "answering again" in texts
+
+
+def test_a_slow_endpoint_gets_more_time_a_new_route_then_no_streaming(tmp_path, monkeypatch):
+    a = Agent(str(tmp_path), mode="auto")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+    a._probe = lambda base, key, model: "ok"                       # the endpoint answers small calls
+    seen = []
+
+    def post(base, key, body, stream):
+        seen.append((a._first_scale, body["prompt_cache_key"], stream))
+        if len(seen) <= 3:
+            raise RuntimeError("HTTP 0: connection problem (The read operation timed out)")
+        return _ok()
+    a._post = post
+    a._chat(_turn())
+    assert [x[0] for x in seen] == [1.0, 2.5, 5.0, 5.0]            # a longer first-byte wait each time
+    assert seen[1][1] == a.id and seen[2][1] != a.id               # new route after the second failure
+    assert seen[2][2] and not seen[3][2]                           # no streaming after the third
+    assert a._first_scale == 1.0                                   # back to normal once it went through
 
 
 def test_an_endpoint_that_answers_small_calls_but_not_this_one_is_reported(tmp_path, monkeypatch):
@@ -307,12 +316,62 @@ def test_an_endpoint_that_answers_small_calls_but_not_this_one_is_reported(tmp_p
     a._post = post
     a._probe = lambda base, key, model: "ok"
     with pytest.raises(RuntimeError, match="answers small requests"):
-        a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
-    a._probe = lambda base, key, model: "HTTP 0: refused"
-    monkeypatch.setenv("MH_RECOVER_MIN", "0")                     # recovery off: the plain error, as before
+        a._chat(_turn())
+    core.GW.reset()
+    a._probe = lambda base, key, model: "HTTP 0: refused"         # down, and recovery off (tests default)
     with pytest.raises(RuntimeError, match="HTTP 0") as e:
-        a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        a._chat(_turn())
     assert "answers small" not in str(e.value)
+
+
+def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers():
+    import threading
+    import time
+    from meshpool_harness.core import gateway as GW
+    h = GW.health("http://x/v1", "key-12345678")
+    assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 4
+    assert h.check(lambda: "HTTP 0: timed out") == "down" and h.limit == 1
+    probes, results = [], []
+
+    def probe():
+        probes.append(1)
+        time.sleep(0.05)
+        return "ok" if len(probes) >= 2 else "HTTP 0"
+
+    def waiter():
+        results.append(h.wait_until_up(probe, lambda s: time.sleep(0.02), lambda e: None, 5, lambda: None))
+    ts = [threading.Thread(target=waiter) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(5)
+    assert results == [True, True, True] and len(probes) == 2      # three chats, one prober
+    h.acquire(lambda: None)
+    got = []
+    t = threading.Thread(target=lambda: (h.acquire(lambda: None), got.append(1)))
+    t.start()
+    time.sleep(0.2)
+    assert not got                                                 # recovering: one call at a time
+    h.release(True)
+    t.join(2)
+    assert got
+    for _ in range(3):
+        h.release(True)
+    assert h.limit == 4                                            # open again after calls go through
+
+
+def test_a_known_outage_holds_new_calls_until_the_endpoint_is_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_RECOVER_MIN", "30")
+    from meshpool_harness import providers as PV
+    a = Agent(str(tmp_path), mode="auto")
+    monkeypatch.setattr(Agent, "_sleep", lambda self, s: None)
+    base, key = PV.endpoint("key")
+    core.GW.health(base, key).check(lambda: "HTTP 0")              # another chat found it down
+    order = []
+    a._probe = lambda b, k, m: order.append("probe") or "ok"
+    a._post = lambda b, k, body, stream: order.append("post") or _ok()
+    a._chat(_turn())
+    assert order == ["probe", "post"]
 
 
 def test_stop_closes_the_model_stream_at_once(tmp_path, monkeypatch):

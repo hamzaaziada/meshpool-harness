@@ -27,6 +27,7 @@ from pathlib import Path
 from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
+from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -773,6 +774,7 @@ class Agent:
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
         attempt, recoveries = -1, 0
+        self._first_scale = 1.0
         while True:
             attempt += 1
             if attempt >= 8:                               # every attempt waited or withheld: report the last error
@@ -796,7 +798,17 @@ class Agent:
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
-                    resp, streamed = self._wait(self._post, base, key, body, stream)
+                    h = GW.health(base, key)
+                    if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
+                        raise RuntimeError("HTTP 0: the model endpoint did not come back")
+                    h.acquire(self._check_stop, self.emit)
+                    ok = False
+                    try:
+                        resp, streamed = self._wait(self._post, base, key, body, stream)
+                        ok = True
+                    finally:
+                        h.release(ok)
+                self._first_scale = 1.0
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -841,31 +853,39 @@ class Agent:
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
                         continue
-                net = bool(re.search(r"HTTP 0|timed out|connection", msg, re.I))   # nothing came back at all
-                if attempt >= 5:
-                    # Long tasks must not die on an outage: wait for the endpoint to answer a tiny request, then
-                    # start the ladder again on a smaller context and a fresh route (Harness v4, recovery).
-                    if not (net or re.search(r"HTTP 5\d\d", msg)) or wire == "chatgpt" or recoveries >= 3:
-                        raise
-                    recoveries += 1
-                    alive_at_once = self._await_endpoint(base, key, body["model"])
-                    if alive_at_once is None:
-                        raise
-                    if alive_at_once and recoveries >= 2:  # it answers small calls but not this one: size or route
+                net = bool(re.search(r"HTTP 0|timed out|connection|HTTP 5\d\d|upstream", msg, re.I))
+                if net and wire == "chat":
+                    # One probe says which it is: the endpoint is down or stuck for this key (the probe fails too),
+                    # or it is up and this request is slow or stuck on its route (the probe answers).
+                    h = GW.health(base, key)
+                    state = h.check(lambda: self._wait(self._probe, base, key, body["model"]))
+                    if state == "auth":
+                        raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
+                    if state == "down":
+                        if recoveries >= 3:
+                            raise
+                        recoveries += 1                    # no blind retries: they only pile up behind a stuck key
+                        if not self._await_endpoint(h, base, key, body["model"]):
+                            raise
+                        _shrink_context(self.messages, 0, hard=True)
+                        self.rotate_route()
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        attempt, self._first_scale = -1, 1.0
+                        continue
+                    if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
                                            "requests keep failing]")
-                    _shrink_context(self.messages, 0, hard=True)
-                    self.rotate_route()
-                    body = self._body()
-                    body["model"] = PV.split(body["model"])[1]
-                    attempt = -1
-                    continue
-                if net and attempt == 2:                   # a stuck sticky route (cache affinity) upstream: new route
-                    self.rotate_route()
-                    body["prompt_cache_key"] = body["user"] = self.route_id()
-                if net and attempt >= 3 and stream:        # a gateway that mishandles the stream: ask for one reply
-                    stream = False
-                    self.emit({"type": "status", "text": "Trying again without streaming."})
+                    if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
+                        self._first_scale = min(5.0, self._first_scale * 2.5)
+                    if attempt == 1:                       # a stuck sticky route (cache affinity) upstream: new route
+                        self.rotate_route()
+                        body["prompt_cache_key"] = body["user"] = self.route_id()
+                    if attempt == 2 and stream:            # a gateway that mishandles the stream: ask for one reply
+                        stream = False
+                        self.emit({"type": "status", "text": "Trying again without streaming."})
+                elif attempt >= 5:
+                    raise
                 stalled = re.search(r"HTTP 5\d\d|timed out", msg, re.I)   # 5xx, or no byte back within the timeout
                 if stalled and attempt >= 1:               # a big request that keeps failing upstream:
                     before = _context_size(self.messages)
@@ -930,26 +950,14 @@ class Agent:
         except Exception as e:  # noqa: BLE001
             return f"HTTP 0: {e}"
 
-    def _await_endpoint(self, base: str, key: str, model: str):
-        """After the retries ran out: probe the endpoint until it answers, for up to MH_RECOVER_MIN minutes (30).
-        True: it answered the first probe (so the endpoint is up and the big request is the problem). False: it
-        answered after a wait. None: it never answered, or recovery is off."""
+    def _await_endpoint(self, h, base: str, key: str, model: str) -> bool:
+        """Wait, shared with every other chat on this endpoint, until it answers a probe again: up to
+        MH_RECOVER_MIN minutes (30). False when it did not come back in time, or recovery is off."""
         budget = float(os.environ.get("MH_RECOVER_MIN", "30")) * 60
-        t0, n = time.time(), 0
-        while budget > 0 and time.time() - t0 < budget:
-            got = self._wait(self._probe, base, key, model)
-            if got == "auth":
-                raise RuntimeError("HTTP 401: the endpoint stopped accepting the API key while the task ran.")
-            if got == "ok":
-                self.emit({"type": "status", "text": "The model endpoint is answering again. Picking up where it "
-                                                     "left off."})
-                return n == 0
-            n += 1
-            wait = min(60, 10 * n)
-            self.emit({"type": "status", "text": f"The model endpoint isn't answering ({got[:80]}). Checking again in "
-                                                 f"{wait} s, for up to {int(budget // 60)} min. Press Stop to end."})
-            self._sleep(wait)
-        return None
+        if budget <= 0:
+            return False
+        return h.wait_until_up(lambda: self._wait(self._probe, base, key, model), self._sleep, self.emit, budget,
+                               self._check_stop)
 
     def _sleep(self, s: float):
         end = time.time() + s
@@ -969,7 +977,7 @@ class Agent:
         # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
         # long task the same way ("The read operation timed out").
         idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
-        first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "300")))
+        first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
         got_text = False
         gen = getattr(self, "_gen", 0)
         try:
@@ -1006,7 +1014,9 @@ class Agent:
                     raise RuntimeError("HTTP 0: the stream ended before the reply")
                 return resp, got_text
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}")
+            ra = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
+            raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}"
+                               + (f" [retry-after: {ra}]" if ra else ""))
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})

@@ -84,6 +84,9 @@ def rate_limit_wait(msg: str, n429: int, backoff: bool = True) -> float:
     import re
     import time
     wait = min(60, 3 * 2 ** (max(1, n429) - 1)) if backoff else 65
+    ra = re.search(r"\[retry-after: (\d+(?:\.\d+)?)\]", msg or "")   # the gateway said how long
+    if ra:
+        return max(1.0, min(300.0, float(ra.group(1))))
     mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg or "")
     if mt:
         reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
