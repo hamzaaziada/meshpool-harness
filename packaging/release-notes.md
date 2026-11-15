@@ -1,12 +1,11 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
-**New in 0.0.5**
-- Long tasks keep going through a stalling or overloaded connection: they wait and pick the work back up instead of failing with "Couldn't reach the model". A /goal waits out outages on its own.
-- Chats from weeks ago can be continued: old screenshots are no longer resent with every message, a chat whose model was retired continues on today's model, and Hermes, Codex and Pi chats keep their earlier conversation.
-- Sub-agents have settings (Settings, Advanced): on or off, model, read or edit access, how many at once, steps and a time limit. In Meshpool's own chats they run inside the app with the chat's model, permission mode and project; Hermes, Codex and Pi sub-agents are read-only. Stop stops them.
-- A request too big for the model is repaired instead of failing: an older image is dropped, the middle of a huge paste is cut, or you are asked for a smaller image, and Meshpool says which.
-- Meshpool Code keeps your files exactly as they were when it retries a task, and no longer reports an edit that changed nothing as done.
-- Test connection tells "the gateway is up but isn't serving this key" apart from "can't reach that address".
+**New in 0.0.6**
+- The New chat button works again. Clicking it did nothing before; Ctrl+N and /new were not affected. If an earlier version saved the click as your folder, it is ignored, so updating fixes the home screen.
+- Sub-agents for Meshpool's own chats: a chat hands self-contained parts of a job to sub-agents that work at the same time, each starting fresh, and report back. They use the chat's tools and permission mode, never read outside the project, and anything that would need your yes is refused (they cannot ask) unless you let them approve their own actions. They work inside the chat's turn, so Undo covers what they change and Stop stops them. Settings, Advanced: access, model, how many at once, steps, a time limit and levels.
+- Decks research their facts: figures from SEC filings and the market data a valuation needs, with capital-allocation economics computed for you. Recommendations come with sized options, reviewers' changes apply to the whole deck in one pass, and a model that returns nothing usable fails the build instead of leaving a blank deck.
+- Word, Excel and PowerPoint requests with no content, or sent to the wrong engine, are refused with a clear message instead of producing an empty file. Meshpool Work in other editors (over ACP) gets the same Office tools as the app.
+- Meshpool Code shows the project lines a failing command points to, and rejects an edit that would change nothing.
 
 - **Agents:** Meshpool Auto (picks per task: quality first, then cost and speed), Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or add your own.
 - **Runs on** your Meshpool API key, any OpenAI-compatible key, or your ChatGPT plan.
