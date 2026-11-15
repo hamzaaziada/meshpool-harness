@@ -27,18 +27,25 @@ FIELDS = [
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
      "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "
      "uses that plan's limits). Off: Auto stays on the provider you chose."),
-    ("MH_SUBAGENTS", "Sub-agents", "1", "On: an agent can split a big job into parts that run at the same time, "
-     "each with its own agent. Off: it works through the parts itself."),
+    ("MH_SUBAGENTS", "Sub-agents", "1", "On: an agent can hand self-contained parts of a job to sub-agents that "
+     "work at the same time, each in a fresh context, and report back. Off: it does the parts itself."),
     ("MH_SUBAGENT_MODEL", "Sub-agent model", "", "The model sub-agents run on. Empty: the same model as the chat that "
      "starts them."),
-    ("MH_SUBAGENT_ACCESS", "What sub-agents may do", "read", "Read and research: files and the web, nothing changed. "
-     "Read and edit: they may also create and edit files in the project, when the chat itself may edit without "
-     "asking (Auto-accept edits or Full access). They never run commands."),
-    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 6."),
-    ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "30", "The most tool steps one sub-agent takes before it reports "
-     "(5 to 200)."),
-    ("MH_SUBAGENT_MINUTES", "Sub-agent time limit (minutes)", "20", "All sub-agents of one job stop at this and "
-     "report what they have (1 to 25)."),
+    ("MH_SUBAGENT_ACCESS", "What sub-agents may do", "inherit", "Same as the chat: the chat's tools and permission "
+     "mode; anything that would need your yes is refused (they cannot ask), unless they may approve their own "
+     "actions below. Read and edit files: no commands. Read and research: files and the web only. They work inside "
+     "the chat's turn, so Undo covers what they change and Stop stops them. Sub-agents started from Hermes, Codex "
+     "or Pi only read."),
+    ("MH_SUBAGENT_AUTO_APPROVE", "Sub-agents approve their own actions", "0", "On: what would need your yes in the "
+     "chat (a command in Supervised, say) is allowed once for a sub-agent. Off: it is refused and the sub-agent "
+     "reports it."),
+    ("MH_SUBAGENT_PARALLEL", "Sub-agents at the same time", "4", "1 to 10."),
+    ("MH_SUBAGENT_STEPS", "Steps per sub-agent", "50", "The most tool steps one sub-agent takes before it reports "
+     "(5 to 250)."),
+    ("MH_SUBAGENT_MINUTES", "Sub-agent time limit (minutes)", "30", "All sub-agents of one job stop at this and "
+     "report what they have. 0: no limit."),
+    ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
+     "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "4", "Per key, across all chats and sub-agents. While the "
      "endpoint is recovering from an outage, calls go one at a time."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "

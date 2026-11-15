@@ -123,6 +123,14 @@ SCHEMAS = {
 CORE = ["read_file", "grep", "glob", "edit", "write_file", "bash", "run_tests", "finish"]
 
 
+def _delegate_schema():
+    from meshpool_harness.agent.delegate import schema
+    return schema(12)
+
+
+SCHEMAS["delegate_task"] = _delegate_schema()
+
+
 def schemas(names):
     return [SCHEMAS[n] for n in names]
 
@@ -271,7 +279,17 @@ class Workspace:
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
-    def grep(self, pattern, path=".", glob=None):
+    def _inside(self, p, roots=None) -> bool:
+        """p resolves inside the project (or one of roots)."""
+        try:
+            q = Path(p).resolve()
+            return any(q.is_relative_to(Path(r).resolve()) for r in (roots or [self.root]))
+        except (OSError, ValueError):
+            return False
+
+    def grep(self, pattern, path=".", glob=None, inside_only=False):
+        """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved;
+        a list of folders instead of True allows those folders as well."""
         if self.container and not self.mounted:
             inc = f"--include='{glob}'" if glob else ""
             out, _ = self._run(f"grep -rnE {inc} --exclude-dir=.git --exclude-dir=node_modules -e {json.dumps(pattern)} "
@@ -290,6 +308,8 @@ class Workspace:
                 continue
             if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
                 continue
+            if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
+                continue
             try:
                 for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
                     if rx.search(line):
@@ -303,14 +323,16 @@ class Workspace:
                 break
         return self._cap("\n".join(out) or "no matches", "grep")
 
-    def glob(self, pattern):
+    def glob(self, pattern, inside_only=False):
+        """inside_only: leave out what resolves outside the project (through a symlinked folder or file)."""
         if self.container and not self.mounted:
             out, _ = self._run(f"find . -path ./.git -prune -o -path './{pattern.lstrip('./')}' -print 2>/dev/null | head -2000"
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
         res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts)
+                     if ".git" not in p.parts and "node_modules" not in p.parts
+                     and (not inside_only or self._inside(p)))
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
 
     @staticmethod
