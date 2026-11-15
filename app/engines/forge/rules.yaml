@@ -282,6 +282,23 @@ xlsx:
     cost_label_regex: "(?i)\\b(net loss|loss|losses|cost|costs|expense|expenses|outflow|outflows|foregone|capex|write-?down|impairment)\\b"
     benefit_label_regex: "(?i)synerg|saving|reduction|avoided|benefit|negative|\\(-\\)"
 
+design:                         # design-first pages (engines/forge/design.py): an image model designs each content
+                                # slide, a vision model reads it back as a layout spec, the page is rebuilt natively;
+                                # the archetype renderer draws any slide whose rebuild fails its checks
+  mode: archetype               # archetype (off) | image (content slides, executive summary, closing) | auto (content
+                                # slides, live builds only). Also env MH_DESIGN, engine option design, or wording
+                                # such as "designed look" / "image-designed" in the request
+  image_model: gpt-image-2      # any image model on the gateway (env MH_DESIGN_IMAGE_MODEL)
+  vision_models: []             # reads the picture back (env MH_DESIGN_VISION_MODEL, these, then the review chain)
+  size: "1536x864"              # 16:9; the nearest size the API allows is tried next and cropped to 16:9
+  fallback_sizes: ["1536x1024", "1792x1024", "auto"]
+  max_images: 12                # image generations per deck (env MH_DESIGN_MAX_IMAGES)
+  time_budget_s: 900            # wall clock for all design calls of one deck
+  image_timeout_s: 180
+  vision_timeout_s: 240
+  workers: 3
+  fallback_rules: [P0, P1, P5, P8, P17]   # a designed page failing one of these is redrawn by its archetype
+
 review:
   enabled: true                 # partner review of the rendered pages (engines/forge/review.py); live builds only
   personas:                     # the senior partner and the MD (engines/review/personas.py, engines/forge/critics.py)

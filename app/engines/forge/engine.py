@@ -188,6 +188,21 @@ def panel_sentence(panel: dict | None) -> str:
     return out
 
 
+def design_sentence(dz: dict | None) -> str:
+    """Design-first pages in the answer: how many slides were image-designed and rebuilt, how many fell back."""
+    if not dz:
+        return ""
+    per = list((dz.get("slides") or {}).values())
+    done = sum(1 for d in per if d.get("path") == "image")
+    back = [d for d in per if d.get("path") != "image"]
+    if not per:
+        return ""
+    out = f" {done} of {len(per)} content slides were image-designed and rebuilt as editable shapes (originals in design/)"
+    if back:
+        out += f"; {len(back)} kept the standard layout ({back[0].get('why') or 'no design'})"
+    return out + "."
+
+
 def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
           model: str | None = None, density: str | None = None, options: dict | None = None, **_) -> dict:
     m = ADD_RE.match(task or "")
@@ -227,8 +242,10 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
     if iset:                                                    # one icon set for the whole deck
         th = look.get("theme")
         look["theme"] = {**(th if isinstance(th, dict) else {"palette": th} if th else {}), "icon_set": iset}
+    from engines.forge.design import mode_from as design_mode
     res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client, task_id=task_id,
-                density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"), **look)
+                density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"),
+                design=design_mode(task, options), **look)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
@@ -246,6 +263,7 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
               + "checked after rendering. "
               + (f"{left} items still flagged in the speaker notes ([QA] lines); rules failing: {', '.join(failing)}."
                  if left else "All content checks passed."))
+    answer += design_sentence(res.get("design"))
     answer += panel_sentence(res.get("panel"))
     rv = res.get("review") or {}
     if rv.get("score") is not None:                            # the partner review's verdict, said plainly

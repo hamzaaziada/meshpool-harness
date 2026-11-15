@@ -3144,6 +3144,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         prs.part.drop_rel(sid.rId)
         prs.slides._sldIdLst.remove(sid)
     ctx = Ctx({})
+    ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
     queue = list(slides)
     n = 0
@@ -3157,11 +3158,16 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         own = [str(t) for t in s.get("tags") or [] if str(t).strip() and str(t) not in deck_stamps]
         ctx.stamps = (deck_stamps + own)[:2]               # a slide's own qualifier stays on that slide
         s = dict(condense(normalize(s), mode), tags=[])
+        spec = s.pop("_design", None)                      # a design-first layout spec (design.py), if any
         n += 1
         ctx.carry = None
         if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
             errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in schema_errors(s)]
             s = fallback(s)
+            if spec:
+                ctx.design[n] = {"path": "archetype", "why": "the slide failed its schema; the archetype fallback "
+                                 "draws it"}
+                spec = None
         arch = s.get("archetype")
         fn = ARCHETYPES.get(arch)
         if fn is None:
@@ -3173,7 +3179,11 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
                                            + (" computed:1" if s.get("fixed") else ""))
         try:
-            fn(ctx, s, sl, n)
+            if spec:
+                if not _designed(ctx, s, sl, n, spec, mode, arch):
+                    fn(ctx, s, sl, n)
+            else:
+                fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
                 _footer(ctx, s, sl, n)
         except (KeyError, TypeError, IndexError, ValueError, AttributeError, ZeroDivisionError) as e:
@@ -3208,4 +3218,27 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     prs.save(out_path)
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
-    return {"slides": n, "errors": errors, "provenance": prov_path}
+    return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design}
+
+
+def _designed(ctx, s, sl, n, spec, mode, arch) -> bool:
+    """Draw the slide from its design spec (design.py). On a miss the half-drawn shapes are removed, what the attempt
+    reported is forgotten, and False lets the archetype draw it; the reason is kept in ctx.design."""
+    from .design import draw_design
+    before, notes = len(ctx.overflow), s.get("notes")
+    try:
+        draw_design(ctx, s, sl, n, spec)
+        sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode} design:image")
+        ctx.design[n] = {"path": "image", "layout": spec.get("layout")}
+        return True
+    except Exception as e:  # noqa: BLE001 - any failure of the rebuild: the archetype draws the slide
+        for shp in list(sl.shapes):
+            if not shp.is_placeholder:
+                shp._element.getparent().remove(shp._element)
+        del ctx.overflow[before:]
+        if notes is None:
+            s.pop("notes", None)
+        else:
+            s["notes"] = notes
+        ctx.design[n] = {"path": "archetype", "why": f"{type(e).__name__}: {e}"[:300]}
+        return False

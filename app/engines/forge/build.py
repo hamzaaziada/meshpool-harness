@@ -955,8 +955,13 @@ def panel_report(sb: dict, deck_hist: list, final: dict | None, research_log: li
 def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=None, task_id="forge",
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
-          insert: bool = False, research: bool | None = None) -> dict:
+          insert: bool = False, research: bool | None = None, design: str | None = None,
+          design_images=None) -> dict:
     """research: allow the reviewers' research step (None: on for live builds, see research.allowed()).
+    design: "image" | "auto" | "archetype" (None: env MH_DESIGN, then rules design.mode): content slides drawn
+    design-first (an image model designs the page, a vision model reads it back, the page is rebuilt natively;
+    engines/forge/design.py), the archetype renderer as the fallback per slide. design_images: an image client
+    (tests pass a stub).
     density: "present" (presenter-led), "balanced" (default) or "read" (dense send-ahead); see density.py. It
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
@@ -1035,7 +1040,7 @@ supports it. Choose varied archetypes that prove each title.
     research_log: list[dict] = []
     sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
     if panel_on:
-        max_sb = max(1, int(cfg["max_storyboard_rounds"]))
+        max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
         for rnd in range(1, max_sb + 1):
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
             pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
@@ -1047,7 +1052,7 @@ supports it. Choose varied archetypes that prove each title.
             if pn["signed_off"] or len(pn["not_run"]) == len(pn["reviews"]) or rnd == max_sb:
                 break
             new: list[dict] = []
-            qs = RS.questions_from(pn, int(rcaps["max_questions"]))
+            qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
                                       rules=rules, task_id=f"{task_id}-research-sb{rnd}")
@@ -1163,13 +1168,29 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     rounds = []
     pptx = out / "deck.pptx"
+    # design-first pages (engines/forge/design.py): an image model designs each content slide, a vision model reads
+    # it back as a layout spec, and the renderer rebuilds it natively; the archetype draws any slide it cannot
+    from engines.forge import design as DZ
+    dmode = DZ.resolve_mode(design, rules)
+    designer = None
+    if not insert and (dmode == "image" or (dmode == "auto" and isinstance(client, LiveClient))):
+        designer = DZ.Designer(client, rules, str(out), theme=theme, density=density, mode=dmode,
+                               images=design_images, task_id=task_id)
+
+    def designed():
+        specs = designer.specs(slides) if designer else {}
+        return specs, [dict(s_, _design=specs[i]) if i in specs else s_ for i, s_ in enumerate(slides)]
 
     def draw():
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
-                   brand=brand)          # the brief's slide count is a hard limit
-        prov = json.loads(Path(r["provenance"]).read_text())
-        res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
-                       provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+        for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
+            specs, view_ = designed()
+            r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
+                       brand=brand)          # the brief's slide count is a hard limit
+            prov = json.loads(Path(r["provenance"]).read_text())
+            res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
+                           provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            if not specs or not designer.check(str(pptx), r, res, slides, specs):
+                break
         return r, res
 
     def repair(fails, tag):                                    # one call per failing slide, all in parallel
@@ -1308,7 +1329,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
                     rt["layout"] = {remap[n]: m for n, m in rt["layout"].items() if n in remap}
                     for n, m in extra.items():
                         asks.setdefault(n, []).extend(m)
-            qs = RS.questions_from(pn, int(rcaps["max_questions"]))
+            qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
                                       rules=rules, task_id=f"{task_id}-research-{tag}")
@@ -1347,7 +1368,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
 
         best = None
         stall = 0
-        max_rv = max(1, int(cfg["max_review_rounds"]))
+        max_rv = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"]))
         for rnd in range(1, max_rv + 1):
             pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
                                     task_id=f"{task_id}-panel{rnd}")
@@ -1422,7 +1443,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join("[QA] " + m for m in msgs)).strip()
         for n, msgs in open_review.items():                  # the reviewers' blocking and major issues still open
             slides[n - 1]["notes"] = (slides[n - 1].get("notes", "") + "\n" + "\n".join(msgs)).strip()
-        r = render(slides, str(pptx), carry=False, theme=theme, density=density, template=template,
+        r = render(designed()[1], str(pptx), carry=False, theme=theme, density=density, template=template,
                    brand=brand)          # the brief's slide count is a hard limit
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
@@ -1439,10 +1460,15 @@ choice or the number of items; never layout. Keep node and keep the point of the
     if verdict is not None:                                  # the verdict travels with the QA record too
         qa["review"] = verdict
     qa["panel"] = panel                                      # the reviewers' history, scores and open issues
+    dz = None
+    if designer:                                             # which path drew each slide, and why
+        dz = designer.report()
+        (out / "design.json").write_text(json.dumps(dz, indent=1, default=str))
+        qa["design"] = dz
     (out / "qa.json").write_text(json.dumps(qa, indent=1, default=str))
     return {"pptx": str(pptx), "calls": calls, "rounds": rounds, "rules": res["rules"], "density": density,
             "unresolved": {k: v for k, v in left.items()}, "review": verdict, "panel": panel,
-            "slides": len(slides)}
+            "slides": len(slides), "design": dz}
 
 
 if __name__ == "__main__":
@@ -1454,6 +1480,7 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("--slides", type=int, default=12)
     ap.add_argument("--density", choices=["present", "balanced", "read"], default=None)
+    ap.add_argument("--design", choices=["archetype", "image", "auto"], default=None)
     a = ap.parse_args()
-    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density)
+    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design)
     print(json.dumps(r, indent=1, default=str))
