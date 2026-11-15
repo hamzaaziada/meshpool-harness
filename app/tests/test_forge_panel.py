@@ -281,6 +281,9 @@ def test_research_takes_facts_only_from_passages_and_records_misses(tmp_path):
     assert [f["id"] for f in got] == ["F8"] and "$300 million" in got[0]["text"]
     assert "https://ir.northwind.example/annual-report-2025" in got[0]["text"] and got[0]["url"]
     assert [q["status"] for q in res["questions"]] == ["found", "nothing found"]
+    again = RS.investigate(["What was Northwind's order backlog at the end of 2025?"], facts + got, client=Inventor(),
+                           models=["m"], out_dir=str(tmp_path / "c"), search_fn=search, fetch_fn=fetch)
+    assert again["facts"] == []                             # a later research step never re-adds the same fact
     plain = RS.investigate(["Northwind order backlog end of 2025"], facts, out_dir=str(tmp_path / "b"),
                            search_fn=search, fetch_fn=fetch)       # no model: deterministic sentence pick
     assert plain["facts"] and all("$300 million" in f["text"] or "$270 million" in f["text"] for f in plain["facts"])
@@ -358,3 +361,120 @@ def test_xbrl_facts_give_the_latest_reported_figures_with_their_filing_and_skip_
     assert [f["id"] for f in out] == ["F7"]
     assert "net income (loss) -$2.08B for the period 2026-01-01 to 2026-09-30 (10-Q filed 2026-11-12" in out[0]["text"]
     assert "interest expense" not in " ".join(f["text"] for f in out)          # a 2024 tag is not current
+
+
+def test_only_the_facts_given_still_allows_sourced_research_when_the_brief_says_so():
+    from engines.forge.research import NO_RESEARCH_RE as R
+    assert not R.search("Use only the facts given and any sourced research.")
+    assert R.search("Use only the facts given.") and R.search("Do not research.")
+
+
+def test_review_revisions_go_to_the_whole_deck_in_one_pass_and_keep_numbers_tied(live, tmp_path):
+    """Per-slide fixes broke what tied across pages and every live round scored lower; the reviewers' revisions now
+    go to one call that rewrites the whole deck, and the per-slide writer is used only as a fallback."""
+    def reviewer(who, target, text, n):
+        if target == "storyboard" or n >= 2:
+            return _signoff(who, target, text, n)
+        return {"scores": _scores(who, target, 7), "issues": [
+            {"severity": "blocking", "scope": "data", "where": "slide 2", "issue": "the $120m is not dated",
+             "fix": "say 2025 on every slide that uses it"}]}
+    seen = []
+
+    class WholeDeck(Stub):
+        def chat(self, *, model, messages, **kw):
+            if "revising a whole consulting deck" in messages[0]["content"]:
+                user = messages[-1]["content"]
+                seen.append(user)
+                deck = json.loads(user.split("Deck:\n", 1)[1].split("\n\nFacts:", 1)[0])
+                for s in deck[1:]:
+                    s["footnotes"] = list(s.get("footnotes") or []) + ["All figures are for 2025"]
+                return {"choices": [{"message": {"content": json.dumps({"slides": deck})}}]}
+            return super().chat(model=model, messages=messages, **kw)
+    stub = WholeDeck(reviewer)
+    B.build(BRIEF, str(tmp_path), slides_wanted=4, client=stub, rules=live, task_id="t")
+    rv = json.loads((tmp_path / "review.json").read_text())
+    act = rv["rounds"][0]["actions"]
+    assert act["revision"] == "whole deck" and act["rewritten"] == [2, 3, 4]
+    assert not any("[review]" in f for f in stub.fixes)                  # no review issue went slide by slide
+    assert "the $120m is not dated" in seen[0]
+    slides = json.loads((tmp_path / "slides.json").read_text())
+    assert all("All figures are for 2025" in (s.get("footnotes") or []) for s in slides[1:]) and len(slides) == 4
+
+
+def test_market_facts_give_price_range_beta_and_risk_free_rate_with_sources():
+    from engines.forge import research as R
+    t0, wk = 1_700_000_000, 7 * 86400
+    idx = [100 * (1.01 if i % 2 else 0.995) ** i for i in range(60)]
+    stock = [50.0]
+    for i in range(1, 60):                                      # moves 2x the index every week
+        stock.append(stock[-1] * (1 + 2 * (idx[i] / idx[i - 1] - 1)))
+
+    def series(vals, step):
+        return {"timestamp": [t0 + i * step for i in range(len(vals))], "indicators": {"quote": [{"close": vals}]}}
+
+    def fetch(sym, rng, iv):
+        if sym == "^GSPC":
+            return series(idx, wk)
+        if sym == "^TNX":
+            return series([4.1, 4.2], 86400)
+        return series(stock, wk) if iv == "1wk" else series([90.0, 120.5, 101.25], 86400)
+
+    got = R.market_facts([("ACME CORP", "ACME")], 7, fetch=fetch)
+    txt = [f["text"] for f in got]
+    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10"]
+    assert "share price $101.25" in txt[0] and "finance.yahoo.com/quote/ACME" in txt[0]
+    assert "$90.00 to $120.50" in txt[1]
+    assert "beta" in txt[2] and abs(float(txt[2].split("beta ")[1].split()[0]) - 2.0) < 0.3
+    assert "10-year Treasury yield 4.20%" in txt[3]
+    assert all(f["research"] and f["source"] for f in got)
+
+
+def test_market_facts_skip_a_ticker_the_feed_cannot_serve():
+    from engines.forge import research as R
+
+    def fetch(sym, rng, iv):
+        raise OSError("down")
+    assert R.market_facts([("ACME CORP", "ACME")], 1, fetch=fetch) == []
+
+
+def test_economics_facts_compute_the_capital_allocation_arithmetic_with_their_inputs():
+    from engines.forge import research as R
+    co = "ACME CORP"
+    def f(i, label, value, annual=True):
+        return {"id": f"F{i}", "company": co, "label": label, "value": value, "annual": annual, "text": label}
+    facts = [f(1, "operating cash flow", 15e9), f(2, "capital expenditure", 5e9), f(3, "cash and cash equivalents", 20e9),
+             f(4, "share price", 100.0), f(5, "shares outstanding", 1e9), f(6, "diluted EPS", 5.0),
+             f(7, "operating income", 10e9), f(8, "income tax expense", 2e9), f(9, "net income (loss)", 6e9),
+             f(10, "shareholders' equity", 30e9), f(11, "long-term debt (non-current)", 10e9),
+             f(12, "dividends paid", 1e9, annual=False)]
+    got = {x["label"]: x["text"] for x in R.economics_facts(facts, 20)}
+    assert "$10.00B" in got["free cash flow"] and "F1" in got["free cash flow"] and "F2" in got["free cash flow"]
+    assert "4.0x" in got["cash cover of capex"]
+    assert "$100.00B" in got["market capitalisation"]
+    assert "10.00M shares" in got["per $1B returned"] and "$1.00 per share" in got["per $1B returned"]
+    assert "5.00%" in got["earnings yield"]
+    assert "$5.05" in got["diluted EPS after a $1B buyback"]          # 5 x 1000M / 990M
+    assert "18.8%" in got["after-tax return on capital"]               # 10B x (1 - 25%) / 40B
+    assert all(x["derived"] and x["research"] for x in R.economics_facts(facts, 20))
+    assert R.economics_facts([f(1, "operating cash flow", 15e9)], 20) == []    # a missing input skips the line
+
+
+def test_a_model_that_returns_no_json_never_becomes_a_blank_deck(tmp_path):
+    import engines.forge.build as B
+
+    class Thinker:                                  # a reasoning model that spent its budget thinking
+        def chat(self, *, model, messages, **kw):
+            return {"choices": [{"message": {"content": ""}, "finish_reason": "length"}]}
+    with pytest.raises(RuntimeError, match="storyline came back empty"):
+        B.build("Board briefing\nFacts\n- Revenue $10M in 2025", str(tmp_path), slides_wanted=4, client=Thinker())
+    with pytest.raises(RuntimeError, match="returned no JSON"):
+        B._call(Thinker(), "m", "s", "u", "t")
+
+
+def test_nested_id_lists_from_a_model_are_flattened():
+    import engines.forge.build as B
+    got = B._flat_ids({"slides": [{"title_prov": [["F1"], "F2", None, [["F3"]]], "items": [{"prov": [["F4", "F5"]]}],
+                                   "title": "x", "evidence": "F9"}]})
+    s = got["slides"][0]
+    assert s["title_prov"] == ["F1", "F2", "F3"] and s["items"][0]["prov"] == ["F4", "F5"]
+    assert s["evidence"] == "F9" and s["title"] == "x"
