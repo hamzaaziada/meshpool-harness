@@ -986,6 +986,10 @@ appears on more than one slide ties (same value, same basis, reconciled when it 
 payout); the recommendation is stated once, sized and unhedged, and every slide supports it; titles read top to bottom
 as the storyline. Keep the slide count, each slide's node and order, and leave slides marked "fixed" exactly as they
 are. Change words, numbers (only from the facts, calcs and options), archetype choice or items; never layout.
+Read the Facts list before writing: never say a figure is unavailable or "not in the fact base" when a fact states
+it. Market facts (share price, 52-week range, beta, Treasury yield) go wherever the reviewers ask for valuation or a
+per-share figure: shares bought back = amount / the share price fact, yield = dividend per share / the share price,
+each as a calc citing the facts. A per-share figure that is not amount / shares or amount / price is wrong.
 Return ONLY JSON: {{"slides": [the full slide JSON for every slide, in order]}}.
 {CONSULTING}
 {WRITE[density]}
