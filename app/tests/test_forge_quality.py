@@ -266,3 +266,10 @@ def test_a_bridge_with_a_subtotal_is_drawn_as_a_waterfall(tmp_path):
     bad = [15.82, -6.43, 9.0, -7.5, -0.85, 1.03]                   # 9.0 is neither a step nor the subtotal: no tie
     from engines.forge.render import chart_problems
     assert any("does not add up" in m for m in chart_problems(dict(s["chart"], series=[{"name": "x", "values": bad}])))
+
+
+def test_stat_values_put_the_currency_first_for_dollar_billions():
+    from engines.forge.render import stat_stack
+    c = {"kind": "bar", "categories": ["Operating cash flow", "Capex", "Free cash flow"],
+         "series": [{"name": "Cash flow", "values": [15.82, -6.43, 9.38]}], "unit": "$B", "decimals": 2}
+    assert [i["value"] for i in stat_stack(c)["items"]] == ["$15.82B", "-$6.43B", "$9.38B"]

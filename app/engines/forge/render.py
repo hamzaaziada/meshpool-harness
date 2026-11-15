@@ -1905,7 +1905,7 @@ def stat_stack(c: dict, text: str = "") -> dict:
     dec = c.get("decimals")
     # the chart's own unit: a ratio/percentage suffix, or a currency with an optional magnitude ($m, €bn, £)
     usfx = {"%": "", "x": "x", "pp": " pp"}.get(cunit.lower())
-    cm = re.fullmatch(r"([$€£¥])?\s*(bn|mm|m|k|tn)?(\s*/\s*sh)?", cunit, re.I) if usfx is None else None
+    cm = re.fullmatch(r"([$€£¥])?\s*(bn|mm|m|k|tn|b)?(\s*/\s*sh)?", cunit, re.I) if usfx is None else None
     other = " " + cunit if cunit and usfx is None and not cm else ""     # a plain unit: 450 stores
     for se in c.get("series") or []:
         for cat, v in zip(c.get("categories") or [], se.get("values") or []):
@@ -1919,7 +1919,9 @@ def stat_stack(c: dict, text: str = "") -> dict:
             cur = (cm.group(1) if cm and cm.group(1) else
                    "$" if not (pct or usfx or other) and re.search(r"\$|dollar|price|value|cost|revenue|debt|capex",
                                                                    ctx_ + " " + cunit, re.I) else "")
-            mag = ("" if per_share or pct or usfx or other else (cm.group(2) or "").lower() if cm and cm.group(2)
+            mag = ("" if per_share or pct or usfx or other else
+                   ((cm.group(2) or "") if (cm.group(2) or "").upper() in ("B", "M") else (cm.group(2) or "").lower())
+                   if cm and cm.group(2)
                    else "bn" if re.search(r"\$?bn|billion", ctx_, re.I)
                    else "m" if re.search(r"\$m\b|million", ctx_, re.I) else "")
             d = dec if isinstance(dec, int) else (2 if per_share and v != int(v) else (1 if v != int(v) else 0))
