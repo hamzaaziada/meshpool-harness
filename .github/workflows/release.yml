@@ -107,7 +107,7 @@ jobs:
             R="$T/Meshpool.app/Contents/Resources"
             if [ "$f" = Meshpool-Intel ]; then run=(arch -x86_64); else run=(); fi
             echo "== $f.dmg"
-            "${run[@]}" "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"
+            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"   # bash 3.2: empty array under set -u
           done
       - uses: actions/upload-artifact@v4
         with:
