@@ -246,8 +246,9 @@ def context_block() -> str:
                     "themselves or their work, save it with memory_save (facts about the user, never tasks, "
                     "to-dos, bugs, feature requests or plans). " if st["memory_on"] else "")
                  + "If the user asks for something to happen later or on a schedule, use schedule_task. "
-                 "For a large job with independent parts (research many companies, review many files), use "
-                 "run_subtasks to work on the parts in parallel. " + ENGINES)
+                 "For a large job with independent parts (research many companies, review many files), hand the "
+                 "parts to sub-agents with delegate_task (or run_subtasks where delegate_task is not available) "
+                 "so they run in parallel. " + ENGINES)
     return "\n\n".join(parts)
 
 

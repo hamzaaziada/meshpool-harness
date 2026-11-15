@@ -306,6 +306,14 @@ def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
     return cut
 
 
+def _subagents_on() -> bool:
+    try:
+        from meshpool_harness import assistant as AS
+        return AS.subagent_settings()["on"]
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _lighten(messages: list) -> None:
     """After an outage: elide older tool outputs only when the conversation is very large (over 150k characters),
     keeping the last eight verbatim. Smaller conversations are left whole, so a long task keeps its context."""
@@ -563,9 +571,13 @@ class Agent:
     def tool_schemas(self) -> list:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
-        return T.schemas(self._tool_names()) + ([x for x in self.mcp.schemas()
-                                                 if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")]
-                                                if self.mcp else [])
+        names = self._tool_names()
+        if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
+            names = names + ["delegate_task"]
+        return T.schemas(names) + ([x for x in self.mcp.schemas()
+                                    if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
+                                    and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
+                                   if self.mcp else [])
 
     def _tool_names(self) -> list:
         return PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
@@ -577,6 +589,9 @@ class Agent:
     def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
+        if getattr(self, "_delegations", None):          # sub-agents it started, background ones too
+            from meshpool_harness.agent import delegate as DL
+            DL.stop_all(self)
 
     def _run_subtasks(self, name: str, args: dict):
         """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
@@ -1327,6 +1342,8 @@ class Agent:
                 "values in an existing workbook, openpyxl.load_workbook is fine.")
 
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
+        if name == "delegate_task":
+            return True, ""                    # its sub-agents' own actions are checked against this chat's mode
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
@@ -1429,7 +1446,9 @@ class Agent:
                             "smaller edits.")
         elif not is_mcp:
             try:
-                args = validate(name, raw, self._tool_names())
+                args = validate(name, raw, self._tool_names() + (
+                    ["delegate_task"] if name == "delegate_task" and getattr(self, "_delegate_depth", 0) == 0
+                    and not self.plan and _subagents_on() else []))
             except ToolError as e:
                 bad = e
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
@@ -1449,6 +1468,9 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+            elif name == "delegate_task":
+                from meshpool_harness.agent import delegate as DL
+                out, ok = self._wait(DL.run_tool, self, args)
             elif is_mcp and name.endswith("run_subtasks"):
                 out, err = self._run_subtasks(name, args)
                 ok = not err

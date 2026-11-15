@@ -510,8 +510,19 @@ class Session:
         self._start_turn(text, images)
         return {"queued": False}
 
+    def _deliver_background(self, text: str):
+        """Background sub-agent reports (agent/delegate.py) arrive as a message: after the current turn if one is
+        running (they never cut into it), else as a new turn now. Only the line before the hidden part shows."""
+        with self.lock:
+            if self.state in ("working", "waiting", "starting"):
+                self.queue.append((text, None))
+                return
+        self._start_turn(text, None)
+
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
+        if isinstance(self.agent, Agent):
+            self.agent.deliver = self._deliver_background   # delegate_task: reports arrive after the turn
         self.state = "working"
         self._stop_req = False
         if hasattr(self.agent, "plan"):

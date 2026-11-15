@@ -123,6 +123,14 @@ SCHEMAS = {
 CORE = ["read_file", "grep", "glob", "edit", "write_file", "bash", "run_tests", "finish"]
 
 
+def _delegate_schema():
+    from meshpool_harness.agent.delegate import schema
+    return schema(12)
+
+
+SCHEMAS["delegate_task"] = _delegate_schema()
+
+
 def schemas(names):
     return [SCHEMAS[n] for n in names]
 
