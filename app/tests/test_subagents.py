@@ -154,3 +154,66 @@ def test_the_chat_passes_its_model_mode_and_a_stop_file(tmp_path, monkeypatch):
     p = got["parent"]
     assert p["mode"] == "edits" and p["token"] == os.environ["MH_PARENT_TOKEN"] and p["model"] == a.current_model()
     assert open(p["stop_file"]).read() == "stop"                   # Stop reached the sub-agents
+
+
+def test_sub_agents_work_in_the_parent_chats_project_not_the_servers(monkeypatch, _env, tmp_path):
+    other = tmp_path / "other-chat"
+    other.mkdir()
+    monkeypatch.setenv("MESHPOOL_PROJECT", str(other))             # another chat's servers started at the same time
+    roots = []
+
+    def post(self, base, key, body, stream):
+        roots.append(str(self.root))
+        return _reply()
+    monkeypatch.setattr(K.Agent, "_post", post)
+    A.run_subtasks([{"prompt": "x"}], str(other), parent=P(root=str(_env)))
+    assert roots == [str(_env.resolve())]
+
+
+def test_a_cleared_setting_takes_effect(monkeypatch):
+    from meshpool_harness import config as C
+    monkeypatch.setenv("MH_SUBAGENT_MODEL", "old-model")            # the server's copy from start-up
+    C.write({"MH_SUBAGENT_MODEL": ""})                               # the user cleared it since
+    assert A.subagent_settings()["model"] == ""
+
+
+def test_a_sub_agent_still_starting_when_stopped_stops_too(monkeypatch, _env):
+    real = A.subagent_settings
+    monkeypatch.setattr(A, "subagent_settings", lambda: {**real(), "minutes": 0.01})   # under a second
+    real_send = K.Agent.send
+
+    def slow_send(self, *a, **k):
+        time.sleep(1.0)                                            # the limit passes while it starts
+        return real_send(self, *a, **k)                            # send() resets the stop flag
+    monkeypatch.setattr(K.Agent, "send", slow_send)
+    calls = []
+
+    def post(self, base, key, body, stream):
+        calls.append(1)
+        time.sleep(0.2)
+        return {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"id": f"c{len(calls)}",
+                "type": "function", "function": {"name": "glob", "arguments": '{"pattern": "*"}'}}]},
+                "finish_reason": "tool_calls"}], "usage": {}}, False
+    monkeypatch.setattr(K.Agent, "_post", post)
+    t0 = time.time()
+    out = A.run_subtasks([{"prompt": "x"}], str(_env))
+    assert time.time() - t0 < 4 and len(calls) <= 3 and "time limit" in out
+
+
+def test_stop_just_before_the_call_still_reaches_the_sub_agents(tmp_path):
+    a = K.Agent(str(tmp_path), mode="auto")
+    files = []
+
+    class Mcp:
+        last_images = []
+
+        def call(self, name, args):
+            files.append(args["parent"]["stop_file"])
+            time.sleep(0.3)
+            return "x", False
+    a.mcp = Mcp()
+    a._stop = True                                                 # Stop pressed a moment before
+    with pytest.raises(K.Interrupted):
+        a._run_subtasks("mcp__meshpool-assistant__run_subtasks", {"tasks": []})
+    stop_files = list(a.dir.glob("stop-subtasks-*"))
+    assert stop_files and stop_files[0].read_text() == "stop"

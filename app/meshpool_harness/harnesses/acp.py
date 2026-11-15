@@ -178,6 +178,34 @@ def _auth_failure(text: str) -> bool:
         re.search(r"(?i)api.?key|bad key|unauthori[sz]ed|authenticat|forbidden|invalid.{0,20}key", s))
 
 
+def earlier_context(events: list, limit: int = 40000) -> str:
+    """The chat so far as plain text for a harness that starts a fresh session on an old chat: the latest turns
+    first to fit `limit` characters, written oldest first. Hidden in the chat (after \u200b)."""
+    rows = []
+    for e in events:
+        t = e.get("type")
+        if t == "user" and e.get("text"):
+            rows.append("User: " + e["text"].split("\u200b")[0].strip())
+        elif t == "assistant" and e.get("text"):
+            rows.append("You: " + e["text"].strip())
+        elif t == "tool_start" and e.get("name"):
+            rows.append(f"(you used {e['name']}" + (f": {str(e.get('title') or '')[:120]}" if e.get("title") else "")
+                        + ")")
+    out, size = [], 0
+    for r in reversed(rows):
+        r = r if len(r) <= 4000 else r[:2000] + " [...] " + r[-1500:]
+        if size + len(r) > limit:
+            out.append("[earlier messages left out]")
+            break
+        out.append(r)
+        size += len(r) + 1
+    if not out:
+        return ""
+    return ("\u200b[Meshpool] This chat started earlier, in a session you no longer have. The conversation so far, "
+            "for context (do not redo finished work; continue from where it stopped):\n\n"
+            + "\n".join(reversed(out)) + "\n\n[The user's new message follows.]\n\n")
+
+
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
 
@@ -534,6 +562,9 @@ class ACPAgent:
         self._ask_mode(r.get("modes") or {})
         self._models_from(r)
         self._apply_model()
+        # A fresh session for a chat that already has a history (the harness lost or cannot load its old session,
+        # e.g. a chat from weeks ago): it would start with no memory of the chat. Carry the history in the prompt.
+        self._carry = any(e.get("type") in ("user", "assistant") for e in self.events[:-1])
 
     def _models_from(self, r: dict):
         ms = r.get("models") or {}
@@ -637,6 +668,12 @@ class ACPAgent:
             self._turn_tools = 0
             self._ensure_session()
             self._before = self._descendants()           # Stop then ends only what this turn starts
+            if getattr(self, "_carry", False):
+                self._carry = False
+                body = earlier_context(self.events[:-1]) + body
+                self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The agent')} could not reopen "
+                                                      "its own session for this chat, so the conversation so far "
+                                                      "went along with your message."})
             prompt = [{"type": "text", "text": body}]
             if images:
                 if (self.capabilities.get("promptCapabilities") or {}).get("image"):
@@ -649,6 +686,9 @@ class ACPAgent:
             if r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text:
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
                 self._ensure_session()
+                if getattr(self, "_carry", False):        # and it starts knowing the chat so far
+                    self._carry = False
+                    prompt[0]["text"] = earlier_context(self.events[:-1]) + prompt[0]["text"]
                 r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
             self._reloaded = False
             final = "".join(self._text)

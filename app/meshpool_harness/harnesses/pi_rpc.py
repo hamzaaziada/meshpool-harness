@@ -261,6 +261,8 @@ class PiAgent:
                 "-e", str(Path(__file__).with_name("pi_gate.js"))]
         if self.resume and any(sess.glob("*.jsonl")):
             args.append("--continue")
+        elif any(e.get("type") in ("user", "assistant") for e in self.events[:-1]):
+            self._carry = True                   # Pi's own session is gone (an old chat): carry the history over
         env = dict(os.environ)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONNOUSERSITE"):
             env.pop(k, None)
@@ -538,6 +540,12 @@ class PiAgent:
         try:
             self._emit({"type": "model_start"})
             self._start()
+            if getattr(self, "_carry", False):
+                from meshpool_harness.harnesses.acp import earlier_context
+                self._carry = False
+                body = earlier_context(self.events[:-1]) + body
+                self._emit({"type": "status", "text": "Pi could not reopen its own session for this chat, so the "
+                                                      "conversation so far went along with your message."})
             self._done.clear()
             cmd = {"type": "prompt", "message": body}
             if images:

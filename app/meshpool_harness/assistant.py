@@ -491,7 +491,9 @@ def subagent_settings() -> dict:
         saved = {}
 
     def get(key):
-        return saved.get(key) or os.environ.get(key) or ""
+        if key in saved:                                     # saved, even empty (cleared): the file decides
+            return saved[key] or ""
+        return os.environ.get(key) or ""
 
     def num(key, default, lo, hi):
         try:
@@ -539,7 +541,9 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
     rows = rows[:12]
-    root = folder or os.environ.get("MESHPOOL_PROJECT") or ""
+    # The parent chat's own project (token-checked), not the server's MESHPOOL_PROJECT: that is process-wide and
+    # can belong to another chat whose servers started at the same moment.
+    root = str(parent.get("root") or "") or folder or os.environ.get("MESHPOOL_PROJECT") or ""
     has_project = bool(root) and Path(root).is_dir()
     if not has_project:                                      # no project: an empty folder, never the home folder
         root = tempfile.mkdtemp(prefix="meshpool-sub-")
@@ -558,6 +562,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         def _tool_names(self):
             return tools
 
+        def _check_stop(self):                               # the time limit or Stop, even before it was listed
+            if halted["why"]:
+                raise K.Interrupted()
+            super()._check_stop()
+
         def _permit(self, name, args):
             # Sub-agents run unattended, so what would need a yes in Supervised (a read outside the project, an
             # address carrying data out) is refused instead of allowed: run_subtasks itself runs without asking.
@@ -569,15 +578,15 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
             return True, ""
 
     def watch():                                             # the time limit and the parent's Stop
-        while live is not None and not halted.get("done"):
-            why = ("the time limit" if time.time() >= deadline else
-                   "Stop" if stop_file and os.path.exists(stop_file) else "")
-            if why:
-                halted["why"] = why
-                for a in list(live):
-                    a.stop()
-                return
-            time.sleep(0.5)
+        while not halted.get("done"):
+            if not halted["why"]:
+                halted["why"] = ("the time limit" if time.time() >= deadline else
+                                 "Stop" if stop_file and os.path.exists(stop_file) else "")
+            if halted["why"]:                                # keep at it: a sub-agent that was still being set
+                for a in list(live):                         # up, or whose send() reset its flag, stops too
+                    if not getattr(a, "_stop", False):
+                        a.stop()
+            time.sleep(0.25)
 
     def one(r):
         a = None

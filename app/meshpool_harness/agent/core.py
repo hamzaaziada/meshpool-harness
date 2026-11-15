@@ -559,8 +559,11 @@ class Agent:
         for old in self.dir.glob("stop-subtasks-*") if self.dir.is_dir() else ():
             old.unlink(missing_ok=True)              # left by an earlier Stop
         args["parent"] = {"model": self.current_model() or "", "mode": self.mode, "stop_file": str(stop_file),
-                          "token": os.environ.get("MH_PARENT_TOKEN", "")}
+                          "root": str(self.root), "token": os.environ.get("MH_PARENT_TOKEN", "")}
         self._sub_stops.add(str(stop_file))
+        if self._stop:                               # Stop landed just before it was registered
+            self.dir.mkdir(parents=True, exist_ok=True)
+            stop_file.write_text("stop", encoding="utf-8")
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             return self._wait(self.mcp.call, name, args)
@@ -838,6 +841,13 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
+        keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
+        if sum(1 for m in msgs if isinstance(m.get("content"), list)
+               for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
+            # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
+            # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
+            msgs = [dict(m) if isinstance(m.get("content"), list) else m for m in msgs]
+            _drop_images(msgs, keep=keep)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
@@ -888,13 +898,13 @@ class Agent:
                     h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
                         raise _EndpointDown("HTTP 0: the model endpoint did not come back")
-                    h.acquire(self._check_stop, self.emit)
+                    slot = h.acquire(self._check_stop, self.emit)
                     ok = False
                     try:
                         resp, streamed = self._wait(self._post, base, key, body, stream)
                         ok = True
                     finally:
-                        h.release(ok)
+                        h.release(ok, slot)
                 self._first_scale = 1.0
                 break
             except (Interrupted, KeyboardInterrupt):
@@ -908,8 +918,24 @@ class Agent:
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
+                if kind == "model_missing" and wire == "chat" and not getattr(self, "_model_swapped", False):
+                    # A chat from weeks ago on a model the endpoint has dropped: continue on today's default.
+                    C.load_into_env(override=True)
+                    now = os.environ.get("MH_MODEL") or DEFAULT_MODEL
+                    if PV.split(now)[0] == prov and PV.split(now)[1] != body["model"]:
+                        self._model_swapped, old_model = True, body["model"]
+                        self.model = now
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        self.emit({"type": "status", "text": f"This chat's model ({old_model}) is no longer available "
+                                                             f"on your endpoint, so it continues on {body['model']}. "
+                                                             "You can pick another model for it any time."})
+                        continue
+                    raise RuntimeError(f"The endpoint does not serve the model {body['model']}. Choose another model "
+                                       f"for this chat. ({msg[:160]})")
                 if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
                     shrunk = True
+                    _drop_images(self.messages, keep=2)    # also too big a request (413): screenshots go first
                     _shrink_context(self.messages, 0, hard=True)
                     body = self._body()
                     body["model"] = PV.split(body["model"])[1]
@@ -947,7 +973,8 @@ class Agent:
                     # One probe says which it is: the endpoint is down or stuck for this key (the probe fails too),
                     # or it is up and this request is slow or stuck on its route (the probe answers).
                     h = GW.health(base, key, body["model"])
-                    state = h.check(lambda: self._wait(self._probe, base, key, body["model"]))
+                    state = h.check(lambda: self._wait(self._probe, base, key, body["model"]),
+                                    check_stop=self._check_stop)
                     if state == "auth":                    # not the network: say so, not "can't reach"
                         raise RuntimeError("The endpoint rejected the API key. Check it in settings. (HTTP 401 on a "
                                            "check after the call failed)")
@@ -1116,6 +1143,10 @@ class Agent:
                         not resp["choices"][0]["message"].get("tool_calls"):
                     raise RuntimeError("HTTP 0: the stream ended before the reply")
                 return resp, got_text
+        except RuntimeError:
+            if got_text:                             # a reply cut short after some text: the retry starts clean
+                self.emit({"type": "stream_reset"})
+            raise
         except urllib.error.HTTPError as e:
             ra = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
             raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}"

@@ -626,3 +626,77 @@ def test_simultaneous_failures_share_one_probe(monkeypatch):
     for t in ts:
         t.join(3)
     assert out == ["down"] * 4 and len(probes) == 1 and h.fails == 1
+
+
+def test_stop_works_while_waiting_for_another_chats_probe():
+    import threading
+    import time
+    from meshpool_harness.core import gateway as GW
+    h = GW.health("http://w/v1", "k-3", "m")
+    threading.Thread(target=lambda: h.check(lambda: time.sleep(5) or "HTTP 0"), daemon=True).start()
+    time.sleep(0.2)
+    t0 = time.time()
+
+    def stop():
+        if time.time() - t0 > 0.3:
+            raise core.Interrupted()
+    with pytest.raises(core.Interrupted):
+        h.check(lambda: "ok", check_stop=stop)
+    assert time.time() - t0 < 1.5
+
+
+def test_a_reply_cut_short_after_some_text_resets_the_stream(tmp_path, monkeypatch):
+    import http.server
+    import threading
+    import time
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            try:
+                self.wfile.write(b'data: {"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}\n\n')
+                for _ in range(40):
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+            except OSError:
+                pass
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("MH_AGENT_FIRST_BYTE_S", "1")
+    monkeypatch.setenv("MH_AGENT_IDLE_S", "1")
+    a = Agent(str(tmp_path), mode="auto")
+    events = []
+    a.emit = events.append
+    with pytest.raises(RuntimeError, match="only keep-alives"):
+        a._post(f"http://127.0.0.1:{srv.server_address[1]}", "k", {"model": "m", "messages": []}, True)
+    assert any(e["type"] == "text_delta" for e in events) and events[-1]["type"] == "stream_reset"
+    srv.shutdown()
+
+
+def test_the_call_limit_holds_across_processes(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import time
+    from meshpool_harness.core import gateway as GW
+    monkeypatch.setenv("MH_MAX_INFLIGHT", "1")
+    name = "test-" + tmp_path.name
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import sys, time; sys.path.insert(0, %r)\n"
+        "from meshpool_harness.core import gateway as GW\n"
+        "f = GW._Slots(%r).take(1, lambda: None, lambda: None)\n"
+        "print('held', flush=True); time.sleep(1.5)\n") % (str(core.C.APP), name)],
+        stdout=subprocess.PIPE, text=True, env={**__import__("os").environ, "MH_MAX_INFLIGHT": "1"})
+    assert holder.stdout.readline().strip() == "held"              # another process (an assistant server) holds it
+    t0 = time.time()
+    f = GW._Slots(name).take(1, lambda: None, lambda: None)
+    waited = time.time() - t0
+    GW._Slots.give(f)
+    holder.wait(5)
+    assert waited > 0.8                                            # it waited for the other process's call

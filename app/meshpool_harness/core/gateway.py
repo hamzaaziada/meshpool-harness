@@ -29,8 +29,69 @@ def _max_inflight() -> int:
         return 4
 
 
+class _Slots:
+    """MH_MAX_INFLIGHT across processes: the app and every assistant server (where sub-agents run) take one of N
+    lock files per endpoint and key. The operating system drops a lock when its process ends, so a crash never
+    leaks a slot."""
+    def __init__(self, name: str):
+        import tempfile
+        self.dir = os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
+        self.name = name
+
+    def _try(self, i: int):
+        path = os.path.join(self.dir, f"{self.name}-{i}.lock")
+        f = open(path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            f.close()
+            return None
+
+    def take(self, n: int, check_stop, waiting):
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+        except OSError:
+            return None                              # no shared folder: the in-process gate still holds
+        told = False
+        while True:
+            for i in range(n):
+                try:
+                    f = self._try(i)
+                except OSError:
+                    return None
+                if f:
+                    return f
+            if not told:
+                told = True
+                waiting()
+            time.sleep(0.25)
+            check_stop()
+
+    @staticmethod
+    def give(f):
+        if f is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        finally:
+            f.close()                                # closing drops a POSIX flock
+
+
 class Gate:
-    def __init__(self):
+    def __init__(self, name: str = ""):
+        self.slots = _Slots(name) if name and os.environ.get("MH_SHARED_SLOTS", "1") == "1" else None
         self.cond = threading.Condition()
         self.inflight = 0
         self.limit = _max_inflight()
@@ -58,8 +119,20 @@ class Gate:
                 finally:
                     self.cond.acquire()
             self.inflight += 1
+        if self.slots is None:
+            return None
+        try:
+            return self.slots.take(_max_inflight(), check_stop, lambda: emit and emit({
+                "type": "status", "text": "Waiting for a free slot: sub-agents or another Meshpool window are using "
+                                          "this key's model calls (MH_MAX_INFLIGHT)."}))
+        except BaseException:
+            with self.cond:                          # Stop while waiting for a shared slot: give the local one back
+                self.inflight = max(0, self.inflight - 1)
+                self.cond.notify_all()
+            raise
 
-    def release(self, ok: bool):
+    def release(self, ok: bool, slot=None):
+        _Slots.give(slot)
         with self.cond:
             self.inflight = max(0, self.inflight - 1)
             if ok:
@@ -90,21 +163,21 @@ class Health:
         return self.gate.limit
 
     def acquire(self, check_stop, emit=None):
-        self.gate.acquire(check_stop, emit)
+        return self.gate.acquire(check_stop, emit)
 
-    def release(self, ok: bool):
+    def release(self, ok: bool, slot=None):
         if ok:
             with self.cond:
                 if self.down_since:
                     self._mark_up()
-        self.gate.release(ok)
+        self.gate.release(ok, slot)
 
     # ---------- is it up -----------------------------------------------------------------------------------------
     def is_down(self) -> bool:
         with self.cond:
             return self.down_since > 0
 
-    def check(self, probe, wait_s: float = 60) -> str:
+    def check(self, probe, wait_s: float = 60, check_stop=None) -> str:
         """"up", "down" or "auth" after a call failed: a probe taken in the last few seconds, another caller's probe
         that is running now, or a fresh one. While the endpoint is already marked down this does not probe: the
         caller goes on to wait_until_up."""
@@ -121,6 +194,8 @@ class Health:
                 if time.time() >= end:              # a probe that never returns: answer for it
                     return "down"
                 self.cond.wait(0.25)                # another chat is probing: use its answer
+                if check_stop:
+                    check_stop()                    # Stop works while waiting for another chat's probe
             self.prober = True
             started = time.time()
         got = None                                  # stays None when the probe raised (Stop): record nothing
@@ -222,7 +297,8 @@ def health(base: str, key: str, model: str = "") -> Health:
     with _REG_LOCK:
         g = _GATES.get(k)
         if g is None:
-            g = _GATES[k] = Gate()
+            import hashlib
+            g = _GATES[k] = Gate(hashlib.sha256(k.encode("utf-8")).hexdigest()[:16])
         h = _REG.get(k + "|" + model)
         if h is None:
             h = _REG[k + "|" + model] = Health(g)
