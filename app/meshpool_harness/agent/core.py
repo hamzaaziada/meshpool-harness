@@ -845,6 +845,18 @@ class Agent:
         two images stay in the conversation; older ones become a short note to keep requests small."""
         if os.environ.get("MH_VISION", "1") == "0" or getattr(self, "_no_vision", False):
             return
+        # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
+        # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
+        cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
+        shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
+        if big:
+            self.messages.append({"role": "user", "content": "[Meshpool] The image from " + ", ".join(sorted(set(big)))
+                                  + " was too large for the model endpoint and was left out, so you did not see it. "
+                                  "Ask the tool for a smaller image (a region, a lower resolution or a JPEG) or go on "
+                                  "without it."})
+        if not shots:
+            return
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
         for _, im in shots[-2:]:
@@ -1044,16 +1056,15 @@ class Agent:
                             both = copy.deepcopy(cut)
                             _drop_images(both, keep=0)
                             has_img = _has_images(self.messages)
-                            if did_cut and self._size_with(cut) <= lim:
+                            newest = _image_in_newest_ask(self.messages)
+                            if has_img and not newest and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # an older or tool image: the cheapest remedy
+                                note = ("An image from earlier in the chat, or a tool's screenshot, made the "
+                                        "request too large for the endpoint, so it was left out.")
+                            elif did_cut and self._size_with(cut) <= lim:
                                 self.messages[:] = cut
-                                self.emit({"type": "status", "text": "Your message was too large for the endpoint, "
-                                                                     "so its middle was left out. Attach long text "
-                                                                     "as a file to keep all of it."})
-                            elif has_img and self._size_with(noimg) <= lim and not _image_in_newest_ask(
-                                    self.messages):
-                                self.messages[:] = noimg          # an older or tool image: drop it and carry on
-                                self.emit({"type": "status", "text": "An earlier image made the request too large "
-                                                                     "for the endpoint, so it was left out."})
+                                note = ("Your message was too large for the endpoint, so its middle was left out. "
+                                        "Attach long text as a file to keep all of it.")
                             elif has_img and self._size_with(noimg) <= lim:
                                 self.messages[:] = noimg          # gone from the chat, so the next message works
                                 raise RuntimeError("The endpoint could not take this request: the attached image "
@@ -1062,18 +1073,18 @@ class Agent:
                                                    "and send it again. (" + msg[:120] + ")")
                             elif did_cut and has_img and self._size_with(both) <= lim:
                                 self.messages[:] = both
-                                self.emit({"type": "status", "text": "Your message and its image were too large for "
-                                                                     "the endpoint: the middle of the text and the "
-                                                                     "image were left out."})
+                                note = ("Your message and its image were too large for the endpoint: the middle of "
+                                        "the text and the image were left out.")
                             else:
                                 raise RuntimeError("The endpoint could not take this request: the conversation is "
                                                    "too large even after it was shortened. Start a new chat to "
                                                    "carry on. (" + msg[:120] + ")")
+                        else:
+                            note = ("The request was too large for the endpoint; older images and tool outputs were "
+                                    "left out before trying again.")
                         body = self._body()
                         body["model"] = PV.split(body["model"])[1]
-                        self.emit({"type": "status", "text": "The request was too large for the endpoint; older "
-                                                             "images and tool outputs were left out before trying "
-                                                             "again."})
+                        self.emit({"type": "status", "text": note})   # one line, saying what was done
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "

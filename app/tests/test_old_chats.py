@@ -317,4 +317,34 @@ def test_an_older_image_is_dropped_quietly_and_the_message_answered(agent, monke
     agent._post = post
     assert agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})[0]["content"] == "ok"   # answered
     assert not K._has_images(agent.messages)
-    assert any("earlier image" in (e.get("text") or "") for e in events)
+    notes = [e["text"] for e in events if e.get("type") == "status" and "too large" in (e.get("text") or "")]
+    assert len(notes) == 1 and "from earlier in the chat" in notes[0]          # one line, saying what was done
+
+
+def test_an_older_image_goes_before_the_users_long_text_is_cut(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 110000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "old"}, {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64," + "P" * 30000}}]})
+    agent.messages.append({"role": "assistant", "content": "seen"})
+    paste = "paste:\n" + "q" * 100000
+    agent.messages.append({"role": "user", "content": paste})
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert agent.messages[-1]["content"] == paste and not K._has_images(agent.messages)   # text kept whole
+
+
+def test_a_screenshot_too_big_for_the_endpoint_is_left_out_and_the_model_told(agent, monkeypatch):
+    monkeypatch.setenv("MH_BIG_REQUEST", "30000")
+    agent._attach_images([("mcp__computer__screenshot", {"mime": "image/png", "data": "S" * 50000})])
+    assert not K._has_images(agent.messages)
+    assert "too large for the model endpoint" in agent.messages[-1]["content"]
+    agent._attach_images([("mcp__computer__screenshot", {"mime": "image/png", "data": "s" * 1000})])
+    assert K._has_images(agent.messages)                           # a normal one still goes through
