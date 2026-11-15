@@ -1155,14 +1155,28 @@ def _decimals(vals) -> int:
     return 2
 
 
+def _wf_totals(vals: list) -> tuple[set, float]:
+    """Which bars of a bridge are totals: the start, the end, and any middle value equal to the running total there
+    (a subtotal such as free cash flow between operating cash flow and its uses). Returns (indices, running total
+    before the end bar)."""
+    tot, run = {0, len(vals) - 1}, float(vals[0]) if vals else 0.0
+    for i in range(1, len(vals) - 1):
+        v = float(vals[i])
+        if abs(v - run) <= max(0.015 * abs(run), 0.05) and abs(v) > 1e-9:
+            tot.add(i)                                      # a subtotal: drawn from zero, not added again
+        else:
+            run += v
+    return tot, run
+
+
 def _waterfall_style(plot, vals, spans, dec, usfx):
     """Totals grey, increases and decreases in their own colours; each bar labelled once with its signed value."""
     base, above, below = plot.series
     base.format.fill.background()
     base.format.line.fill.background()
-    last = len(vals) - 1
+    totals, _ = _wf_totals(vals)
     for j, v in enumerate(vals):
-        total = j in (0, last)
+        total = j in totals
         colr = TC.TEXT_2 if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_2)
         lo, hi = spans[j]
         for se in (above, below):
@@ -1210,10 +1224,11 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         # take the running total below zero draw where they belong; labels are the signed step values.
         vals = [float(v or 0) for v in series[0]["values"]]
         spans, run = [], 0.0
+        totals, _ = _wf_totals(vals)
         for i, v in enumerate(vals):
-            if i == 0 or i == len(vals) - 1:
+            if i in totals:                                # start, subtotals and end stand on zero
                 spans.append((min(0.0, v), max(0.0, v)))
-                run = v if i == 0 else run
+                run = v if i < len(vals) - 1 else run
             else:
                 spans.append((min(run, run + v), max(run, run + v)))
                 run += v
@@ -1847,10 +1862,11 @@ def chart_problems(c: dict) -> list[str]:
                    "support, or show the numbers you have as a stat stack")
     if c.get("kind") == "waterfall" and len(series) == 1:
         v = [x for x in series[0].get("values") or [] if isinstance(x, (int, float))]
-        if len(v) >= 3 and abs(v[0] + sum(v[1:-1]) - v[-1]) > max(0.015 * abs(v[-1]), 0.05):
-            out.append(f"the bridge does not add up: {v[0]:g} plus the steps ({sum(v[1:-1]):g}) is "
-                       f"{v[0] + sum(v[1:-1]):g}, not the end value {v[-1]:g}; a waterfall needs a start total, "
-                       "signed steps in the same unit, and an end total")
+        end_run = _wf_totals(v)[1] if len(v) >= 3 else 0.0
+        if len(v) >= 3 and abs(end_run - v[-1]) > max(0.015 * abs(v[-1]), 0.05):
+            out.append(f"the bridge does not add up: {v[0]:g} plus the steps (and any subtotals) comes to "
+                       f"{end_run:g}, not the end value {v[-1]:g}; a waterfall needs a start total, signed steps in "
+                       "the same unit, subtotals equal to the running total, and an end total")
     if len(cats) < 2 and c.get("kind") != "waterfall":
         out.append("a chart with one bar shows nothing; give >= 3 comparable categories or use a stat stack")
     sunits = {bool(re.search(r"%|cagr|share|rate|growth", str(se.get("name", "")), re.I)) for se in series}

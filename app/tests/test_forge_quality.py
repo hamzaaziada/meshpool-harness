@@ -246,3 +246,23 @@ def test_tie_checks_flag_one_per_share_amount_with_two_values():
     price = {"archetype": "grid", "title": "At $1,106.21 a share the buyback retires 3.6M shares"}
     got = tie_checks([cover, body, price])
     assert list(got) == [2] and "$2.26" in got[2][0] and "$30" in got[2][0]
+
+
+def test_a_bridge_with_a_subtotal_is_drawn_as_a_waterfall(tmp_path):
+    from pptx import Presentation
+    from engines.forge.render import _wf_totals, render
+    vals = [15.82, -6.43, 9.38, -7.5, -0.85, 1.03]               # OCF, capex, FCF (subtotal), uses, remaining
+    tot, run = _wf_totals(vals)
+    assert tot == {0, 2, 5} and abs(run - 1.03) < 0.02
+    s = {"archetype": "waterfall_bridge", "title": "Free cash flow of $9.38B covers the $7.50B expansion",
+         "chart": {"kind": "waterfall", "categories": ["Operating cash flow", "Capex", "Free cash flow",
+                                                       "Expansion", "Buybacks", "Remaining"],
+                   "series": [{"name": "Cash flow", "values": vals}], "unit": "$B", "decimals": 2},
+         "takeaway": {"text": "Free cash flow covers the expansion 1.25x"}, "source": {"text": "Company 10-K"}}
+    r = render([s], str(tmp_path / "w.pptx"), carry=False, density="balanced")
+    assert r["errors"] == []
+    sl = Presentation(str(tmp_path / "w.pptx")).slides[0]
+    assert any(sh.has_chart for sh in sl.shapes)                   # a chart, not a list of figures
+    bad = [15.82, -6.43, 9.0, -7.5, -0.85, 1.03]                   # 9.0 is neither a step nor the subtotal: no tie
+    from engines.forge.render import chart_problems
+    assert any("does not add up" in m for m in chart_problems(dict(s["chart"], series=[{"name": "x", "values": bad}])))
