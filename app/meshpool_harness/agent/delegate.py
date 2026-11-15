@@ -27,7 +27,7 @@ import time
 import uuid
 
 BLOCKED = {"ask_user"}                                  # needs a person
-BLOCKED_MCP = ("memory_save", "memory_forget", "schedule_task", "delete_scheduled_task", "run_subtasks")
+ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, schedules, run_subtasks: none for them
 # a goal that is nothing but a placeholder ("TODO", "task 3", "<goal>", "{task}"); "<title> tags" or
 # format("{user}") inside a real goal are fine (Hermes narrowed its check for the same reason)
 _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
@@ -67,6 +67,31 @@ def settings() -> dict:
              steps=num("MH_SUBAGENT_STEPS", 50, 5, 250), minutes=num("MH_SUBAGENT_MINUTES", 30, 0, 240),
              access=access if access in ("read", "edit") else "inherit")
     return s
+
+
+def _files_outside(root, args) -> bool:
+    for f in args.get("files") or []:
+        try:
+            p = (root / str(f)).resolve() if not os.path.isabs(str(f)) else __import__("pathlib").Path(f).resolve()
+            if not p.is_relative_to(root):
+                return True
+        except (OSError, ValueError):
+            return True
+    return False
+
+
+def _sub_sessions():
+    """Sub-agent sessions: in the user's data folder (private), outside the chat list; ones a crash left are swept."""
+    from meshpool_harness import config as C
+    d = C.runs_dir() / "subagent-sessions"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        for old in d.iterdir():
+            if time.time() - old.stat().st_mtime > 86400:
+                shutil.rmtree(old, ignore_errors=True)
+    except OSError:
+        pass
+    return d
 
 
 def schema(max_children: int) -> dict:
@@ -153,13 +178,13 @@ def _json_of(text: str):
 
 # ---------- MCP tools a sub-agent may use -----------------------------------------------------------------------------
 class ChildMcp:
-    """The chat's MCP servers, minus the assistant server's memory, scheduling and sub-agent tools."""
+    """The chat's MCP servers, minus the assistant server (memory, other chats, schedules, sub-agents)."""
     def __init__(self, mcp):
         self.m = mcp
         self.last_images: list = []
 
     def _ok(self, name: str) -> bool:
-        return not any(name.replace("-", "_").endswith("__" + b) for b in BLOCKED_MCP)
+        return not name.replace("-", "_").startswith(ASSISTANT_MCP)
 
     def has(self, name: str) -> bool:
         return self._ok(name) and self.m.has(name)
@@ -196,13 +221,14 @@ class Delegation:
                 nm = str(ev.get("name") or "")
                 nm = nm.split("__", 2)[-1] if nm.startswith("mcp__") else nm
                 rec["trace"].append({"tool": nm, "target": str(ev.get("summary") or "")[:120], "ok": None})
-                if nm in ("write_file", "edit") and ev.get("summary"):
-                    rec["files"].add(str(ev["summary"]).split(" ")[0][:200])
                 self.parent.emit({"type": "subagent", "delegation": self.id, "sid": sid, "index": index,
                                   "count": len(self.rows), "title": title, "kind": "tool", "tool": nm,
                                   "text": str(ev.get("summary") or "")[:160]})
             elif t == "tool_end" and rec["trace"]:
                 rec["trace"][-1]["ok"] = bool(ev.get("ok"))
+                path = rec.pop("pending_path", None)
+                if ev.get("ok") and path and str(ev.get("name")) in ("write_file", "edit"):
+                    rec["files"].add(str(path)[:300])
             elif t == "usage":
                 for k in ("in", "cached", "out", "calls"):
                     rec["usage"][k] += int(ev.get(k) or 0)
@@ -233,8 +259,10 @@ class Delegation:
                 return names + (["delegate_task"] if nested else [])
 
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
-                if self._outside(name, args):
+                if self._outside(name, args) or (name == "office_task" and _files_outside(parent.root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
+                if name in ("write_file", "edit"):
+                    rec["pending_path"] = args.get("path")
                 self.mode = top.mode                     # the chat's mode now: the user may have tightened it
                 if getattr(top, "plan", False) and name not in K.PLAN_TOOLS and \
                         name.replace("-", "_") not in K.PLAN_MCP:   # what the chat itself may do in plan mode
@@ -246,13 +274,28 @@ class Delegation:
                     raise K.Interrupted()
                 super()._check_stop()
 
-        import tempfile
         a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
-                  sessions_dir=os.path.join(tempfile.gettempdir(), "meshpool-subagents"),   # not a chat
+                  sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_depth = depth + 1
         a._delegate_top = top
+        a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
+        grep = a.ws.grep
+
+        def grep_in_project(pattern, path=".", glob=None):   # a symlink must not carry a read outside the project
+            out = grep(pattern, path, glob)
+            keep = []
+            for line in str(out).splitlines():
+                rel = line.split(":", 1)[0]
+                try:
+                    inside = (parent.root / rel).resolve().is_relative_to(parent.root)
+                except (OSError, ValueError):
+                    inside = False
+                if inside or not rel:
+                    keep.append(line)
+            return "\n".join(keep) if keep or not out else "(no matches inside the project)"
+        a.ws.grep = grep_in_project
         a.model = cfg["model"] or parent.current_model()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
@@ -260,14 +303,7 @@ class Delegation:
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
-        block += f"\n\nWORKSPACE: {parent.root}"
-        for fn in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
-            p = parent.root / fn
-            try:
-                if p.is_file():
-                    block += f"\n\nProject instructions ({fn}, binding):\n" + p.read_text("utf-8", "replace")[:8000]
-            except OSError:
-                pass
+        block += f"\n\nWORKSPACE: {parent.root} (the project's instructions above apply to you too)"
         block += ("\n\nWhen you are done, reply with a tight report: what you did, what you found (with a file path "
                   "or link for every fact), files you created or changed, and anything you could not do. You cannot "
                   "ask the user anything; if something needs them, say so in the report.")
@@ -452,7 +488,7 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
         res = d.run(cancelled=lambda: parent._stop or getattr(parent, "_gen", 0) != gen)
     finally:
         reg.pop(d.id, None)
-    ok = any(r["status"] == "completed" for r in res["results"])
+    ok = any(r["status"] in ("completed", "interrupted") for r in res["results"])   # reports came back
     return report(res), ok
 
 

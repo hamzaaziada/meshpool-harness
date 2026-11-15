@@ -1143,7 +1143,7 @@ function applyEv(ev) {
     case "tool_end": {
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
-      const out = String(ev.output || ""), stopped = !ev.ok && /not run: stopped by the user|^\[exit 130\]|stopped by the user/i.test(out);
+      const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";

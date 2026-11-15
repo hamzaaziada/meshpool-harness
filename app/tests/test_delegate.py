@@ -15,6 +15,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(K, "SESSIONS", tmp_path / "_sessions")
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "runs"))       # sub-agent sessions: never the real data folder
     for k in ("MH_SUBAGENTS", "MH_SUBAGENT_MODEL", "MH_SUBAGENT_ACCESS", "MH_SUBAGENT_PARALLEL", "MH_SUBAGENT_STEPS",
               "MH_SUBAGENT_MINUTES", "MH_SUBAGENT_AUTO_APPROVE", "MH_SUBAGENT_BACKGROUND", "MH_SUBAGENT_DEPTH",
               "MH_SUBAGENT_SUMMARY_CHARS"):
@@ -177,8 +178,7 @@ def test_children_use_the_chats_mcp_tools_minus_memory_scheduling_and_sub_agents
         def call(self, name, args):
             return "made", False
     c = D.ChildMcp(Mcp())
-    assert [s["function"]["name"] for s in c.schemas()] == ["mcp__meshpool-assistant__search_chats",
-                                                             "mcp__meshpool-office__make_document"]
+    assert [s["function"]["name"] for s in c.schemas()] == ["mcp__meshpool-office__make_document"]
     assert not c.has("mcp__meshpool-assistant__memory_save") and c.has("mcp__meshpool-office__make_document")
     assert c.call("mcp__meshpool-office__make_document", {}) == ("made", False) and c.last_images == ["img"]
 
@@ -361,3 +361,102 @@ def test_many_reports_share_one_budget_and_are_kept_in_full_in_files(monkeypatch
     assert out.count("The full report is in ") == 8
     path = out.split("The full report is in ")[1].split(" (read it")[0]
     assert open(path).read().endswith("END")
+
+
+def test_office_task_and_grep_cannot_read_outside_the_project(monkeypatch, _env, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOKEN=abc")
+    (_env / "notes.txt").symlink_to(secret)                          # a link inside the project, pointing out
+    (_env / "real.txt").write_text("TOKEN=inside")
+    a = _agent(_env, mode="auto", profile="work")
+    child = D.Delegation(a, D.check_goals([{"goal": "Read things"}]), D.settings(), 0)._child(
+        "sa-y", 0, {"trace": [], "files": set(), "errors": [], "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}})
+    assert child._permit("office_task", {"request": "x", "files": [str(secret)]})[0] is False
+    assert child._permit("office_task", {"request": "x", "files": ["real.txt"]})[0] is True
+    out = child.ws.grep("TOKEN", ".")
+    assert "inside" in out and "abc" not in out
+
+
+def test_run_subtasks_sub_agents_never_delegate_and_no_limit_means_its_longest(monkeypatch, _env):
+    from meshpool_harness import assistant as A
+    seen = []
+    fake(monkeypatch, lambda b: _msg("ok"), seen=seen)
+
+    def post(self, base, key, body, stream):
+        seen.append(sorted(t["function"]["name"] for t in body["tools"]))
+        return _msg("ok")
+    monkeypatch.setattr(K.Agent, "_post", post)
+    A.run_subtasks([{"prompt": "x"}], str(_env))
+    assert "delegate_task" not in seen[-1]
+    monkeypatch.setenv("MH_SUBAGENT_MINUTES", "0")
+    assert A.subagent_settings()["minutes"] == 25 and D.settings()["minutes"] == 0
+
+
+def test_files_written_are_the_ones_that_were_written_with_their_whole_path(monkeypatch, _env):
+    def child(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("done")
+        return _msg("", [("write_file", {"path": "Q3 Sales Report.md", "content": "x"})])
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(_agent(_env, mode="ask"), {"tasks": [{"goal": "Write the report"}]})
+    assert json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]["files_written"] == []   # refused
+    out, _ = D.run_tool(_agent(_env, mode="edits"), {"tasks": [{"goal": "Write the report"}]})
+    assert json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))["results"][0]["files_written"] == [
+        "Q3 Sales Report.md"]
+
+
+def test_none_of_the_assistant_servers_tools_reach_sub_agents():
+    class Mcp:
+        def schemas(self):
+            return [{"function": {"name": n}} for n in ("mcp__meshpool-assistant__search_chats",
+                                                         "mcp__meshpool-assistant__memory_view",
+                                                         "mcp__meshpool-assistant__list_scheduled_tasks",
+                                                         "mcp__github__list_issues")]
+
+        def has(self, name):
+            return True
+    assert [s["function"]["name"] for s in D.ChildMcp(Mcp()).schemas()] == ["mcp__github__list_issues"]
+
+
+def test_sub_agent_sessions_stay_in_the_users_data_folder(monkeypatch, _env, tmp_path):
+    dirs = []
+    real = K.Agent.__init__
+
+    def spy(self, *a, **k):
+        real(self, *a, **k)
+        dirs.append(self.dir)
+    monkeypatch.setattr(K.Agent, "__init__", spy)
+    fake(monkeypatch, lambda b: _msg("ok"))
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Look at the project"}]})
+    sub = [d for d in dirs if d.name.startswith("sub-")][0]
+    assert (tmp_path / "runs" / "subagent-sessions") in sub.parents and not sub.exists()   # removed afterwards
+
+
+def test_the_terminal_shows_sub_agent_progress():
+    import io
+    from meshpool_harness.agent import tui
+    t = tui.Terminal()
+    t.info = io.StringIO()
+    for ev in ({"type": "subagent", "kind": "start", "index": 0, "count": 2, "title": "Research Acme"},
+               {"type": "subagent", "kind": "done", "index": 0, "count": 2, "title": "Research Acme",
+                "text": "completed in 3 s"}):
+        t.emit(ev)
+    out = t.info.getvalue()
+    assert "[1/2] Research Acme: started" in out and "completed in 3 s" in out
+
+
+def test_stopped_reports_are_a_result_and_chat_grants_cover_sub_agents(monkeypatch, _env):
+    def child(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("ran: " + b["messages"][-1]["content"][:40])
+        return _msg("", [("bash", {"command": "echo granted"})])
+    fake(monkeypatch, child)
+    a = _agent(_env, mode="ask")
+    a.always.add("bash")                                             # "Allow all commands in this chat"
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Run the command"}]})
+    assert ok and "granted" in out and "cannot ask" not in out
+    seen = []
+    fake(monkeypatch, lambda b: _msg("ok"), seen=seen)
+    (_env / "AGENTS.md").write_text("ALWAYS-USE-TABS")
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Look at the project"}]})
+    assert [x["system"] for x in seen if x["child"]][0].count("ALWAYS-USE-TABS") == 1   # once, not twice

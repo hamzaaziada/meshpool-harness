@@ -155,6 +155,14 @@ class Terminal:
                 self.p(("  └ " if i == 0 else "    ") + color(line[:220]))
             if len(lines) > len(head):
                 self.p("    " + st.dim(f"... {len(lines) - len(head)} more lines"))
+        elif t == "subagent":                   # delegate_task: one line per sub-agent start, step and finish
+            tag = f"  ↳ [{ev.get('index', 0) + 1}/{ev.get('count', 1)}] {str(ev.get('title') or '')[:48]}"
+            if ev.get("kind") == "start":
+                self.p(st.dim(f"{tag}: started"))
+            elif ev.get("kind") == "tool":
+                self.p(st.dim(f"{tag}: {ev.get('tool', '')} {str(ev.get('text') or '')[:70]}"))
+            elif ev.get("kind") == "done":
+                self.p(st.dim(f"{tag}: {ev.get('text') or ev.get('status', '')}"))
         elif t == "status":
             self.p(st.dim("  " + ev["text"]))
         elif t == "plan":

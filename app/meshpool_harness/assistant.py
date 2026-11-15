@@ -506,7 +506,8 @@ def subagent_settings() -> dict:
             "access": "edit" if get("MH_SUBAGENT_ACCESS").strip().lower() == "edit" else "read",
             "parallel": num("MH_SUBAGENT_PARALLEL", 4, 1, 6),
             "steps": num("MH_SUBAGENT_STEPS", 30, 5, 200),
-            "minutes": num("MH_SUBAGENT_MINUTES", 20, 1, 25)}     # under the tool's 30 min timeout (mcp.json)
+            "minutes": 25 if str(get("MH_SUBAGENT_MINUTES")).strip() == "0" else
+            num("MH_SUBAGENT_MINUTES", 20, 1, 25)}               # under the tool's 30 min timeout (mcp.json)
 
 
 READ_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research"]
@@ -558,6 +559,8 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     halted = {"why": ""}
 
     class Sub(K.Agent):
+        _delegate_depth = 99                                 # these never start sub-agents of their own
+
         def _tool_names(self):
             return tools
 
