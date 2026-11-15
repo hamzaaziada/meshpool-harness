@@ -152,7 +152,7 @@ def test_the_chat_passes_its_model_mode_and_a_stop_file(tmp_path, monkeypatch):
     with pytest.raises(K.Interrupted):
         a._run_subtasks("mcp__meshpool_assistant__run_subtasks", {"tasks": [], "parent": {"mode": "auto"}})
     p = got["parent"]
-    assert p["mode"] == "edits" and p["token"] == os.environ["MH_PARENT_TOKEN"] and p["model"] == a.current_model()
+    assert p["mode"] == "edits" and p["token"] == K.C.PARENT_TOKEN and p["model"] == a.current_model()
     assert open(p["stop_file"]).read() == "stop"                   # Stop reached the sub-agents
 
 
@@ -257,3 +257,33 @@ def test_the_mcp_server_hands_a_clients_cancel_to_the_tool(tmp_path):
         assert reply["id"] == 7 and "cancelled after" in reply["result"]["content"][0]["text"]
     finally:
         p.kill()
+
+
+def test_the_parent_token_never_reaches_a_harness_or_another_server(tmp_path, monkeypatch):
+    """Review round 6: the token sat in os.environ, so a Codex, Hermes or Pi model could read it with a shell
+    command and forge a parent with edit rights anywhere. Only Meshpool's own assistant server may get it."""
+    import os
+    import sys
+    from meshpool_harness.agent import mcp as M
+    monkeypatch.delenv("MH_PARENT_TOKEN", raising=False)          # this file's fixture plays the server's role
+    core_src = open(K.__file__, encoding="utf-8").read()
+    assert "os.environ.setdefault(\"MH_PARENT_TOKEN\"" not in core_src   # importing the agent never sets it
+    assert len(K.C.PARENT_TOKEN) >= 32
+    seen = {}
+
+    class P:
+        def __init__(self, args, env=None, **kw):
+            seen[args[-1]] = env
+
+        def poll(self):
+            return None
+    monkeypatch.setattr(M.subprocess, "Popen", P)
+    monkeypatch.setattr(M.threading, "Thread", lambda *a, **k: type("T", (), {"start": lambda self: None})())
+    monkeypatch.setenv("MH_PARENT_TOKEN", "leaked")               # even if something put one there
+    for mod in ("meshpool_harness.agent.assistant_mcp_server", "meshpool_harness.agent.web_mcp_server"):
+        M._Stdio(mod, {"command": "python", "args": ["-m", mod]}, tmp_path, [str(tmp_path)])
+    assert seen["meshpool_harness.agent.assistant_mcp_server"]["MH_PARENT_TOKEN"] == K.C.PARENT_TOKEN
+    assert "MH_PARENT_TOKEN" not in seen["meshpool_harness.agent.web_mcp_server"]
+    src = open(os.path.join(os.path.dirname(M.__file__), "..", "harnesses", "acp.py")).read() + \
+        open(os.path.join(os.path.dirname(M.__file__), "..", "harnesses", "pi_rpc.py")).read()
+    assert src.count('env.pop("MH_PARENT_TOKEN", None)') == 2      # harness processes never inherit it

@@ -267,6 +267,10 @@ class _Stdio:
             # own "env" names. Meshpool's settings are all in this process's environment.
             env = {k: v for k, v in env.items() if not _secret_name(k)}
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
+        env.pop("MH_PARENT_TOKEN", None)               # only Meshpool's own assistant server gets the token
+        if exe == sys.executable and "meshpool_harness.agent.assistant_mcp_server" in [str(a) for a in
+                                                                                         spec.get("args", [])]:
+            env["MH_PARENT_TOKEN"] = C.PARENT_TOKEN
         env.setdefault("PYTHONUTF8", "1")
         if exe == sys.executable:
             env["PYTHONPATH"] = str(C.APP) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
