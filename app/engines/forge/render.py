@@ -510,8 +510,9 @@ def _font(role: str, bold: bool = False):
     return font_file(FACE[role], bold, False, METRIC)[0]
 
 
-def _need(blocks, w) -> float:
-    """Height the blocks need at their set sizes (Arial metrics via Liberation Sans)."""
+def _need(blocks, w, safety: float = 0.98) -> float:
+    """Height the blocks need at their set sizes (Arial metrics via Liberation Sans). Rows ruled underneath measure
+    with safety 0.94: the renderer can set a line about 5% wider than measured, and a wrap there crosses the rule."""
     from .common import font_file, wrap_lines
     reg, bold = _font("body"), _font("body", True)
     h = 0.05
@@ -519,7 +520,7 @@ def _need(blocks, w) -> float:
         size = b.get("size", T["body"])
         ind = 0.2 + 0.2 * b.get("level", 0) if b.get("bullet") else 0
         plain = re.sub(r"\*\*|\^\w+", "", b["text"])
-        lines = wrap_lines(plain, w - ind, size, bold if b.get("bold") else reg, 0.98)
+        lines = wrap_lines(plain, w - ind, size, bold if b.get("bold") else reg, safety)
         h += lines * _pitch(size, b.get("line_spacing", LEADING)) / 72 + (b.get("space_before") or 0) / 72
     return h
 
@@ -2252,7 +2253,7 @@ def a_challenge_matrix(ctx, s, sl, n):
             for b in ba + bb:
                 b["size"] = size
             lab = [{"text": r.get("label", ""), "size": size, "bold": True}]
-            out.append((ba, bb, max(_need(ba, aw), _need(bb, bw), _need(lab, lw - 0.85), 0.45) + 0.08))
+            out.append((ba, bb, max(_need(ba, aw, 0.94), _need(bb, bw, 0.94), _need(lab, lw - 0.85, 0.94), 0.45) + 0.08))
         return out
     size = DENSE["cell"]
     laid = fit_rows(rows, size)
