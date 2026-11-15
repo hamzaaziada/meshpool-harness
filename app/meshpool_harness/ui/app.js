@@ -1185,13 +1185,17 @@ function applyEv(ev) {
       cur.subs = cur.subs || {};
       let box = cur.subs[ev.delegation];
       if (!box || !box.isConnected) box = document.getElementById("sub-" + ev.delegation);
-      if (!box) { closeGroup(); box = add(`<b>Sub-agents</b><ol></ol>`, "planbox"); box.id = "sub-" + ev.delegation; }
+      if (!box) {
+        closeGroup(); box = add(`<b>Sub-agents</b> <button class="linkbtn" data-substop="1" title="Stop these sub-agents">Stop</button><ol></ol>`, "planbox"); box.id = "sub-" + ev.delegation;
+        const sid = cur.id; $("[data-substop]", box).onclick = (e) => { e.target.disabled = true; post(`/api/agent/${sid}/stop`, {}).catch(err => toast(err.message)); };   // works while the chat is idle too
+      }
       cur.subs[ev.delegation] = box;
       let li = box.querySelector(`[data-sid="${CSS.escape(String(ev.sid || ""))}"]`);
       if (!li) { li = document.createElement("li"); li.dataset.sid = ev.sid || ""; li.innerHTML = `<span class="sg"></span> <small class="sn"></small>`; $("ol", box).appendChild(li); $(".sg", li).textContent = ev.title || ""; li.className = "in_progress"; }
       const tl = ev.tool ? (TOOL_RUN[ev.tool] || TOOL_LABEL[ev.tool] || String(ev.tool).replace(/_/g, " ")) : "";
       if (ev.kind === "tool") $(".sn", li).textContent = "· " + tl + (ev.text ? " " + ev.text : "");
       if (ev.kind === "done") { $(".sn", li).textContent = "· " + (ev.text || ev.status || ""); li.className = ev.status === "completed" ? "completed" : "failed"; }
+      if (!$("li.in_progress", box)) $("[data-substop]", box)?.remove();   // all done: nothing left to stop
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
@@ -1949,7 +1953,7 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_BACKGROUND: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_BACKGROUND: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>

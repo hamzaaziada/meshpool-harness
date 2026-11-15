@@ -126,7 +126,7 @@ def test_background_returns_at_once_and_the_reports_arrive_as_a_message(monkeypa
         time.sleep(0.3)
         return _msg("background report")
     fake(monkeypatch, child)
-    a = _agent(_env)
+    a = _agent(_env, mode="ask")
     got = []
     a.deliver = got.append
     t0 = time.time()
@@ -149,7 +149,7 @@ def test_stop_in_the_chat_stops_background_sub_agents_without_a_new_turn(monkeyp
         return _msg("", [("glob", {"pattern": "*"})])               # never finishes on its own
     fake(monkeypatch, child)
     events, got = [], []
-    a = _agent(_env, emit=events.append)
+    a = _agent(_env, mode="ask", emit=events.append)
     a.deliver = got.append
     D.run_tool(a, {"tasks": [{"goal": "Keep listing files forever"}]})
     time.sleep(0.6)
@@ -173,7 +173,7 @@ def test_list_steer_and_stop_actions(monkeypatch, _env):
         time.sleep(0.1)
         return _msg("", [("glob", {"pattern": "*"})])
     fake(monkeypatch, child)
-    a = _agent(_env)
+    a = _agent(_env, mode="ask")
     a.deliver = lambda t: None
     sid = json.loads(D.run_tool(a, {"tasks": [{"goal": "Research company Acme in depth"}]})[0])["subagent_ids"][0]
     rows = json.loads(D.run_tool(a, {"action": "list"})[0])
@@ -269,3 +269,147 @@ def test_children_never_read_outside_the_project_even_in_full_access(monkeypatch
     fake(monkeypatch, child)
     out, _ = D.run_tool(_agent(_env, mode="auto"), {"tasks": [{"goal": "Read the secret file"}]})
     assert "only read inside the project" in out and "KEY" not in out.split("```json")[0]
+
+
+def test_sub_agents_that_may_change_files_work_inside_the_turn_others_in_the_background(monkeypatch, _env):
+    seen = []
+    fake(monkeypatch, lambda b: _msg("done"), seen=seen)
+    a = _agent(_env, mode="edits")                                  # they could edit: inside the turn
+    a.deliver = lambda t: pytest.fail("must not go to the background")
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Fix the typo in README"}]})
+    assert ok and "1 sub-agent report" in out
+    b = _agent(_env, mode="ask")                                    # Supervised: they cannot change anything
+    got = []
+    b.deliver = got.append
+    seen.clear()
+    assert json.loads(D.run_tool(b, {"tasks": [{"goal": "Read the README"}]})[0])["status"] == "dispatched"
+    for _ in range(50):
+        if got:
+            break
+        time.sleep(0.05)
+    tools = [x["tools"] for x in seen if x["child"]][0]
+    assert got and "bash" not in tools and "write_file" not in tools  # background ones only read
+
+
+def test_children_follow_the_chats_mode_and_plan_mode_as_they_change(monkeypatch, _env):
+    a = _agent(_env, mode="auto")
+
+    def child(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("result: " + b["messages"][-1]["content"][:100])
+        a.mode = "ask"                                              # the user tightens it while the sub-agent works
+        return _msg("", [("bash", {"command": "echo hi > made.txt"})])
+    fake(monkeypatch, child)
+    out, _ = D.run_tool(a, {"tasks": [{"goal": "Make the file"}]})
+    assert "cannot ask for approval" in out and not (_env / "made.txt").exists()
+    a.mode = "auto"
+
+    def child2(b):
+        if b["messages"][-1]["role"] == "tool":
+            return _msg("result: " + b["messages"][-1]["content"][:100])
+        a.plan = True
+        return _msg("", [("write_file", {"path": "x.txt", "content": "x"})])
+    fake(monkeypatch, child2)
+    out, _ = D.run_tool(a, {"tasks": [{"goal": "Write the file"}]})
+    assert "plan mode" in out and not (_env / "x.txt").exists()
+
+
+def test_read_and_edit_access_means_no_commands(monkeypatch, _env):
+    seen = []
+    fake(monkeypatch, lambda b: _msg("ok"), seen=seen)
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")                # saved by 0.0.5 as "Read and edit files"
+    D.run_tool(_agent(_env, mode="auto"), {"tasks": [{"goal": "Tidy the docs folder"}]})
+    tools = [x["tools"] for x in seen if x["child"]][0]
+    assert "write_file" in tools and "edit" in tools and "bash" not in tools and "bash_many" not in tools
+
+
+def test_nested_sub_agents_tokens_reach_the_chat(monkeypatch, _env):
+    monkeypatch.setenv("MH_SUBAGENT_DEPTH", "2")
+
+    def child(b):
+        names = [t["function"]["name"] for t in b["tools"]]
+        if "delegate_task" in names and b["messages"][-1]["role"] == "user":
+            return _msg("", [("delegate_task", {"tasks": [{"goal": "Check the second file"}]})])
+        return _msg("ok")
+    fake(monkeypatch, child)
+    a = _agent(_env)
+    D.run_tool(a, {"tasks": [{"goal": "Check both files"}]})
+    assert a.usage["calls"] == 3                                     # child twice, grandchild once
+
+
+def test_only_goals_that_are_nothing_but_a_placeholder_are_refused(_env):
+    assert D.check_goals([{"goal": "Add a <title> tag to every page"}, {"goal": 'Fix format("{user_name}")'}])
+    with pytest.raises(ValueError, match="placeholder"):
+        D.check_goals([{"goal": "<goal>"}])
+    with pytest.raises(ValueError, match="placeholder"):
+        D.check_goals([{"goal": "{task}"}])
+
+
+def _session(monkeypatch):
+    from meshpool_harness.ui import agent_api as API
+    s = API.Session.__new__(API.Session)
+    s.lock, s.queue, s.state, s._held, s.pendings = threading.RLock(), [], "working", [], {}
+    s.events, s.id = [], "t"
+    s.emit = lambda ev: s.events.append(ev)
+    return API, s
+
+
+def test_stop_keeps_reports_that_arrived_and_they_go_with_the_next_message(monkeypatch):
+    API, s = _session(monkeypatch)
+    s._deliver_background(API.REPORT_HEAD + " (1 task).\n\n\u200b[Meshpool] Results of delegate_task deleg_1. ok")
+    s.queue.append(("a user note", None))
+    s.agent = None
+    s.stop()
+    assert s.queue == [] and len(s._held) == 1                       # the report is kept, the rest dropped
+    sent = []
+    monkeypatch.setattr(API.C, "load_into_env", lambda **k: None)
+    s.agent, s.cp, s.plan, s.workdir, s.harness = type("X", (), {})(), None, False, None, {"type": "x"}
+    s._start_turn.__func__  # exists
+    started = []
+
+    def fake_start(text, images):
+        with s.lock:
+            held, s._held = s._held, []
+        started.append(text + "".join(held))
+    s._start_turn = fake_start
+    s._start_turn("next question", None)
+    assert "Results of delegate_task deleg_1" in started[0]
+
+
+def test_a_chat_with_working_sub_agents_is_not_closed_when_idle(monkeypatch):
+    API, s = _session(monkeypatch)
+    s.state, s.touched = "idle", 0
+    s.agent = type("A", (), {"_delegations": {"deleg_1": object()}})()
+    monkeypatch.setitem(API.LIVE, "sess-x", s)
+    try:
+        assert "sess-x" not in API._reap_once(1)
+    finally:
+        API.LIVE.pop("sess-x", None)
+
+
+def test_after_a_restart_lost_background_sub_agents_are_reported(monkeypatch, _env):
+    API, s = _session(monkeypatch)
+    a = _agent(_env)
+    a.messages += [{"role": "assistant", "content": "", "tool_calls": [{"id": "d", "type": "function", "function": {
+        "name": "delegate_task", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "d", "content": json.dumps({"status": "dispatched",
+                                                                      "delegation_id": "deleg_abc"})}]
+    s.agent = a
+    s._note_lost_subagents()
+    assert any("were lost" in (e.get("text") or "") for e in s.events) and "deleg_abc" in s._held[0]
+
+
+def test_a_message_that_replaces_the_turn_does_not_stop_background_sub_agents(monkeypatch, _env):
+    a = _agent(_env)
+    stopped = []
+
+    class Dl:
+        background = True
+
+        def stop_all(self, why):
+            stopped.append(why)
+    a._delegations = {"d": Dl()}
+    a.stop(background=False)
+    assert stopped == []
+    a.stop()
+    assert stopped == ["Stop"]

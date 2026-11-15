@@ -26,7 +26,11 @@ import uuid
 
 BLOCKED = {"ask_user"}                                  # needs a person
 BLOCKED_MCP = ("memory_save", "memory_forget", "schedule_task", "delete_scheduled_task", "run_subtasks")
-_PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder)\s*$|<[a-z_ ]+>|\{[a-z_ ]+\}", re.I)
+# a goal that is nothing but a placeholder ("TODO", "task 3", "<goal>", "{task}"); "<title> tags" or
+# format("{user}") inside a real goal are fine (Hermes narrowed its check for the same reason)
+_PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
+                          re.I)
+NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests"}
 
 
 # ---------- settings ----------------------------------------------------------------------------------------------
@@ -58,7 +62,7 @@ def settings() -> dict:
              # in-process sub-agents have no MCP call timeout to stay under: Hermes-sized limits
              parallel=num("MH_SUBAGENT_PARALLEL", 4, 1, 10), max_tasks=12,
              steps=num("MH_SUBAGENT_STEPS", 50, 5, 250), minutes=num("MH_SUBAGENT_MINUTES", 30, 0, 240),
-             access="read" if access == "read" else "inherit")
+             access=access if access in ("read", "edit") else "inherit")
     return s
 
 
@@ -179,6 +183,7 @@ class Delegation:
     def __init__(self, parent, rows: list[dict], cfg: dict, depth: int):
         self.parent, self.rows, self.cfg, self.depth = parent, rows, cfg, depth
         self.id = "deleg_" + uuid.uuid4().hex[:8]
+        self.background = False
         self.children: dict[str, dict] = {}            # subagent_id -> {agent, row, index, status, ...}
         self.lock = threading.Lock()
         self.stopped = False
@@ -212,8 +217,11 @@ class Delegation:
         from meshpool_harness.agent import core as K
         parent, cfg, depth = self.parent, self.cfg, self.depth
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
-        if cfg["access"] == "read":                      # Settings: read and research only
+        background = self.background
+        if cfg["access"] == "read" or background:        # read and research only (background: see run_tool)
             names = [n for n in names if n in K.READ_ONLY and n != "office_task"]
+        elif cfg["access"] == "edit":                    # read and edit files, never run commands
+            names = [n for n in names if n not in NO_COMMANDS]
         nested = depth + 1 < cfg["depth"]                # this child may delegate in turn
         deleg = self
 
@@ -230,6 +238,9 @@ class Delegation:
             def _permit(self, name, args):              # unattended: never read outside the project, any mode
                 if self._outside(name, args):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
+                self.mode = parent.mode                  # the chat's mode now: the user may have tightened it
+                if getattr(parent, "plan", False) and name not in K.READ_ONLY:
+                    return False, "the chat is in plan mode now: nothing may change"
                 return super()._permit(name, args)
 
             def _check_stop(self):                       # Stop, the time limit, or action=stop
@@ -239,7 +250,7 @@ class Delegation:
 
         a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
-                  mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] != "read" else None)
+                  mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" and not background else None)
         a._delegate_depth = depth + 1
         a.model = cfg["model"] or parent.current_model()
         row = self.rows[index]
@@ -323,6 +334,8 @@ class Delegation:
         p = self.parent
         for k in ("in", "cached", "out", "calls"):        # the chat pays for its sub-agents: count it there
             p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
+        if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
+            p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
         summary = str(rec.get("summary") or "")
         cap = self.cfg["summary_chars"]
         truncated = len(summary) > cap
@@ -446,7 +459,11 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     d = Delegation(parent, rows, cfg, depth)
     reg[d.id] = d
     deliver = getattr(parent, "deliver", None)
-    if cfg["background"] and depth == 0 and callable(deliver):
+    # Only sub-agents that cannot change anything run in the background (read and research). Ones that may edit
+    # files work inside this turn, so its checkpoint, diff and Undo cover what they change.
+    could_change = cfg["access"] != "read" and (parent.mode in ("edits", "auto") or cfg["auto_approve"])
+    if cfg["background"] and depth == 0 and callable(deliver) and not could_change:
+        d.background = True
         def bg():
             try:
                 res = d.run()
@@ -479,7 +496,13 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     return report(res), ok
 
 
-def stop_all(parent):
-    """Stop in the chat: every sub-agent it started, running in the background or not."""
+def stop_all(parent, background: bool = True):
+    """Stop in the chat: every sub-agent it started; background ones only when the user asked for a full Stop
+    (not when a new message replaces the current turn)."""
     for d in list(getattr(parent, "_delegations", {}).values()):
-        d.stop_all("Stop")
+        if background or not d.background:
+            d.stop_all("Stop")
+
+
+def running(parent) -> bool:
+    return bool(getattr(parent, "_delegations", None))

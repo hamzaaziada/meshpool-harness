@@ -25,6 +25,7 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "the next step if work remains. If you need the user to decide or provide something, ask, and leave the "
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
+REPORT_HEAD = "Sub-agent results are in"           # agent/delegate.py: the visible line of a delivered report
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429",
@@ -302,6 +303,8 @@ class Session:
             self.goal = str(meta.get("goal") or "")
             if meta.get("model") and not getattr(self.agent, "model", None) and not legacy:
                 self.set_model(meta["model"])
+        if resume_id and isinstance(self.agent, Agent):
+            self._note_lost_subagents()         # background sub-agents lost when the app closed
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
@@ -474,7 +477,7 @@ class Session:
             if queued:
                 text = "\n\n".join([*queued, text])
                 images = [*qimgs, *(images or [])] or None
-            self.stop()
+            self.stop(background=False)              # replaces this turn; background sub-agents go on
             end = time.time() + 15
             while self.state in ("working", "waiting") and time.time() < end:
                 time.sleep(0.1)
@@ -517,12 +520,40 @@ class Session:
             if self.state in ("working", "waiting", "starting"):
                 self.queue.append((text, None))
                 return
+            self.state = "working"                   # claimed: a message sent now steers this turn
         self._start_turn(text, None)
+
+    def _note_lost_subagents(self):
+        """A delegate_task dispatched to the background whose reports never came: Meshpool closed meanwhile. Say so,
+        and tell the model with the next message, so it does not wait for them."""
+        msgs = self.agent.messages
+        for i, m in enumerate(msgs):
+            c = m.get("content")
+            if m.get("role") != "tool" or not isinstance(c, str) or '"status": "dispatched"' not in c:
+                continue
+            mm = re.search(r'"delegation_id": "(deleg_\w+)"', c)
+            if not mm or any(mm.group(1) in str(x.get("content")) for x in msgs[i + 1:] if x.get("role") == "user"):
+                continue
+            self.emit({"type": "status", "text": "Sub-agents that were working when Meshpool closed were lost; their "
+                                                 "reports will not arrive. Ask again to run them."})
+            self._held = getattr(self, "_held", []) + [
+                f"\u200b[Meshpool] The sub-agents of {mm.group(1)} were lost when Meshpool closed; their reports will "
+                "not arrive. Run them again if they are still needed."]
+
+    def _hold_reports(self):
+        """Under self.lock: keep queued sub-agent reports (they go with the next message), drop the rest."""
+        keep = [q for q in self.queue if isinstance(q, (list, tuple)) and str(q[0]).startswith(REPORT_HEAD)]
+        if keep:
+            self._held = getattr(self, "_held", []) + [str(q[0]) for q in keep]
 
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         if isinstance(self.agent, Agent):
             self.agent.deliver = self._deliver_background   # delegate_task: reports arrive after the turn
+        with self.lock:
+            held, self._held = getattr(self, "_held", []), []
+        if held:                                     # reports kept through a Stop, or a note about lost ones
+            text = text + "\n\n\u200b" + "\n\n".join(h.split("\u200b", 1)[-1] for h in held)
         self.state = "working"
         self._stop_req = False
         if hasattr(self.agent, "plan"):
@@ -614,6 +645,7 @@ class Session:
                         items, self.queue = self.queue, []
                         nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
                     elif self.queue:
+                        self._hold_reports()             # stopped: keep sub-agent reports for the next message
                         self.queue = []
                 if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
                     nxt = self._goal_next(ev0)
@@ -776,17 +808,21 @@ class Session:
         self.emit({"type": "status", "text": msg + "."})
         return r
 
-    def stop(self):
+    def stop(self, background: bool = True):
         self._stop_req = True                        # checked before the agent starts: its own flag resets then
         if self.state in ("working", "waiting"):
             self._was_stopped = True             # a request really was cut short
         with self.lock:
             had = bool(self.queue)
+            self._hold_reports()                     # reports that already arrived are kept, not dropped
             self.queue = []
         if had:
             self.emit({"type": "queued", "text": "", "n": 0})
         if self.agent:
-            self.agent.stop()
+            if isinstance(self.agent, Agent):
+                self.agent.stop(background=background)
+            else:
+                self.agent.stop()
         for p in list(self.pendings.values()):
             p["ev"].set()
 
@@ -876,6 +912,7 @@ def _reap_once(idle_s: float) -> list:
     with LOCK:
         idle = [(sid, s) for sid, s in LIVE.items()
                 if s.state not in ("working", "waiting", "starting") and not s.pendings and not s.queue
+                and not getattr(getattr(s, "agent", None), "_delegations", None)   # background sub-agents still working
                 and now - getattr(s, "touched", now) > idle_s]
         for sid, _ in idle:
             LIVE.pop(sid, None)
