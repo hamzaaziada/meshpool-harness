@@ -54,6 +54,9 @@ function shortPath(p) {
   return p.length > 48 && parts.length > 3 ? "…/" + parts.slice(-2).join("/") : p;
 }
 const RES = id => document.getElementById(id) || {className: "", textContent: "", innerHTML: ""};   // results outlive a re-render
+// A folder is a non-empty path string. Anything else (an event a handler passed in, or {"isTrusted":true} that an
+// earlier version saved when New chat was clicked) means no folder, so a saved bad value cannot break the app again.
+const folderOrNone = v => typeof v === "string" ? v : "";
 function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage.getItem("mp_" + k)); localStorage.setItem("mp_" + k, JSON.stringify(v)); } catch (e) { return null; } }
 
 const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -146,7 +149,7 @@ const S = {
   settings: null, models: null, projects: [], threads: [], skills: [], harnesses: [], defaults: {},
   cur: null,                         // the open thread: {id, total, view, epoch, ...}
   appMode: store("appmode") || "cowork",
-  draft: {project: store("project") || "", harness: "", model: store("model") || "", mode: store("mode") || "ask", plan: false},
+  draft: {project: folderOrNone(store("project")), harness: "", model: store("model") || "", mode: store("mode") || "ask", plan: false},
   panel: store("panel") || null, steps: store("steps") ?? true, attachments: [], showArchived: false, closedProjects: new Set(store("closed") || []),
 };
 const MODES = {ask: ["Supervised", "Asks before edits and commands"], edits: ["Auto-accept edits", "Edits go through; commands still ask"], auto: ["Full access", "Edits and commands run without asking"]};
@@ -204,7 +207,7 @@ function shell() {
     </main>
     <aside class="panel" id="panel" hidden><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
-  $("#newThread").onclick = newThread;
+  $("#newThread").onclick = () => newThread();   // not the click event as the folder
   $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
   $("#openSettings").onclick = () => openSettings();
   $("#updBar").onclick = () => openSettings("about");
@@ -959,7 +962,7 @@ function restoreDraft() {
 }
 function newThread(project) {     // project: the folder for the new chat; without one, the open chat's folder
   if (S.cur) clearTimeout(S.cur.pollT);
-  const p = project || S.cur?.view?.workdir;
+  const p = folderOrNone(project) || S.cur?.view?.workdir;
   if (p) { S.draft.project = p; store("project", p); }
   S.cur = null; S.attachments = []; renderAttach();
   S.draft.harness = modeHarness();
