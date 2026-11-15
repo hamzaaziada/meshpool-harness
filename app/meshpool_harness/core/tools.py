@@ -279,14 +279,17 @@ class Workspace:
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
-    def _inside(self, p) -> bool:
+    def _inside(self, p, roots=None) -> bool:
+        """p resolves inside the project (or one of roots)."""
         try:
-            return Path(p).resolve().is_relative_to(self.root.resolve())
+            q = Path(p).resolve()
+            return any(q.is_relative_to(Path(r).resolve()) for r in (roots or [self.root]))
         except (OSError, ValueError):
             return False
 
     def grep(self, pattern, path=".", glob=None, inside_only=False):
-        """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved."""
+        """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved;
+        a list of folders instead of True allows those folders as well."""
         if self.container and not self.mounted:
             inc = f"--include='{glob}'" if glob else ""
             out, _ = self._run(f"grep -rnE {inc} --exclude-dir=.git --exclude-dir=node_modules -e {json.dumps(pattern)} "
@@ -305,7 +308,7 @@ class Workspace:
                 continue
             if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
                 continue
-            if inside_only and not self._inside(f):
+            if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
                 for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):

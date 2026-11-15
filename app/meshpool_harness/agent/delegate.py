@@ -386,7 +386,8 @@ class Delegation:
         grep = a.ws.grep
 
         def grep_in_project(pattern, path=".", glob=None):   # a symlink must not carry a read outside the project
-            return grep(pattern, path, glob, inside_only=True)
+            # the places a sub-agent may read: the project, its own folder (full tool outputs), attached files
+            return grep(pattern, path, glob, inside_only=[parent.root, a.dir] + ([_uploads()] if _uploads() else []))
         a.ws.grep = grep_in_project
         glob = a.ws.glob
 

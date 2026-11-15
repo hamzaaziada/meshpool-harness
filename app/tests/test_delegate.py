@@ -807,3 +807,20 @@ def test_an_overflow_file_cited_inside_a_json_report_is_kept(monkeypatch, _env, 
     report = out.split("```json")[0]
     path = json.loads(report[report.index('{"overflow"'):report.index("}", report.index('{"overflow"')) + 1])["overflow"]
     assert os.path.exists(path) and "needle" in open(path).read()
+
+
+def test_sub_agent_grep_searches_attached_files_and_its_own_full_outputs(monkeypatch, _env, tmp_path):
+    from meshpool_harness import config as C
+    up = C.runs_dir() / "_uploads" / "u1"
+    up.mkdir(parents=True)
+    (up / "contract.txt").write_text("Termination fee: 5000 EUR\n")
+    secret = tmp_path / "outside.txt"
+    secret.write_text("Termination secret\n")
+    (_env / "link.txt").symlink_to(secret)
+    c = _bare_child(_agent(_env, mode="ask"))
+    assert "5000 EUR" in c.ws.grep("Termination", str(up / "contract.txt"))
+    assert "secret" not in c.ws.grep("Termination", ".")
+    (_env / "big.txt").write_text("needle SPECIAL\n" + "needle line " * 20 + "\n" + ("needle line " * 20 + "\n") * 600)
+    out = c.ws.grep("needle", ".")
+    spill = out.split("full output in ")[1].split("]")[0]
+    assert "SPECIAL" in c.ws.grep("SPECIAL", spill)
