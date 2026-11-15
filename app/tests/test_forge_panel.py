@@ -281,6 +281,9 @@ def test_research_takes_facts_only_from_passages_and_records_misses(tmp_path):
     assert [f["id"] for f in got] == ["F8"] and "$300 million" in got[0]["text"]
     assert "https://ir.northwind.example/annual-report-2025" in got[0]["text"] and got[0]["url"]
     assert [q["status"] for q in res["questions"]] == ["found", "nothing found"]
+    again = RS.investigate(["What was Northwind's order backlog at the end of 2025?"], facts + got, client=Inventor(),
+                           models=["m"], out_dir=str(tmp_path / "c"), search_fn=search, fetch_fn=fetch)
+    assert again["facts"] == []                             # a later research step never re-adds the same fact
     plain = RS.investigate(["Northwind order backlog end of 2025"], facts, out_dir=str(tmp_path / "b"),
                            search_fn=search, fetch_fn=fetch)       # no model: deterministic sentence pick
     assert plain["facts"] and all("$300 million" in f["text"] or "$270 million" in f["text"] for f in plain["facts"])

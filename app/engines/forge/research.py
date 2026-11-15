@@ -498,7 +498,8 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
     dead: set = set()
     log = []
     no = next_fact_no(facts + new_facts)                # web facts continue after the filed and market ones
-    known = {re.sub(r"\W+", "", f.get("text", "").lower())[:200] for f in facts}
+    known = {re.sub(r"\W+", "", f.get("text", "").split(" (Source:")[0].lower())[:200] for f in facts}
+    # a fact's stored text carries its source line; an earlier research step's sentence is matched without it
     for q, got, why in gathered:
         entry = {"question": q["question"], "why": q.get("why", ""), "persona": q.get("persona", ""),
                  "where": q.get("where", ""), "facts": [], "sources": []}
