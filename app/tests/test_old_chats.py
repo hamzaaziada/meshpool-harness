@@ -173,3 +173,178 @@ def test_a_request_too_large_keeps_the_screenshot_just_attached(agent, monkeypat
     agent._post = post
     agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
     assert len(sent[0]) == 4 and len(sent[1]) == 2 and sent[1][-1] == "ZZZ"   # the new screenshot still goes
+
+
+def test_a_request_too_big_for_the_gateway_answered_with_502_is_trimmed(agent, monkeypatch):
+    """The real gateway answers an oversized body with a plain 502 'upstream request failed', not a 413."""
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 45000    # room for two 20 KB images over the base
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"                            # small requests get through
+    big = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "B" * 20000}}
+    for i in range(6):
+        agent.messages.append({"role": "user", "content": [{"type": "text", "text": f"shot {i}"}, big]})
+        agent.messages.append({"role": "assistant", "content": "seen"})
+    sizes = []
+
+    def post(base, key, body, stream):
+        n = len(__import__("json").dumps(body))
+        sizes.append(n)
+        if n > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert len(sizes) == 2 and sizes[0] > lim >= sizes[1]         # trimmed once, then it went through
+
+
+def test_an_image_too_big_alone_is_removed_and_the_next_message_works(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 40000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    huge = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "H" * 80000}}
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "what is this?"}, huge]})
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    with pytest.raises(RuntimeError, match="was too large, so it was removed"):
+        agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert not K._has_images(agent.messages)                       # out of the chat: no repeat of the error
+    agent.messages.append({"role": "user", "content": "and now without the picture?"})
+    assert agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})[0]["content"] == "ok"
+
+
+def test_the_users_text_is_not_cut_when_the_image_is_the_problem(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    text = "notes:\n" + "t" * 60000
+    lim = len(__import__("json").dumps(agent._body())) + 75000      # the text fits, text plus image does not
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": text}, {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64," + "I" * 70000}}]})
+    agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(RuntimeError("HTTP 502: upstream request failed"))
+    with pytest.raises(RuntimeError, match="image was too large"):
+        agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    c = agent.messages[-1]["content"]
+    now = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if p.get("type") == "text")
+    assert text in now and "characters left out" not in now      # the text was left whole
+
+def test_a_too_big_pasted_message_is_cut_and_the_chat_recovers(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    base = len(__import__("json").dumps(agent._body()))
+    lim = base + 60000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent.messages.append({"role": "user", "content": "log:\n" + "x" * 90000})
+    agent._probe = lambda b, k, m: "ok"
+    events = []
+    agent.emit = events.append
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert "characters left out" in agent.messages[-1]["content"]           # later requests fit too
+    assert any("middle was left out" in (e.get("text") or "") for e in events)
+
+
+def test_a_request_that_cannot_be_made_small_enough_says_so_once(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    monkeypatch.setenv("MH_BIG_REQUEST", "1000")                   # nothing fits
+    agent._probe = lambda b, k, m: "ok"
+    agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(RuntimeError("HTTP 502: upstream request failed"))
+    events = []
+    agent.emit = events.append
+    agent.send("hello " + "y" * 50000)
+    err = [e["text"] for e in events if e.get("type") == "error"][-1]
+    assert err.count("could not take this request") == 1 and err.endswith("(HTTP 502)")
+    assert "image" not in err and "Start a new chat" in err
+
+
+def test_a_huge_paste_in_a_chat_with_a_small_image_is_cut_not_blamed_on_the_image(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "tiny shot"},
+                           {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]})
+    agent.messages.append({"role": "assistant", "content": "seen"})
+    lim = len(__import__("json").dumps(agent._body())) + 60000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent.messages.append({"role": "user", "content": "log:\n" + "z" * 90000})
+    agent._probe = lambda b, k, m: "ok"
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})          # goes through, no image error
+    assert "characters left out" in agent.messages[-1]["content"]
+
+
+def test_the_status_survives_a_gateway_text_with_brackets(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    monkeypatch.setenv("MH_BIG_REQUEST", "1000")
+    agent._probe = lambda b, k, m: "ok"
+    agent._post = lambda b, k, body, stream: (_ for _ in ()).throw(
+        RuntimeError("HTTP 502: Bad Gateway (upstream connect error)"))
+    events = []
+    agent.emit = events.append
+    agent.send("hello")
+    err = [e["text"] for e in events if e.get("type") == "error"][-1]
+    assert err.endswith("Start a new chat to carry on. (HTTP 502)")
+
+
+def test_an_older_image_is_dropped_quietly_and_the_message_answered(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 40000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "look at this"}, {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64," + "O" * 80000}}]})
+    agent.messages.append({"role": "assistant", "content": "seen"})
+    agent.messages.append({"role": "user", "content": "thanks, and one more question"})
+    events = []
+    agent.emit = events.append
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    assert agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})[0]["content"] == "ok"   # answered
+    assert not K._has_images(agent.messages)
+    notes = [e["text"] for e in events if e.get("type") == "status" and "too large" in (e.get("text") or "")]
+    assert len(notes) == 1 and "from earlier in the chat" in notes[0]          # one line, saying what was done
+
+
+def test_an_older_image_goes_before_the_users_long_text_is_cut(agent, monkeypatch):
+    monkeypatch.setattr(K.Agent, "_sleep", lambda self, s: None)
+    lim = len(__import__("json").dumps(agent._body())) + 110000
+    monkeypatch.setenv("MH_BIG_REQUEST", str(lim))
+    agent._probe = lambda b, k, m: "ok"
+    agent.messages.append({"role": "user", "content": [{"type": "text", "text": "old"}, {
+        "type": "image_url", "image_url": {"url": "data:image/png;base64," + "P" * 30000}}]})
+    agent.messages.append({"role": "assistant", "content": "seen"})
+    paste = "paste:\n" + "q" * 100000
+    agent.messages.append({"role": "user", "content": paste})
+
+    def post(base_, key, body, stream):
+        if len(__import__("json").dumps(body)) > lim:
+            raise RuntimeError("HTTP 502: upstream request failed")
+        return _ok()
+    agent._post = post
+    agent._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+    assert agent.messages[-1]["content"] == paste and not K._has_images(agent.messages)   # text kept whole
+
+
+def test_a_screenshot_too_big_for_the_endpoint_is_left_out_and_the_model_told(agent, monkeypatch):
+    monkeypatch.setenv("MH_BIG_REQUEST", "30000")
+    agent._attach_images([("mcp__computer__screenshot", {"mime": "image/png", "data": "S" * 50000})])
+    assert not K._has_images(agent.messages)
+    assert "too large for the model endpoint" in agent.messages[-1]["content"]
+    agent._attach_images([("mcp__computer__screenshot", {"mime": "image/png", "data": "s" * 1000})])
+    assert K._has_images(agent.messages)                           # a normal one still goes through

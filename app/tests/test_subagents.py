@@ -1,5 +1,6 @@
 """Sub-agents (run_subtasks): the settings, the parent chat's model and permission mode, read or edit access, how
 many run at once, and the time limit and Stop that end them. No network, no model."""
+import json
 import threading
 import time
 
@@ -15,7 +16,9 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.delenv("MESHPOOL_PROJECT", raising=False)          # other tests leave it set (agent/mcp.py)
-    monkeypatch.setenv("MH_PARENT_TOKEN", "tok")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "projects.json").write_text(json.dumps([{"path": str(tmp_path / "proj")}]))
     for k in ("MH_SUBAGENTS", "MH_SUBAGENT_MODEL", "MH_SUBAGENT_ACCESS", "MH_SUBAGENT_PARALLEL", "MH_SUBAGENT_STEPS",
               "MH_SUBAGENT_MINUTES"):
         monkeypatch.delenv(k, raising=False)
@@ -25,7 +28,7 @@ def _env(tmp_path, monkeypatch):
 
 
 def P(**kw):
-    return {"token": "tok", **kw}
+    return dict(kw)
 
 
 def _reply(text="report"):
@@ -77,25 +80,25 @@ def test_off_in_settings(monkeypatch, _env):
 def test_parent_model_by_default_and_the_setting_overrides(monkeypatch, _env):
     seen = []
     _record(monkeypatch, seen)
-    out = A.run_subtasks([{"title": "a", "prompt": "x"}], str(_env), parent=P(model="parent-model"))
+    out = A.run_subtasks([{"title": "a", "prompt": "x"}], str(_env), trusted=True, parent=P(model="parent-model"))
     assert "1 parts finished" in out and "report" in out and seen[0]["model"] == "parent-model"
     monkeypatch.setenv("MH_SUBAGENT_MODEL", "cheap-model")
     seen.clear()
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(model="parent-model"))
+    A.run_subtasks([{"prompt": "x"}], str(_env), trusted=True, parent=P(model="parent-model"))
     assert seen[0]["model"] == "cheap-model"
 
 
 def test_read_only_unless_settings_and_the_parent_chat_allow_edits(monkeypatch, _env):
     seen = []
     _record(monkeypatch, seen)
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="auto"))
+    A.run_subtasks([{"prompt": "x"}], str(_env), trusted=True, parent=P(mode="auto"))
     assert "write_file" not in seen[-1]["tools"] and "read_file" in seen[-1]["tools"]
     monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="ask"))            # Supervised: they cannot ask
+    A.run_subtasks([{"prompt": "x"}], str(_env), trusted=True, parent=P(mode="ask"))            # Supervised: they cannot ask
     assert "write_file" not in seen[-1]["tools"]
-    A.run_subtasks([{"prompt": "x"}], "", parent=P(mode="auto"))                 # no project: nothing to edit
+    A.run_subtasks([{"prompt": "x"}], "", trusted=True, parent=P(mode="auto"))                 # no project: nothing to edit
     assert "write_file" not in seen[-1]["tools"]
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent=P(mode="edits"))
+    A.run_subtasks([{"prompt": "x"}], str(_env), trusted=True, parent=P(mode="edits"))
     assert {"write_file", "edit"} <= set(seen[-1]["tools"]) and "bash" not in seen[-1]["tools"]
 
 
@@ -116,12 +119,11 @@ def test_the_time_limit_stops_them_and_keeps_the_rest(monkeypatch, _env):
     assert time.time() - t0 < 5 and "stopped by the time limit" in out and "## slow" in out
 
 
-def test_stop_in_the_parent_chat_stops_them(monkeypatch, _env, tmp_path):
+def test_stop_in_the_parent_chat_stops_them(monkeypatch, _env):
     _record(monkeypatch, [], delay=30)
-    flag = tmp_path / "stop-subtasks"
-    threading.Timer(0.5, flag.write_text, args=("stop",)).start()
     t0 = time.time()
-    out = A.run_subtasks([{"prompt": "a"}, {"prompt": "b"}], str(_env), parent=P(stop_file=str(flag)))
+    out = A.run_subtasks([{"prompt": "a"}, {"prompt": "b"}], str(_env), trusted=True, parent=P(),
+                         cancelled=lambda: time.time() - t0 > 0.5)
     assert time.time() - t0 < 5 and "stopped by Stop" in out
 
 
@@ -129,31 +131,49 @@ def test_parent_details_from_a_model_are_ignored(monkeypatch, _env):
     monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
     seen = []
     _record(monkeypatch, seen)
-    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "auto", "model": "spoof", "token": "guess"})
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "auto", "model": "spoof"})   # not trusted
     assert "write_file" not in seen[-1]["tools"] and seen[-1]["model"] != "spoof"
 
 
-def test_the_chat_passes_its_model_mode_and_a_stop_file(tmp_path, monkeypatch):
-    import os
-    a = K.Agent(str(tmp_path), mode="edits")
-    got = {}
+def test_the_chats_sub_agents_run_in_the_app_with_its_model_mode_and_project(tmp_path, monkeypatch):
+    """Review rounds 6 to 8: any secret handed to another process of the same user can be read by a harness model,
+    so Meshpool's own chats run sub-agents in the app's process, where their mode and project are known."""
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
+    a = K.Agent(str(tmp_path / "proj"), mode="edits")
+    a.model = "chat-model"
+    seen = []
 
-    class Mcp:
-        last_images = []
+    def post(self, base, key, body, stream):
+        seen.append({"model": body["model"], "root": str(self.root),
+                     "edit": "write_file" in [t["function"]["name"] for t in body.get("tools") or []]})
+        return _reply()
+    monkeypatch.setattr(K.Agent, "_post", post)
+    a.mcp = type("NoMcp", (), {"call": lambda *x: pytest.fail("must not go through the assistant server")})()
+    out, err = a._run_subtasks("mcp__meshpool-assistant__run_subtasks",
+                               {"tasks": [{"prompt": "x"}], "parent": {"mode": "ask", "root": "/", "model": "spoof"}})
+    assert not err and "1 parts finished" in out
+    assert seen == [{"model": "chat-model", "root": str((tmp_path / "proj").resolve()), "edit": True}]
 
-        def has(self, n):
-            return n == "mcp__meshpool_assistant__run_subtasks"
 
-        def call(self, name, args):
-            got.update(args)
-            a.stop()                                               # the user presses Stop while they run
-            return "done", False
-    a.mcp = Mcp()
+def test_stop_in_the_chat_stops_its_in_app_sub_agents(tmp_path, monkeypatch):
+    import threading
+    a = K.Agent(str(tmp_path / "proj"), mode="auto")
+    calls = []
+
+    def post(self, base, key, body, stream):
+        calls.append(time.time())
+        time.sleep(0.2)
+        return {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"id": f"c{len(calls)}",
+                "type": "function", "function": {"name": "glob", "arguments": '{"pattern": "*"}'}}]},
+                "finish_reason": "tool_calls"}], "usage": {}}, False
+    monkeypatch.setattr(K.Agent, "_post", post)
+    threading.Timer(0.8, a.stop).start()
+    t0 = time.time()
     with pytest.raises(K.Interrupted):
-        a._run_subtasks("mcp__meshpool_assistant__run_subtasks", {"tasks": [], "parent": {"mode": "auto"}})
-    p = got["parent"]
-    assert p["mode"] == "edits" and p["token"] == os.environ["MH_PARENT_TOKEN"] and p["model"] == a.current_model()
-    assert open(p["stop_file"]).read() == "stop"                   # Stop reached the sub-agents
+        a._run_subtasks("run_subtasks", {"tasks": [{"prompt": "a"}, {"prompt": "b"}]})
+    assert time.time() - t0 < 1.5
+    time.sleep(1.5)
+    assert not [c for c in calls if c > t0 + 2.0]                  # no sub-agent call well after Stop
 
 
 def test_sub_agents_work_in_the_parent_chats_project_not_the_servers(monkeypatch, _env, tmp_path):
@@ -166,7 +186,7 @@ def test_sub_agents_work_in_the_parent_chats_project_not_the_servers(monkeypatch
         roots.append(str(self.root))
         return _reply()
     monkeypatch.setattr(K.Agent, "_post", post)
-    A.run_subtasks([{"prompt": "x"}], str(other), parent=P(root=str(_env)))
+    A.run_subtasks([{"prompt": "x"}], str(other), trusted=True, parent=P(root=str(_env)))
     assert roots == [str(_env.resolve())]
 
 
@@ -198,25 +218,6 @@ def test_a_sub_agent_still_starting_when_stopped_stops_too(monkeypatch, _env):
     t0 = time.time()
     out = A.run_subtasks([{"prompt": "x"}], str(_env))
     assert time.time() - t0 < 4 and len(calls) <= 3 and "time limit" in out
-
-
-def test_stop_just_before_the_call_still_reaches_the_sub_agents(tmp_path):
-    a = K.Agent(str(tmp_path), mode="auto")
-    files = []
-
-    class Mcp:
-        last_images = []
-
-        def call(self, name, args):
-            files.append(args["parent"]["stop_file"])
-            time.sleep(0.3)
-            return "x", False
-    a.mcp = Mcp()
-    a._stop = True                                                 # Stop pressed a moment before
-    with pytest.raises(K.Interrupted):
-        a._run_subtasks("mcp__meshpool-assistant__run_subtasks", {"tasks": []})
-    stop_files = list(a.dir.glob("stop-subtasks-*"))
-    assert stop_files and stop_files[0].read_text() == "stop"
 
 
 def test_a_cancelled_call_stops_the_sub_agents(monkeypatch, _env):
@@ -257,3 +258,20 @@ def test_the_mcp_server_hands_a_clients_cancel_to_the_tool(tmp_path):
         assert reply["id"] == 7 and "cancelled after" in reply["result"]["content"][0]["text"]
     finally:
         p.kill()
+
+
+def test_the_assistant_server_never_trusts_a_parent(monkeypatch, _env):
+    """Hermes, Codex and Pi call run_subtasks through the assistant server: whatever parent a model or a process
+    sends, their sub-agents read only, on the configured model, in the server's project."""
+    import inspect
+    from meshpool_harness.agent import assistant_mcp_server as S
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "edit")
+    monkeypatch.setenv("MESHPOOL_PROJECT", str(_env))
+    assert "parent" not in inspect.signature(S.run_subtasks).parameters
+    assert "parent" not in S.TOOLS["run_subtasks"].schema["properties"]
+    seen = []
+    _record(monkeypatch, seen)
+    S.run_subtasks([{"prompt": "x"}])
+    assert "write_file" not in seen[-1]["tools"]
+    A.run_subtasks([{"prompt": "x"}], str(_env), parent={"mode": "auto", "root": "/"})   # untrusted caller
+    assert "write_file" not in seen[-1]["tools"]

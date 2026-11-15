@@ -10,7 +10,9 @@ sed -i 's/__version__ = "[^"]*"/__version__ = "0.1.0"/' "$W/inst/meshpool_harnes
 sed -i 's/__version__ = "[^"]*"/__version__ = "0.2.0"/' "$W/rel/meshpool-harness-0.2.0/app/meshpool_harness/__init__.py"
 tar czf "$W/srv/src.tgz" -C "$W/rel" meshpool-harness-0.2.0
 PORT=8781
-printf '{"tag_name":"v0.2.0","body":"Test release","html_url":"http://127.0.0.1:%s/","assets":[]}' $PORT > "$W/srv/latest.json"
+# a release as GitHub serves one: the code archive and the checksums every update is checked against
+(cd "$W/srv" && sha256sum src.tgz | sed 's/src.tgz/Meshpool-src.tar.gz/' > SHA256SUMS.txt)
+printf '{"tag_name":"v0.2.0","body":"Test release","html_url":"http://127.0.0.1:%s/","assets":[{"name":"Meshpool-src.tar.gz","browser_download_url":"http://127.0.0.1:%s/src.tgz"},{"name":"SHA256SUMS.txt","browser_download_url":"http://127.0.0.1:%s/SHA256SUMS.txt"}]}' $PORT $PORT $PORT > "$W/srv/latest.json"
 (cd "$W/srv" && nohup "$PY" -m http.server $PORT --bind 127.0.0.1 > "$W/srv.log" 2>&1 &)
 printf 'MESHPOOL_BASE_URL=http://127.0.0.1:8911/v1\nMESHPOOL_API_KEY=test-key-1234\n' > "$W/home/meshpool.config"
 pkill -f "ui --port 8782" ; sleep 1

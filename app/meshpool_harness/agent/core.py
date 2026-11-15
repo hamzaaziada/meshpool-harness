@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import copy
 import difflib
 import http.client
 import itertools
@@ -37,9 +38,7 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
-# Proves to the assistant server (a child process, which inherits it) that run_subtasks' parent details came from
-# this app's agent and not from a model: only then may sub-agents use the parent's model, mode and stop file.
-os.environ.setdefault("MH_PARENT_TOKEN", uuid.uuid4().hex)
+
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
@@ -271,6 +270,40 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
         return f"HTTP 0: {e}"
+
+
+def _image_in_newest_ask(messages: list) -> bool:
+    """Whether the newest message the user typed (not a tool's screenshot, not a Meshpool note) carries an image."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(str(p.get("text") or "") for p in c or []
+                                                       if isinstance(p, dict) and p.get("type") == "text")
+        if text.startswith(("Image returned by", "[Meshpool]")):
+            continue                                    # attached by a tool (_attach_images) or a harness note
+        return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    return False
+
+
+def _cut_long_user_text(messages: list, keep: int = 40000) -> bool:
+    """Shorten user messages over `keep` characters to their start and end, with a note in the middle. A message too
+    big for the endpoint otherwise goes with every later request too and the chat cannot recover. True if cut."""
+    def shorten(c: str) -> str:
+        return (c[:keep * 3 // 4] + f"\n\n[... {len(c) - keep} characters left out: the message was too large for "
+                "the endpoint ...]\n\n" + c[-keep // 4:])
+    cut = False
+    for m in messages:
+        c = m.get("content")
+        if m.get("role") != "user":
+            continue
+        if isinstance(c, str) and len(c) > keep:
+            m["content"], cut = shorten(c), True
+        elif isinstance(c, list):                       # text sent along with an image
+            for p in c:
+                if isinstance(p, dict) and p.get("type") == "text" and len(str(p.get("text") or "")) > keep:
+                    p["text"], cut = shorten(str(p["text"])), True
+    return cut
 
 
 def _lighten(messages: list) -> None:
@@ -544,34 +577,25 @@ class Agent:
     def stop(self):
         self._gen = getattr(self, "_gen", 0) + 1         # anything still running from this turn sees it is stale
         self._stop = True
-        for f in list(getattr(self, "_sub_stops", ())):  # sub-agents run in the assistant server: tell them too
-            try:
-                Path(f).write_text("stop", encoding="utf-8")
-            except OSError:
-                pass
 
     def _run_subtasks(self, name: str, args: dict):
-        """run_subtasks with what only this chat knows, never what the model wrote: its model, its permission mode
-        and a stop file that stop() creates, so Stop here stops the sub-agents too."""
-        if not hasattr(self, "_sub_stops"):
-            self._sub_stops = set()
-        stop_file = self.dir / f"stop-subtasks-{uuid.uuid4().hex[:8]}"
-        args = {k: v for k, v in args.items() if k != "parent"}
-        for old in self.dir.glob("stop-subtasks-*") if self.dir.is_dir() else ():
-            old.unlink(missing_ok=True)              # left by an earlier Stop
-        args["parent"] = {"model": self.current_model() or "", "mode": self.mode, "stop_file": str(stop_file),
-                          "root": str(self.root), "token": os.environ.get("MH_PARENT_TOKEN", "")}
-        self._sub_stops.add(str(stop_file))
-        if self._stop:                               # Stop landed just before it was registered
-            self.dir.mkdir(parents=True, exist_ok=True)
-            stop_file.write_text("stop", encoding="utf-8")
-        try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            return self._wait(self.mcp.call, name, args)
-        finally:
-            self._sub_stops.discard(str(stop_file))
-            if not self._stop:                       # after Stop, leave it for the sub-agents to see
-                stop_file.unlink(missing_ok=True)
+        """Sub-agents for this chat run here, in the app's own process, with what only this chat knows: its model,
+        its permission mode and its project. Nothing crosses to another process, so nothing there can be forged:
+        any secret handed to another process of the same user can be read by a harness model's shell command
+        (review rounds 6 to 8). The assistant server's run_subtasks, used by Hermes, Codex and Pi, never trusts a
+        parent. Stop here stops them within a fraction of a second."""
+        from meshpool_harness import assistant as AS
+        gen = getattr(self, "_gen", 0)
+        stopped = lambda: self._stop or getattr(self, "_gen", 0) != gen   # noqa: E731
+
+        def run():
+            try:
+                return AS.run_subtasks(args.get("tasks") or [], str(self.root), int(args.get("max_parallel") or 0),
+                                       parent={"model": self.current_model() or "", "mode": self.mode,
+                                               "root": str(self.root)}, trusted=True, cancelled=stopped), False
+            except (ValueError, KeyError, TypeError) as e:
+                return str(e), True
+        return self._wait(run)
 
     def _exists(self, path: str) -> bool:
         try:
@@ -759,7 +783,11 @@ class Agent:
         except Exception as e:
             self._repair()
             msg = raw = str(e)
-            if re.search(r"rejected the API key|stopped accepting the API key", msg):
+            if "endpoint could not take this request" in msg:
+                head = msg.split(" (HTTP", 1)[0]         # already says what to do; keep only the status
+                code = re.search(r"HTTP \d+", msg)
+                msg = raw = head + (f" ({code.group(0)})" if code else "")
+            elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
                 msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
@@ -816,6 +844,18 @@ class Agent:
         """Tool results cannot carry images on the chat API, so screenshots follow as a user message. Only the latest
         two images stay in the conversation; older ones become a short note to keep requests small."""
         if os.environ.get("MH_VISION", "1") == "0" or getattr(self, "_no_vision", False):
+            return
+        # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
+        # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
+        cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
+        shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
+        if big:
+            self.messages.append({"role": "user", "content": "[Meshpool] The image from " + ", ".join(sorted(set(big)))
+                                  + " was too large for the model endpoint and was left out, so you did not see it. "
+                                  "Ask the tool for a smaller image (a region, a lower resolution or a JPEG) or go on "
+                                  "without it."})
+        if not shots:
             return
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
@@ -997,6 +1037,55 @@ class Agent:
                         body["model"] = PV.split(body["model"])[1]
                         attempt, self._first_scale = -1, 1.0
                         continue
+                    big = len(json.dumps(body)) > int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                    if big and re.search(r"HTTP 5\d\d", msg) and not shrunk:
+                        # Up for a small probe, failing for this big request: the real gateway answers an oversized
+                        # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
+                        shrunk = True
+                        _shrink_context(self.messages, 0, hard=True, keep_images=2)
+                        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+                        if len(json.dumps(self._body())) > lim:
+                            _drop_images(self.messages, keep=1)   # still too big: only the newest image stays
+                        if self._size_with(self.messages) > lim:
+                            # Try each remedy on a copy and apply only one that makes the request fit: never cut
+                            # the user's text when an image is the problem, or the other way round.
+                            cut = copy.deepcopy(self.messages)
+                            did_cut = _cut_long_user_text(cut)
+                            noimg = copy.deepcopy(self.messages)
+                            _drop_images(noimg, keep=0)
+                            both = copy.deepcopy(cut)
+                            _drop_images(both, keep=0)
+                            has_img = _has_images(self.messages)
+                            newest = _image_in_newest_ask(self.messages)
+                            if has_img and not newest and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # an older or tool image: the cheapest remedy
+                                note = ("An image from earlier in the chat, or a tool's screenshot, made the "
+                                        "request too large for the endpoint, so it was left out.")
+                            elif did_cut and self._size_with(cut) <= lim:
+                                self.messages[:] = cut
+                                note = ("Your message was too large for the endpoint, so its middle was left out. "
+                                        "Attach long text as a file to keep all of it.")
+                            elif has_img and self._size_with(noimg) <= lim:
+                                self.messages[:] = noimg          # gone from the chat, so the next message works
+                                raise RuntimeError("The endpoint could not take this request: the attached image "
+                                                   "was too large, so it was removed from the chat. Attach a "
+                                                   "smaller one (a screenshot of part of the screen, or a JPEG) "
+                                                   "and send it again. (" + msg[:120] + ")")
+                            elif did_cut and has_img and self._size_with(both) <= lim:
+                                self.messages[:] = both
+                                note = ("Your message and its image were too large for the endpoint: the middle of "
+                                        "the text and the image were left out.")
+                            else:
+                                raise RuntimeError("The endpoint could not take this request: the conversation is "
+                                                   "too large even after it was shortened. Start a new chat to "
+                                                   "carry on. (" + msg[:120] + ")")
+                        else:
+                            note = ("The request was too large for the endpoint; older images and tool outputs were "
+                                    "left out before trying again.")
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        self.emit({"type": "status", "text": note})   # one line, saying what was done
+                        continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
                         raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
                                            "requests keep failing]")
@@ -1042,6 +1131,15 @@ class Agent:
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
+
+    def _size_with(self, messages: list) -> int:
+        """How big the request would be with these messages (the body _post sends)."""
+        saved = self.messages
+        self.messages = messages
+        try:
+            return len(json.dumps(self._body()))
+        finally:
+            self.messages = saved
 
     def route_id(self) -> str:
         """The id the endpoint sees for this chat (cache affinity, gateway session). Changes after a stuck route."""

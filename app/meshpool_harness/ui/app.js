@@ -1558,7 +1558,8 @@ function panelPreview(body) {
   };
   $("#pgo").onclick = go; $("#purl").onkeydown = e => { if (e.key === "Enter") go(); };
   $("#pext").onclick = () => openExternal($("#purl").value);
-  go();
+  if (store("preview")) go();                 // an address the user chose; never probe a default nobody asked for
+  else { $("#pframe").hidden = true; const msg = $("#pempty"); msg.hidden = false; msg.textContent = "Type the address of your running app (for example localhost:3000) and press Open."; }
 }
 
 /* ================================== settings ================================== */

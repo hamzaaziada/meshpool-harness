@@ -821,8 +821,9 @@ def substance_hint(slides, facts, limit: int = 14) -> str:
 def _review_on(client, rules) -> bool:
     """The partner review runs on live builds (it needs a vision model): off with MH_REVIEW=0 or rules review.enabled
     false, and for stub clients in tests."""
-    if os.environ.get("MH_REVIEW", "1") == "0" or not (rules.get("review") or {}).get("enabled", True):
-        return False
+    env = os.environ.get("MH_REVIEW", "").strip()
+    if env == "0" or (env != "1" and not (rules.get("review") or {}).get("enabled", True)):
+        return False                  # MH_REVIEW=1 turns it on for a build even while rules have it off
     try:
         from meshpool_harness.core.client import LiveClient
     except Exception:  # noqa: BLE001
