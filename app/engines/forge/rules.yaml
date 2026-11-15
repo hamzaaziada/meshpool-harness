@@ -300,7 +300,9 @@ design:                         # design-first pages (engines/forge/design.py): 
   fallback_rules: [P0, P1, P5, P8, P17]   # a designed page failing one of these is redrawn by its archetype
 
 review:
-  enabled: true                 # partner review of the rendered pages (engines/forge/review.py); live builds only
+  # Off by default in 0.0.5: no deck has reached the partner/MD sign-off bar yet, and the loop took a 5-slide deck from
+  # a few minutes to about 17. MH_REVIEW=1 turns it on for a build. Turn it back on here once decks sign off.
+  enabled: false                # partner review of the rendered pages (engines/forge/review.py); live builds only
   personas:                     # the senior partner and the MD (engines/review/personas.py, engines/forge/critics.py)
     enabled: true               # off: the single generic partner review above runs instead (MH_PERSONAS=0 too)
     who: [partner, md]
