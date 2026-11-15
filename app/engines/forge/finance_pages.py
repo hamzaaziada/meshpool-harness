@@ -126,9 +126,15 @@ def football_field(bk: Book) -> dict | None:
     cats = [str(ws.cell(row=r, column=1).value) for r in rows]
     lows = [_num(ws.cell(row=r, column=2).value) for r in rows]
     highs = [_num(ws.cell(row=r, column=3).value) for r in rows]
+    last_row = rows[-1] if rows else 0
+    dropped = [c for c, lo_ in zip(cats, lows) if lo_ is not None and lo_ <= 0]
+    if dropped:                                      # a method floored at $0 (its value went negative) is not a range:
+        keep = [i for i, lo_ in enumerate(lows) if not (lo_ is not None and lo_ <= 0)]   # left out and footnoted
+        rows, cats = [rows[i] for i in keep], [cats[i] for i in keep]
+        lows, highs = [lows[i] for i in keep], [highs[i] for i in keep]
     if not cats or any(v is None for v in lows + highs):
         return None
-    mk_row = rows[-1] + 2
+    mk_row = last_row + 2
     mk_lab, mk_val = ws.cell(row=mk_row, column=1).value, _num(ws.cell(row=mk_row, column=2).value)
     marker = {"label": re.sub(r"\s*\(.*\)$", "", str(mk_lab)), "value": mk_val} if mk_lab and mk_val is not None else None
     prov = [bk.fact(f"{c}: {fmt_value(lo, '$')} to {fmt_value(hi, '$')} per share", f"{ws.title}!B{r}:C{r}")
@@ -165,7 +171,9 @@ def football_field(bk: Book) -> dict | None:
                       "marker": marker, "highlight_categories": [c for c in cats if c.lower().startswith("weighted")]},
             "takeaway": {"text": "Value per share by method, low to high"}, "bullets": bullets[:4],
             "source": {"text": f"{FIRM_SRC} ({ws.title} tab); ranges are 25th-75th percentiles for multiples and the "
-                               "Gordon / exit-multiple pair for the DCF", "prov": prov}}
+                               "Gordon / exit-multiple pair for the DCF", "prov": prov},
+            **({"footnotes": [f"Not shown: {', '.join(dropped)}: the model's low case is zero or negative per share, "
+                              "so it gives no range"]} if dropped else {})}
 
 
 def comps(bk: Book, prefix: str = "comps_", kind: str = "Trading comparables", style: str = "benchmark",
