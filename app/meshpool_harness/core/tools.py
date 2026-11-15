@@ -84,7 +84,7 @@ SCHEMAS = {
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
     "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file. Fails if `old` is missing, "
-                        "not unique, or the file changed since you last read it.",
+                        "not unique, the same as `new`, or the file changed since you last read it.",
                 {"path": S, "old": S, "new": S}, ["path", "old", "new"]),
     "write_file": _fn("write_file", "Create or overwrite a file. Set append=true to add to the end (for large files written in parts).",
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
@@ -360,7 +360,12 @@ class Workspace:
             return where(int(m.group(1)), 1, msg) if m else msg
         return None
 
+    NOOP_EDIT = ("edit rejected: `new` is identical to `old`, so nothing would change and {path} is unchanged. Put "
+                 "the changed text in `new` (keep `old` exactly as it is in the file).")
+
     def edit(self, path, old, new):
+        if old == new:       # 22% of edits in a 12-run SWE-bench sample: reported as success, the model looped on them
+            raise ToolError(self.NOOP_EDIT.format(path=path))
         if self.container and not self.mounted:
             text, key = self._cread(path), self._cpath(path)
             if key not in self.seen:

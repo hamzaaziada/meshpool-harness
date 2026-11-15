@@ -129,3 +129,16 @@ def test_writes_outside_workdir_blocked(tmp_path):
     ws = Workspace(str(d), str(d / ".run"))
     with pytest.raises(ToolError, match="inside the workdir"):
         ws.write_file("/etc/evil.txt", "x")
+
+
+def test_noop_edit_is_rejected_not_reported_as_success(tmp_path):
+    """An edit whose `new` equals `old` used to answer "edited <path>"; the model then looped on edits that changed
+    nothing (22% of edits in a 12-run SWE-bench sample). It is now an error that says why."""
+    from meshpool_harness.core.tools import ToolError, Workspace
+    (tmp_path / "a.py").write_text("x = 1\n")
+    ws = Workspace(str(tmp_path), str(tmp_path / ".run"))
+    ws.read_file("a.py")
+    with pytest.raises(ToolError, match="identical to `old`"):
+        ws.edit("a.py", "x = 1", "x = 1")
+    assert ws.edits == 0 and (tmp_path / "a.py").read_text() == "x = 1\n"
+    assert ws.edit("a.py", "x = 1", "x = 2") == "edited a.py"
