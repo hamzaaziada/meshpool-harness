@@ -1,5 +1,13 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.5**
+- Long tasks keep going through a stalling or overloaded connection: they wait and pick the work back up instead of failing with "Couldn't reach the model". A /goal waits out outages on its own.
+- Chats from weeks ago can be continued: old screenshots are no longer resent with every message, a chat whose model was retired continues on today's model, and Hermes, Codex and Pi chats keep their earlier conversation.
+- Sub-agents have settings (Settings, Advanced): on or off, model, read or edit access, how many at once, steps and a time limit. They run on the chat's model, and Stop stops them.
+- Decks and spreadsheet models are reviewed by a strategy-firm senior partner and a bank MD before they reach you.
+- Meshpool Code keeps your files exactly as they were when it retries a task, and no longer reports an edit that changed nothing as done.
+- Test connection tells "the gateway is up but isn't serving this key" apart from "can't reach that address".
+
 - **Agents:** Meshpool Auto (picks per task: quality first, then cost and speed), Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or add your own.
 - **Runs on** your Meshpool API key, any OpenAI-compatible key, or your ChatGPT plan.
 - **Office files** checked before they reach you: Word, Excel with live formulas, PowerPoint, PDF.

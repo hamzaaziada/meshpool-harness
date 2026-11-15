@@ -96,6 +96,19 @@ jobs:
           done
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
+      - name: Smoke test both disk images (what a user downloads) before anything is published
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          for f in Meshpool Meshpool-Intel; do
+            T=$(mktemp -d)
+            MNT=$(hdiutil attach -nobrowse -readonly "dist-src/out/$f.dmg" | awk '/Volumes/{print substr($0, index($0,"/Volumes"))}')
+            ditto "$MNT/Meshpool.app" "$T/Meshpool.app"; hdiutil detach -quiet "$MNT"
+            R="$T/Meshpool.app/Contents/Resources"
+            if [ "$f" = Meshpool-Intel ]; then run=(arch -x86_64); else run=(); fi
+            echo "== $f.dmg"
+            "${run[@]}" "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: mac
@@ -143,6 +156,13 @@ jobs:
           (cd ../packaging/win/launcher && GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o ../../../deps/win/Meshpool/Meshpool.exe .)
       - name: Build the app tree
         run: python packaging/build_all.py --only=win
+      - name: Smoke test the app the installer will carry, before anything is published
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          M=dist-src/app-win/Meshpool
+          "$M/runtime/python.exe" packaging/smoke.py --app "$M/app" --version "$VER"
       - name: Sign the launcher and the app files
         # Signs Meshpool.exe (the Go launcher) and everything else in the app tree that Windows checks, before the
         # installer is built. Skipped when the Azure secrets are not set, so the build works before the account exists.
