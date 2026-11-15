@@ -179,3 +179,16 @@ def test_prose_checks_flag_internal_ids_in_visible_text():
     assert "S2O1" in got and "F5" in got and "internal reference" in got
     ok = {"archetype": "executive_summary", "title": "Return $8B to owners", "items": [{"lead": "FY2026 cash of $20B"}]}
     assert not prose_checks([ok])
+
+
+def test_tie_checks_flag_one_rate_with_two_values_across_slides():
+    from engines.forge.build import tie_checks
+    s2 = {"archetype": "executive_summary", "title": "Growth wins: 22.2% return on capital beats a 1.9% buyback yield",
+          "items": [{"lead": "Reinvestment earns 22.2% after-tax return on capital"}]}
+    s3 = {"archetype": "grid", "title": "Reinvestment returns 21.8% return on capital against 1.9% buyback yield"}
+    got = tie_checks([{"archetype": "cover", "title": "x"}, s2, s3])
+    assert list(got) == [3] and "21.8%" in got[3][0] and "slide 2" in got[3][0]
+    same = {"archetype": "grid", "title": "Reinvestment earns 22% return on capital"}       # coarser, same value
+    assert tie_checks([s2, same]) == {}
+    other = {"archetype": "grid", "title": "Cash yield of 5.15% beats the 1.9% buyback yield"}
+    assert tie_checks([s2, other]) == {}

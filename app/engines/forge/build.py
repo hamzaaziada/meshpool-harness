@@ -667,6 +667,51 @@ def _strings(node, where=""):
             yield from _strings(v, f"{where}[{i}]")
 
 
+_TIE_STOP = {"of", "is", "at", "the", "a", "an", "and", "to", "on", "in", "its", "for", "by", "with", "from", "was",
+             "are", "be", "this", "that", "only", "about", "around", "just", "now", "still", "after-tax", "pre-tax"}
+
+
+def tie_checks(slides) -> dict[int, list[str]]:
+    """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
+    another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
+    capital: the ones a company has one of), keyed on the two words either side of the figure plus any year in the
+    clause; values that agree at the coarser precision shown (22% and 22.2%) are the same. The later slide fails."""
+    from engines.forge.render import normalize
+    rate = re.compile(r"\b(return|returns|yield|margin|rate|wacc|roic|roe|irr|hurdle|payout|coupon)\b")
+    seen: dict[str, tuple[float, int, int, str]] = {}
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        for _, t in _strings(normalize(sl)):
+            for clause in re.split(r"[;:!?()\n]|[.,](?=\s|$)|\s[-–]\s|\bvs\.?\b|\bversus\b|\bagainst\b|\bbeats?\b|\bthan\b",
+                                   re.sub(r"\*\*", "", t)):
+                for m in re.finditer(r"(-?\d+(?:\.\d+)?)%", clause):
+                    num = m.group(1)
+                    yr = " ".join(re.findall(r"\b(?:19|20)\d\d\b", clause))
+                    def words(txt):
+                        return [w for w in re.findall(r"[a-z][a-z'-]*", txt.lower()) if w not in _TIE_STOP]
+                    keys = []
+                    after, before = words(clause[m.end():])[:2], words(clause[:m.start()])[-2:]
+                    for ws in (after, before):
+                        if len(ws) == 2 and rate.search(" ".join(ws)):
+                            keys.append(" ".join(ws) + (f" {yr}" if yr else ""))
+                    dec = len(num.split(".")[1]) if "." in num else 0
+                    v = float(num)
+                    for key in keys:
+                        if key not in seen:
+                            seen[key] = (v, dec, n, num)
+                            continue
+                        v0, d0, n0, raw0 = seen[key]
+                        d = min(dec, d0)
+                        if n != n0 and round(v, d) != round(v0, d) and abs(v - v0) > 0.05:
+                            msg = (f"'{key}' is {num}% here but {raw0}% on slide {n0}: one metric, one value across "
+                                   "the deck (use the same fact or calc; if it really changed, name what changed)")
+                            if msg not in out.get(n, []):
+                                out.setdefault(n, []).append(msg)
+    return out
+
+
 def prose_checks(slides) -> dict[int, list[str]]:
     """Sentences as the reader will see them (after gap removal): a phrase said twice in one title, unbalanced bold
     markers, a sentence ending on 'but'/'and', stacked punctuation, left-over placeholders."""
@@ -1261,6 +1306,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
         for n, msgs in variety_checks(slides).items():
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
+        for n, msgs in tie_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
             if m and int(m.group(1)) - 1 < len(slides):
