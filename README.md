@@ -56,20 +56,26 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 | Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
 
-- **Mac** (Apple silicon: macOS 11 or later; Intel: macOS 10.15 Catalina or later, where Pi, Codex, OpenCode and browser use need macOS 11 or later): drag Meshpool to Applications. Until the app is notarized, the first time open System Settings → Privacy & Security and click **Open Anyway** (on macOS 14 and earlier, right-click the app and choose **Open**).
-- **Windows:** run the installer. Until it is signed, SmartScreen may appear: choose **More info**, then **Run anyway**.
+**Setup guide** ([full guide](https://github.com/hamzaaziada/meshpool-harness/blob/main/docs/SETUP.md))
 
-**Or install from the terminal**, which skips the "downloaded from the internet" prompt browsers add:
+*Mac, quickest:* open Terminal, paste this and press Return. It installs Meshpool and opens it with no security prompts:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | bash -s -- --app
 ```
 
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1))) -App
-```
+*Mac, from the download:*
+1. Not sure which Mac you have? Apple menu → About This Mac: **Chip: Apple M…** takes Meshpool.dmg, **Intel** takes Meshpool-Intel.dmg.
+2. Open the .dmg and drag **Meshpool** onto **Applications**.
+3. Double-click Meshpool in Applications. macOS blocks it the first time: click **Done**.
+4. Open **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** and enter your password. Meshpool opens, and opens normally from then on. (macOS 14 and earlier: right-click Meshpool in Applications, choose **Open**, then **Open**.)
 
-On first launch, add your Meshpool API key or sign in with ChatGPT, then choose where Meshpool may work.
+*Windows:* run Meshpool-Setup.exe. If "Windows protected your PC" appears, click **More info**, then **Run anyway**.
+
+*First launch:* paste your Meshpool API key ([get one at meshpool.ai](https://meshpool.ai)) or sign in with ChatGPT, then choose the folder Meshpool may work in. Updates: click the "is available" bar, or Settings → About → **Check for updates**, then **Update now**.
+
+Apple silicon Macs need macOS 11 or later; Intel Macs macOS 10.15 Catalina or later (on 10.15, Pi, Codex, OpenCode and browser use need macOS 11). Meshpool is not yet signed by Apple or Microsoft, which is why your computer asks you to confirm it once.
+
 
 **Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser.
 
