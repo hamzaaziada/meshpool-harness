@@ -66,7 +66,10 @@ class Server:
         from meshpool_harness.agent.mcp import Manager
         cwd = p.get("cwd") or os.getcwd()
         extra = {}
-        for s in p.get("mcpServers") or []:
+        if self.profile == "work":               # as in the app: Word documents, PDFs and document reading
+            from meshpool_harness.harnesses.acp import office_extra
+            extra.update(office_extra(cwd))
+        for s in p.get("mcpServers") or []:         # the client's own servers win on a name clash
             if s.get("url"):
                 extra[s["name"]] = {"url": s["url"], "headers": {h["name"]: h["value"] for h in s.get("headers") or []}}
             elif s.get("command"):

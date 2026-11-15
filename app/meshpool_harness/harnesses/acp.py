@@ -170,6 +170,16 @@ def office_server(roots: list[str]) -> dict:
             "env": [{"name": k, "value": v} for k, v in env.items()]}
 
 
+def office_extra(workdir: str) -> dict:
+    """The office server as a Manager `extra` entry for Meshpool Work (make_document, make_pdf, conversions, document
+    reading; its own office_task covers slides, sheets and data only). One definition for the app and for
+    `meshpool acp --profile work`, so they cannot drift. The engines may run 280 s; this client waits 330 s."""
+    spec = office_server([workdir])
+    env_ = {e["name"]: e["value"] for e in spec["env"]}
+    env_.setdefault("OFFICE_WAIT_S", "280")
+    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330}}
+
+
 def _auth_failure(text: str) -> bool:
     """A short reply that is only an authentication error from the model endpoint (HTTP 401/403)."""
     import re
