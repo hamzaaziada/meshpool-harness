@@ -2100,10 +2100,12 @@ def a_cover(ctx, s, sl, n):
     x, w = LEFT, colx24(17) - LEFT
     from .common import font_file, wrap_lines
     f = _font("head", True)
-    size = next((z for z in (36, 32, 28) if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
+    size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
+                 if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
     lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
     th = lines * _pitch(size, 1.05) / 72 + 0.3
-    ty = 3.35 - th                                         # title block ends on a fixed line, whatever its length
+    ty = (4.25 if COVER_DARK else 3.35) - th              # title block ends on a fixed line, whatever its length; on the
+                                                           # dark cover the block sits at the optical middle of the page
     logo = BRAND.get("logo")                               # full-bleed navy: the title owns the page, no empty white;
     dark = COVER_DARK and not (logo and Path(logo).exists())   # a company logo drawn for white paper keeps the white cover
     ink, soft = (TC.BACKGROUND_1, TC.BACKGROUND_2) if dark else (TC.TEXT_1, TC.TEXT_2)
@@ -2132,7 +2134,7 @@ def a_cover(ctx, s, sl, n):
     for ph in list(sl.placeholders):
         if ph.placeholder_format.idx == 1:
             if sub:
-                ph.left, ph.top, ph.width, ph.height = Inches(x), Inches(3.5), Inches(w), Inches(1.0)
+                ph.left, ph.top, ph.width, ph.height = Inches(x), Inches(ty + th + 0.15), Inches(w), Inches(1.0)
                 ph.text_frame.word_wrap = True
                 ph.text_frame.vertical_anchor = MSO_ANCHOR.TOP
                 ph.text_frame.margin_left = Inches(0)
@@ -2378,7 +2380,8 @@ def a_exhibit_argument(ctx, s, sl, n):
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
     _shape_text(panel, blocks, ctx, n, (rx, BODY_Y - 0.05, rw, space))       # the argument lives in the panel
     if cb:
-        arr = _fill(sl, rx - 0.95, cy + ch / 2 - 0.3, 0.98, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
+        aw_ = max(0.35, rx - split + 0.03)               # the arrow lives in the gutter: never over the chart's labels
+        arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
         arr.rotation = 180
         box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
