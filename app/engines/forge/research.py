@@ -106,6 +106,54 @@ def questions_from(panel: dict, limit: int = 6) -> list[dict]:
     return out[:limit]
 
 
+_STOP = set("""what which how much many is are does do did find get source confirm verify the a an please exactly latest
+available of to in on for and or with by from at as that this these those its it be been was were will would should
+could can current resulting correct including deal deck slide headline figure number value""".split())
+
+
+def _keywords(q: str, n: int = 8) -> str:
+    """A web query a search engine can use: the question's names, figures and key terms (<= n words), not its
+    sentence. 'What is NVIDIA's exact current ownership of CoreWeave, including the 22.9M shares ...' ->
+    'NVIDIA ownership CoreWeave 22.9M shares'."""
+    words = re.findall(r"[A-Za-z][\w.&'-]*|\$?\d[\d.,]*[%MBK]?", q)
+    keep = []
+    for w in words:
+        lw = w.lower().strip("'")
+        if lw in _STOP or len(lw) < 3 and not w[0].isdigit():
+            continue
+        w = re.sub(r"'s$", "", w)
+        if w.lower() not in (k.lower() for k in keep):
+            keep.append(w)
+    names = [w for w in keep if w[0].isupper() or w[0].isdigit() or w[0] == "$"]
+    rest = [w for w in keep if w not in names]
+    return " ".join((names + rest)[:n])
+
+
+def _queries_model(questions: list[str], client, models, task_id, dead) -> list[list[str]] | None:
+    """Two or three short web queries per question, in one call for the whole step (cheap)."""
+    if client is None or not models:
+        return None
+    sys_ = ("Turn each research question into 2-3 short web search queries (3-8 words each: company names, the "
+            "metric, the period, the source type such as 10-K, investor relations, press release). Return ONLY JSON: "
+            '{"queries": [["q1", "q2"], ...]} with one list per question, in order.')
+    user = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
+    for m in models:
+        try:
+            r = client.chat(model=m, messages=[{"role": "system", "content": sys_}, {"role": "user", "content": user}],
+                            max_tokens=800, task_id=f"{task_id}-queries")
+            txt = (((r or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            js = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+            qs = js.get("queries") or []
+            if len(qs) == len(questions):
+                return [[str(x) for x in (q or [])][:3] for q in qs]
+        except Exception as e:  # noqa: BLE001
+            if re.search(r"HTTP 40[13]\b|invalid or missing api key", str(e), re.I):
+                dead.add("models")
+                return None
+            continue
+    return None
+
+
 def _query(q: str) -> str:
     """A search query from a reviewer's question: the question without filler, at most 14 words."""
     q = re.sub(r"(?i)^(what|which|how much|how many|is|are|does|do|find|get|source|confirm|verify)\b\s*", "", q)
@@ -226,12 +274,29 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
     k = int(cp["facts_per_question"])
     n_src = int(cp["max_sources_per_question"])
 
+    edgar_ok = search_fn is None and os.environ.get("MH_RESEARCH_EDGAR", "1") != "0"   # tests stub the web
+    dead0: set = set()
+    mq = _queries_model([q["question"] for q in qs], client, models, task_id, dead0) if qs else None
+    for i, q in enumerate(qs):                         # short queries a search engine can use, not the sentence
+        q["queries"] = [x for x in ((mq[i] if mq else []) + [_keywords(q["question"])]) if x.strip()][:3]
+
     def gather(q):                                     # search + read in parallel across questions
         if time.time() - t0 > budget:
             return q, None, "skipped: time budget used"
         try:
-            got = corpus.search_and_read([_query(q["question"])], per_query=max(4, n_src + 2), max_new=n_src,
+            got = corpus.search_and_read(q["queries"], per_query=max(4, n_src + 2), max_new=n_src,
                                          workers=n_src)
+            if edgar_ok:                                # primary filings: the place a banker checks first
+                names = [w for w in _keywords(q["question"], 6).split() if w[:1].isupper() and len(w) > 2][:2]
+                if names:
+                    hits = corpus.edgar_search(" ".join(f'"{w}"' for w in names) + " " + " ".join(
+                        w for w in _keywords(q["question"], 8).split() if w not in names)[:80],
+                        forms="10-K,10-Q,8-K,S-1,DEF 14A", start=time.strftime("%Y-01-01", time.gmtime(
+                            time.time() - 2 * 365 * 86400)), n=3)
+                    for h in hits[:1]:
+                        s_ = corpus.add_edgar(h)
+                        if s_:
+                            got = list(got or []) + [s_]
             return q, got, ""
         except Exception as e:  # noqa: BLE001
             return q, None, f"search failed: {str(e)[:120]}"

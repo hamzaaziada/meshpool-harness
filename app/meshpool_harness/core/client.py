@@ -102,6 +102,9 @@ class LiveClient:
 
     def chat(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
              max_tokens=8192, temperature=None, extra=None):
+        allow = [m.strip() for m in os.environ.get("MH_MODEL_ALLOW", "").split(",") if m.strip()]
+        if allow and model not in allow:                 # a cost cap: only these models may be called; a fallback
+            raise RuntimeError(f"model {model} not allowed (MH_MODEL_ALLOW={','.join(allow)})")   # chain moves on
         from meshpool_harness.profiles import apply, for_model
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         if prof["family"] != "deepseek":
