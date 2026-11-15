@@ -396,3 +396,39 @@ def test_review_revisions_go_to_the_whole_deck_in_one_pass_and_keep_numbers_tied
     assert "the $120m is not dated" in seen[0]
     slides = json.loads((tmp_path / "slides.json").read_text())
     assert all("All figures are for 2025" in (s.get("footnotes") or []) for s in slides[1:]) and len(slides) == 4
+
+
+def test_market_facts_give_price_range_beta_and_risk_free_rate_with_sources():
+    from engines.forge import research as R
+    t0, wk = 1_700_000_000, 7 * 86400
+    idx = [100 * (1.01 if i % 2 else 0.995) ** i for i in range(60)]
+    stock = [50.0]
+    for i in range(1, 60):                                      # moves 2x the index every week
+        stock.append(stock[-1] * (1 + 2 * (idx[i] / idx[i - 1] - 1)))
+
+    def series(vals, step):
+        return {"timestamp": [t0 + i * step for i in range(len(vals))], "indicators": {"quote": [{"close": vals}]}}
+
+    def fetch(sym, rng, iv):
+        if sym == "^GSPC":
+            return series(idx, wk)
+        if sym == "^TNX":
+            return series([4.1, 4.2], 86400)
+        return series(stock, wk) if iv == "1wk" else series([90.0, 120.5, 101.25], 86400)
+
+    got = R.market_facts([("ACME CORP", "ACME")], 7, fetch=fetch)
+    txt = [f["text"] for f in got]
+    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10"]
+    assert "share price $101.25" in txt[0] and "finance.yahoo.com/quote/ACME" in txt[0]
+    assert "$90.00 to $120.50" in txt[1]
+    assert "beta" in txt[2] and abs(float(txt[2].split("beta ")[1].split()[0]) - 2.0) < 0.3
+    assert "10-year Treasury yield 4.20%" in txt[3]
+    assert all(f["research"] and f["source"] for f in got)
+
+
+def test_market_facts_skip_a_ticker_the_feed_cannot_serve():
+    from engines.forge import research as R
+
+    def fetch(sym, rng, iv):
+        raise OSError("down")
+    assert R.market_facts([("ACME CORP", "ACME")], 1, fetch=fetch) == []
