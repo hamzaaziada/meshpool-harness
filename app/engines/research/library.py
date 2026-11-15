@@ -345,7 +345,9 @@ class Corpus:
                      tier if tier is not None else t, kind or k, sha, note=note)
         sh = _shingles(text)
         for oid, osh in self._sh.items():                       # syndicated copies are not independent
-            if sh and osh and len(sh & osh) / max(1, min(len(sh), len(osh))) > 0.6:
+            if sh and osh and len(sh & osh) / max(1, min(len(sh), len(osh))) > 0.6 \
+                    and min(len(sh), len(osh)) / max(len(sh), len(osh)) >= 0.5:   # a copy is about the same length: a
+                # long earnings release sharing a short notice's boilerplate is a different document, not its copy
                 src.duplicate_of = self.sources[oid].duplicate_of or oid
                 break
         self._sh[sid] = sh

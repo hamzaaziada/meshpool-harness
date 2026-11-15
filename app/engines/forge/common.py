@@ -114,7 +114,13 @@ def _profile_fonts(profile: Path) -> None:
             '<?xml version="1.0" encoding="UTF-8"?><oor:items xmlns:oor="http://openoffice.org/2001/registry" '
             'xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
             '<item oor:path="/org.openoffice.Office.Common/Font/Substitution"><prop oor:name="Replacement" '
-            'oor:op="fuse"><value>true</value></prop></item>' + pairs + '</oor:items>', encoding="utf-8")
+            'oor:op="fuse"><value>true</value></prop></item>' + pairs +
+            # recalculate every formula on load: by default LibreOffice keeps the values cached in an xlsx, so a
+            # workbook whose inputs were edited elsewhere was checked against stale results (0 = always)
+            '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="OOXMLRecalcMode" '
+            'oor:op="fuse"><value>0</value></prop></item>'
+            '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" '
+            'oor:op="fuse"><value>0</value></prop></item></oor:items>', encoding="utf-8")
     except OSError:                                        # the conversion still runs, with the system's fonts
         pass
 

@@ -72,3 +72,15 @@ def test_checklist_covers_the_analyst_basics_and_the_briefs_own_questions():
     assert next(q for q in qs if q["kind"] == "news")["recency"] == "month"
     assert "since 2024" in next(q for q in qs if q["kind"] == "deals")["question"]
     assert D._queries(dict(qs[0], company="Acme"), {"companies": [{}]})[0].startswith('"Acme"')
+
+
+def test_a_long_document_sharing_a_short_ones_boilerplate_is_not_its_duplicate(tmp_path):
+    from engines.research.library import Corpus
+    c = Corpus(str(tmp_path))
+    boiler = " ".join(f"Costco Wholesale Corporation operates membership warehouses worldwide clause {i}." for i in range(40))
+    short = c.add_text("Dividend notice", "The board declared a quarterly dividend of $1.47 per share. " + boiler)
+    body = " ".join(f"Net sales for the quarter rose to ${100 + i} billion in segment {i} with margin detail." for i in range(400))
+    long_ = c.add_text("Q4 earnings release", body + " " + boiler)
+    copy = c.add_text("Syndicated dividend notice", "The board declared a quarterly dividend of $1.47 per share. " + boiler + " Reuters")
+    assert getattr(long_, "duplicate_of", None) in (None, "")
+    assert copy.duplicate_of == short.id

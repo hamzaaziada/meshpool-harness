@@ -578,7 +578,7 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
             entry["status"] = why
             log.append(entry)
             continue
-        passages = corpus.find(q["question"], k=6, per_source=2, min_tier=3)
+        passages = corpus.find(q["question"], k=8, per_source=4, min_tier=3)   # 2 per source missed key 10-K facts
         picked = None
         if client is not None and models and passages and time.time() - t0 <= budget and "models" not in dead:
             picked = _pick_model(q["question"], passages, k, client, models, task_id, dead)
