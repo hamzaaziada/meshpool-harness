@@ -52,7 +52,11 @@ face shape matter drive lack outweigh hinge rest lie set keep put let
 jump surge soar climb slip slide slump plunge tumble dip rebound recover edge outstrip top spike bottom flatten level
 plateau cluster cost total average comprise outnumber dominate signal suggest indicate point mean imply contract
 decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark
-compound span bracket weigh sit straddle clear""".split())
+compound span bracket weigh sit straddle clear
+absorb retire buy repurchase cover add accrete dilute carry convert free back stretch burn bridge outrun owe pass hand
+distribute trim boost dent squeeze ease tighten loosen halt resume close beat lower overshoot undercut outlast cushion
+fuel underpin anchor justify warrant favour favor outweigh exceed deserve cost risk threaten justify limit cap free
+unlock lock idle shrink compress expand tilt skew depend rely""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 

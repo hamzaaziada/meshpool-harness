@@ -451,7 +451,8 @@ def test_economics_facts_compute_the_capital_allocation_arithmetic_with_their_in
     assert "$10.00B" in got["free cash flow"] and "F1" in got["free cash flow"] and "F2" in got["free cash flow"]
     assert "4.0x" in got["cash cover of capex"]
     assert "$100.00B" in got["market capitalisation"]
-    assert "10.00M shares" in got["per $1B returned"] and "$1.00 per share" in got["per $1B returned"]
+    k = "scaling rule for any amount returned"
+    assert "10.00M shares" in got[k] and "$1.00 per share" in got[k] and "not a proposed amount" in got[k]
     assert "5.00%" in got["earnings yield"]
     assert "$5.05" in got["diluted EPS after a $1B buyback"]          # 5 x 1000M / 990M
     assert "18.8%" in got["after-tax return on capital"]               # 10B x (1 - 25%) / 40B

@@ -474,9 +474,11 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
         if price and shares:
             add(co, "market capitalisation", f"{_money(price * shares, 'USD')} = share price ${price:,.2f} x "
                 f"{shares / 1e6:,.1f}M shares", [(c, "share price"), (c, "shares outstanding")])
-            add(co, "per $1B returned", f"a buyback retires {1e9 / price / 1e6:,.2f}M shares ({1e9 / price / shares:.2%} of "
-                f"{shares / 1e6:,.1f}M) at ${price:,.2f}; a special dividend pays ${1e9 / shares:,.2f} per share",
-                [(c, "share price"), (c, "shares outstanding")])
+            add(co, "scaling rule for any amount returned", "(a rate to multiply, not a proposed amount): every $1B "
+                f"spent on a buyback retires {1e9 / price / 1e6:,.2f}M shares ({1e9 / price / shares:.2%} of "
+                f"{shares / 1e6:,.1f}M) at ${price:,.2f}, and every $1B paid as a special dividend is "
+                f"${1e9 / shares:,.2f} per share; for $X billion multiply both by X (shares retired = amount / price, "
+                "dividend per share = amount / shares)", [(c, "share price"), (c, "shares outstanding")])
         if price and eps:
             add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (the "
                 "return a buyback earns on each dollar, before lost interest on the cash)",
