@@ -596,7 +596,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
         L = R.get("language") or {}
         if L:
             ban = [b for b in L.get("banned_phrases") or [] if b]
-            ban_re = re.compile(r"(?i)(?<![\w-])(" + "|".join(re.escape(b) for b in ban) + r")(?![\w-])") if ban else None
+            ban_re = re.compile(r"(?i)(?<![\w-])(" + "|".join(b[3:] if b.startswith("re:") else re.escape(b)
+                                                              for b in ban) + r")(?![\w-])") if ban else None
             for sh in texts:
                 t = sh["text"]
                 found = sorted({m.group(1).lower() for m in ban_re.finditer(t)}) if ban_re else []
