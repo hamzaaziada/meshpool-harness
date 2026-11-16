@@ -126,10 +126,11 @@ def test_guidance_comes_from_the_primary_filing():
         "index.json": _j.dumps({"directory": {"item": [{"name": "ex99-1.htm"}]}}).encode(),
         "ex99-1.htm": b"<p>Exhibit 99.1 Press Release ACME DECLARES DIVIDEND. The Board declared a special cash "
                       b"dividend of $30.00 per share, payable December 4, 2026. Weather was mild.</p>",
-        "q.htm": b"<p>We expect capital expenditures of approximately $6,500 for fiscal 2027. Sales rose.</p>"}
+        "q.htm": b"<p>We expect capital expenditures of approximately $6,500 for fiscal 2027. Sales rose. At May 10, "
+                 b"2026, we had borrowing capacity under these facilities of $1,531.</p>"}
     get = lambda u: pages[u.rsplit("/", 1)[-1]]  # noqa: E731
     fs = guidance_facts("42", "ACME", 10, get=get)
     labels = {f["label"] for f in fs}
-    assert {"dividend", "capital expenditure guidance"} <= labels
+    assert {"dividend", "capital expenditure guidance", "liquidity and credit facilities"} <= labels
     assert all("filed" in f["text"] and f["source"].startswith("https://www.sec.gov/") for f in fs)
     assert fs[0]["id"] == "F10"

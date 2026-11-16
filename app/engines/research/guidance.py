@@ -17,7 +17,11 @@ TOPICS = {
     "capital expenditure guidance": re.compile(r"(?i)\b(capital expenditures?|capex|capital spending)\b"),
     "share repurchase plan": re.compile(r"(?i)\b(repurchase|buy ?back)\w*\b"),
     "dividend": re.compile(r"(?i)\bdividends?\b"),
+    "liquidity and credit facilities": re.compile(r"(?i)\b(revolving credit|credit facilit|liquidity|letters? of credit|"
+                                                  r"commercial paper|borrowing capacity|minimum cash)\w*\b"),
 }
+STATED = re.compile(r"(?i)\b(available|unused|undrawn|capacity|outstanding|maintain|sufficient|adequate|"
+                    r"borrowings? under)\b")
 FORWARD = re.compile(r"(?i)\b(expect|expects|expected|anticipate|anticipates|plan|plans|planned|estimate|estimates|"
                      r"intend|intends|outlook|guidance|for (?:fiscal|the year|the full year)|authori[sz]ed?|declared?)\b")
 MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s?(?:billion|million|thousand|B|M|bn)?", re.I)
@@ -71,9 +75,10 @@ def guidance_facts(cik: str, company: str, no: int, get=None, max_filings: int =
             text = re.sub(r"^.*?(?:Exhibit 99\.\d+\s*)?Press Release\s+", "", text[:600], count=1) + text[600:] \
                 if "Press Release" in text[:600] else text   # drop the exhibit's file header
             for s in _sentences(text):
-                if not (MONEY.search(s) and FORWARD.search(s)):
-                    continue
                 topic = next((k for k, rx in TOPICS.items() if rx.search(s)), None)
+                if not MONEY.search(s) or not (FORWARD.search(s) or (topic == "liquidity and credit facilities"
+                                                                     and STATED.search(s))):
+                    continue                             # plans, or the liquidity a cash floor can be anchored on
                 key = re.sub(r"\W+", "", s.lower())[:120]
                 if not topic or key in seen:
                     continue
@@ -81,6 +86,6 @@ def guidance_facts(cik: str, company: str, no: int, get=None, max_filings: int =
                 out.append({"id": f"F{no + len(out)}", "research": True, "company": company,
                             "label": topic, "source": url, "tier": 1,
                             "text": f"{company} {topic}: \"{s}\" ({form} filed {filed}, {d}; {url})"})
-                if len(out) >= 12:
+                if len(out) >= 16:
                     return out
     return out
