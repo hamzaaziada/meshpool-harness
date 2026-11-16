@@ -32,3 +32,21 @@ def test_reading_order_runs_top_to_bottom():
     prs = _deck(p, [(5.8, 14, "Decision box at the bottom"), (1.7, 14, "Row one"), (2.8, 14, "Row two")])
     _reading_order(prs)
     assert [sh.text_frame.text for sh in prs.slides[0].shapes] == ["Row one", "Row two", "Decision box at the bottom"]
+
+
+def test_reading_order_puts_the_title_first():
+    """A kicker drawn above the title moves after it: the title is always read first."""
+    from pptx import Presentation as P
+    from pptx.util import Inches
+    from engines.forge.render import _reading_order
+    prs = P()
+    sl = prs.slides.add_slide(prs.slide_layouts[5])        # title only
+    sl.shapes.title.text, sl.shapes.title.top = "The title", Inches(0.5)
+    tb = sl.shapes.add_textbox(Inches(1), Inches(0.1), Inches(4), Inches(0.3))
+    tb.text_frame.text = "Kicker above the title"
+    low = sl.shapes.add_textbox(Inches(1), Inches(3), Inches(4), Inches(0.3))
+    low.text_frame.text = "Body"
+    sl.shapes._spTree.remove(low._element)
+    sl.shapes._spTree.insert(2, low._element)                # drawn first, sits lowest
+    _reading_order(prs)
+    assert [sh.text_frame.text for sh in sl.shapes] == ["The title", "Kicker above the title", "Body"]

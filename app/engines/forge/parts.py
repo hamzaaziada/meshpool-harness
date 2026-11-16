@@ -258,6 +258,13 @@ def p_table(ctx, sl, n, part, box, look, i, s, card):
         t["highlight_rows"] = [r for r in t.get("highlight_rows") or [] if r < len(rows)]
     gf = R._table(ctx, sl, n, dict(t, rows=rows), x, y, w, h)
     ctx.carry_rows = None
+    while gf.height / 914400 > h + 0.02 and len(rows) > 1:   # drawn taller than measured (a wrapped header): never
+        gf._element.getparent().remove(gf._element)        # let it run into the next part (P8); drop rows instead
+        k = len(rows) - (2 if t.get("total_row") and len(rows) > 2 else 1)
+        dropped.insert(0, " | ".join(map(str, rows.pop(k))))
+        _note(s, f"part {i}: table rows that did not fit and were left out: {dropped[0]}")
+        gf = R._table(ctx, sl, n, dict(t, rows=rows), x, y, w, h)
+        ctx.carry_rows = None
     gf.name = f"Table{i}"
 
 

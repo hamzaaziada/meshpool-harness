@@ -2321,7 +2321,7 @@ def a_exhibit_argument(ctx, s, sl, n):
     _header(ctx, s, sl, n, title_w=lw)
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
-    _write(_box(sl, rx, 0.42, rw, 0.92, "role_title_Right", MSO_ANCHOR.BOTTOM),
+    _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": min(_title_size(tr, rw) or 20, T["head"] + 4), "bold": True, "heading": True,
              "numbers": False, "line_spacing": 1.0}])      # the argument's lead, a step under the slide title
     ex = s.get("exhibit") or {}
@@ -3353,7 +3353,8 @@ def _reading_order(prs) -> None:
         tree = sl.shapes._spTree
         shapes = [sh for sh in sl.shapes if sh._element.tag.rsplit("}", 1)[-1] in tags]
         tops = [round((sh.top if sh.top is not None else 0) / 9144) for sh in shapes]   # 0.01in steps
-        order = sorted(range(len(shapes)), key=lambda i: (tops[i], i))
+        title = [sh.is_placeholder and sh.placeholder_format.type in (1, 3) for sh in shapes]   # TITLE, CENTER_TITLE
+        order = sorted(range(len(shapes)), key=lambda i: (not title[i], tops[i], i))   # the title is read first
         if order == list(range(len(shapes))):
             continue
         anchor = shapes[-1]._element.getnext()           # extLst (if any) stays last
