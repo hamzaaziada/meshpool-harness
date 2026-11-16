@@ -428,7 +428,7 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
             b = _beta([sw[k] for k in common], [iw[k] for k in common])
             if b is not None:
                 add(f"{name} ({tic}) beta {b:.2f} against the S&P 500, from 2 years of weekly returns to {day(common[-1])} "
-                    f"(computed from Yahoo Finance weekly closes; {url})", url)
+                    f"(computed from Yahoo Finance weekly closes; {url})", url, company=name, label="beta", value=b)
     if rates and out:
         try:                                             # the short rate: what cash on the balance sheet earns
             tb = get("^IRX", "5d", "1d")
@@ -469,6 +469,9 @@ def _tickers(names: list[str], ticker_map: dict | None = None) -> list[tuple[str
     return out
 
 
+ERP = 0.05            # equity risk premium for the CAPM cost of equity: an assumption, said so wherever it is used
+
+
 def economics_facts(facts: list[dict], no: int) -> list[dict]:
     """The capital-allocation arithmetic a banker checks first, computed here from filed and market facts (never by a
     model): free cash flow, market cap, earnings yield, after-tax return on capital, cash cover of capex, and what
@@ -506,9 +509,25 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
                 f"${1e9 / shares:,.2f} per share; for $X billion multiply both by X (shares retired = amount / price, "
                 "dividend per share = amount / shares)", [(c, "share price"), (c, "shares outstanding")])
         if price and eps:
-            add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (the "
-                "return a buyback earns on each dollar, before lost interest on the cash)",
-                [(c, "diluted EPS"), (c, "share price")])
+            add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (an "
+                "EPS-accretion test only: it ignores growth, so it is not the return a buyback earns and is never "
+                "compared with a cash yield)", [(c, "diluted EPS"), (c, "share price")])
+            rf = next((f for f in facts if f.get("label") == "treasury yield" and isinstance(f.get("value"), (int, float))),
+                      None)
+            beta = v(c, "beta")
+            if rf is not None and beta is not None:      # what a shareholder's dollar must earn: the buyback's hurdle
+                ke = rf["value"] / 100 + beta * ERP
+                add(co, "cost of equity (CAPM)", f"{ke:.1%} = 10-year Treasury {rf['value']:.2f}% ({rf['id']}) + beta "
+                    f"{beta:.2f} x {ERP:.1%} equity risk premium (the premium is an assumption, a common long-run "
+                    "estimate; state it as one)", [(c, "beta")])
+            g_key = next((k for k in ("operating cash flow 3-year growth", "revenue 3-year growth") if k in c), None)
+            if g_key:                                  # the valuation test an MD accepts: earnings yield plus growth
+                g = c[g_key]["value"]
+                add(co, "implied return of buying shares at today's price",
+                    f"{eps / price + g:.1%} a year = earnings yield {eps / price:.2%} + {g_key.replace(' 3-year growth', '')} "
+                    f"growth {g:.1%} a year over three years (a growing-perpetuity estimate: the return a buyback "
+                    "earns if that growth holds; compare it with the cost of equity, and show it at lower growth)",
+                    [(c, "diluted EPS"), (c, "share price"), (c, g_key)])
         if price and eps and shares and ni:
             left = shares - 1e9 / price
             add(co, "diluted EPS after a $1B buyback", f"${eps * shares / left:,.2f} "
