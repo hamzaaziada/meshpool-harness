@@ -347,3 +347,16 @@ def test_executive_summary_shows_its_sizing_figures(tmp_path):
     import json as _j
     prov = _j.loads(open(r["provenance"]).read())["slides"]["1"]
     assert any(p["text"] == "$13.3B" for p in prov)
+
+
+def test_footnotes_given_as_objects_still_render(tmp_path):
+    """A writer that returns footnotes as {"text", "prov"} must not blank the page (it crashed the grid and its
+    fallback, leaving a title over an empty body)."""
+    from engines.forge.render import render
+    s = {"archetype": "grid", "title": "Cash earns more than a buyback at today's price", "layout": "main_side",
+         "parts": [{"type": "chart", "heading": "Yield, %", "chart": {"kind": "bar", "categories": ["Cash", "Buyback"],
+                    "series": [{"name": "Yield", "values": [3.1, 1.88]}], "unit": "%", "decimals": 2}},
+                   {"type": "stats", "items": [{"value": "22.2%", "label": "return on capital"}]}],
+         "footnotes": [{"text": "Treasury yield after tax at 24.7%.", "prov": ["F1"]}]}
+    r = render([s], str(tmp_path / "g.pptx"), carry=False, density="balanced")
+    assert not [e for e in r["errors"] if "malformed" in e or "failed" in e], r["errors"]

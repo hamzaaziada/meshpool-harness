@@ -1787,6 +1787,10 @@ def normalize(s: dict) -> dict:
             s[k] = s[k].rstrip()[:-1]
     if isinstance(s.get("footnotes"), str):
         s["footnotes"] = [s["footnotes"]]
+    if isinstance(s.get("footnotes"), list):                # {"text", "prov"} from some writers: the text is the
+        s["footnotes"] = [str(f.get("text") or "") if isinstance(f, dict) else f   # note; a dict crashed the page
+                          for f in s["footnotes"]]           # and its fallback, leaving a title over a blank body
+        s["footnotes"] = [f for f in s["footnotes"] if not isinstance(f, str) or f.strip()]
     return s
 
 
