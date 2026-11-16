@@ -1396,6 +1396,16 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
             from engines.forge.research import economics_facts, next_fact_no
             have = {(f.get("company"), f.get("label")) for f in facts if f.get("derived")}
             facts += [f for f in economics_facts(facts, next_fact_no(facts)) if (f["company"], f["label"]) not in have]
+            if os.environ.get("MH_RESEARCH_GUIDANCE", "1") != "0":     # and the primary-filing plans it lacked
+                from engines.research.guidance import guidance_facts
+                from engines.sheets import spreading as SP
+                cos = {f.get("company") for f in facts if f.get("company") and f.get("research")}
+                tick = json.loads(SP._get(SP.TICKERS, SP.default_user_agent()))
+                rows = list(tick.values()) if isinstance(tick, dict) else tick
+                for co in list(cos)[:2]:
+                    hit = next((r for r in rows if str(r.get("title", "")).lower() == str(co).lower()), None)
+                    if hit and not any(f.get("label") in ("dividend", "share repurchase plan") for f in facts):
+                        facts += guidance_facts(str(hit["cik_str"]), co, next_fact_no(facts))
         except Exception:  # noqa: BLE001
             pass
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
