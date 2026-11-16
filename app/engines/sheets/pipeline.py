@@ -32,7 +32,9 @@ CA_INPUTS = [
     ("capex_base", "Capital expenditure, first forecast year ($m)", "usd", "$ millions, the plan or last year"),
     ("capex_growth", "Capex growth per year", "pct", "decimal"),
     ("cash", "Cash and equivalents, opening ($m)", "usd", "$ millions at the last balance sheet"),
-    ("min_cash", "Cash floor the board keeps ($m)", "usd", "$ millions; say if it is an assumption"),
+    ("min_cash", "Cash floor the board keeps ($m)", "usd", "$ millions: a disclosed policy if there is one; "
+                 "otherwise anchored on a cited fact (the lowest year-end cash in the history, or weeks of operating "
+                 "cash outflow) and the rationale shows the arithmetic"),
     ("shares", "Shares outstanding (m)", "num", "millions of shares"),
     ("share_price", "Share price for buybacks ($)", "usd2", "$ per share, latest close"),
     ("dps", "Regular dividend per share, first forecast year ($)", "usd2", "$ per share per year"),
