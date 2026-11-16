@@ -698,8 +698,10 @@ PER_SHARE = {"dividend", "dividends", "payout", "price", "eps", "earnings", "buy
 CONSISTENCY = """You check a board deck for figures that disagree. Below is every line a reader sees, slide by slide,
 including footnotes and chart values. List each place where the SAME quantity (same metric, entity and period) is
 given different values on different lines or slides, where a footnote or label contradicts a figure or chart value,
-or where one figure is shown at different precisions (1.9% on one page, 1.88% on another: pick one). Do not flag
-different quantities that merely look alike, and do not judge the argument. Return ONLY JSON:
+or where one figure is shown at different precisions (1.9% on one page, 1.88% on another: pick one). Also flag two
+statements of the SAME effect that reach different conclusions (each $1B "adds 4 cents of EPS" on one slide and nets
+"-3 cents a share" on another; "funded from cash" on one, "needs debt" on another): say which statement the deck's own
+figures support. Do not flag different quantities that merely look alike. Return ONLY JSON:
 {"conflicts": [{"slides": [<slide numbers>], "quantity": "<what is measured>", "values": ["<as written>", ...],
 "use": "<that one value exactly as it should be written, e.g. $6.93B>",
 "fix": "<the one value to use everywhere and why, from the deck's own figures>"}]}  ([] when every figure agrees)"""
