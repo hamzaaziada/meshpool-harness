@@ -661,7 +661,8 @@ def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int,
                 bad_out.setdefault(n, []).append(f"calc {cid}: value '{value}' has no number")
                 continue
             raw, v, u = nums[0]
-            if not any(_same_number(raw, v, u, abs(r), "") for r in (res, res * 100 if u in ("%", "pp") else res)):
+            pct = u in ("%", "pp")                               # a formula may or may not carry the *100 itself
+            if not any(_same_number(raw, v, u, abs(r), u if pct else "") for r in ((res, res * 100) if pct else (res,))):
                 bad_out.setdefault(n, []).append(f"calc {cid}: '{formula}' = {res:,.4g}, not {value}; fix the value "
                                                  "or the formula")
                 continue

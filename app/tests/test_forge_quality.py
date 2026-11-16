@@ -273,3 +273,15 @@ def test_stat_values_put_the_currency_first_for_dollar_billions():
     c = {"kind": "bar", "categories": ["Operating cash flow", "Capex", "Free cash flow"],
          "series": [{"name": "Cash flow", "values": [15.82, -6.43, 9.38]}], "unit": "$B", "decimals": 2}
     assert [i["value"] for i in stat_stack(c)["items"]] == ["$15.82B", "-$6.43B", "$9.38B"]
+
+
+def test_percent_calc_accepts_formula_with_or_without_x100():
+    """'8*1000/1106.21/443.1*100' = 1.632 shown as 1.63% is right; so is the same formula without the *100."""
+    from engines.forge.build import verify_calcs
+    from engines.forge.common import load_rules
+    facts = [{"id": "F1", "text": "Shares outstanding 443.1 million"}, {"id": "F2", "text": "Share price $1,106.21"},
+             {"id": "F3", "text": "Proposed buyback $8B, i.e. 8 billion or 1000 million per billion"}]
+    for formula in ("8 * 1000 / 1106.21 / 443.1 * 100", "8 * 1000 / 1106.21 / 443.1"):
+        slides = [{"calcs": [{"id": "C1", "formula": formula, "value": "1.63%", "from": ["F1", "F2", "F3"]}]}]
+        ok, bad = verify_calcs(slides, facts, load_rules())
+        assert not bad and ok, (formula, bad)
