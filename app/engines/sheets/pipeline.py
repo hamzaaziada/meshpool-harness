@@ -126,18 +126,50 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
     B.title(wb["Model"], f"{company}: cash generated and its uses, $m")
     ca = B.capital_allocation(wb["Model"], 3, years)
     out = wb["Outputs"]
-    B.title(out, "Outputs")
-    B.header(out, 3, ["Measure", "Value"])
+    B.title(out, "Outputs: the answer first")
+    out["A3"], out["A4"] = "Question", "Answer"
+    out["B3"] = (f"Can {company} fund its capital spending plan and the cash it returns over {years[0]}-{years[-1]} "
+                 "without cash falling below the board's floor?")
+    B._f(out, "B4", '="Over the forecast the business generates $"&TEXT(' + ca["fcf_total"] + ',"#,##0")&"m of free '
+         'cash flow and returns $"&TEXT(' + ca["uses_total"] + ',"#,##0")&"m to shareholders; cash ends at $"&TEXT('
+         + ca["cash_end"] + ',"#,##0")&"m and "&IF(' + ca["min_headroom"] + '>=0,"never falls below the $"&TEXT('
+         'min_cash,"#,##0")&"m floor (lowest headroom $"&TEXT(' + ca["min_headroom"] + ',"#,##0")&"m).","falls $"&'
+         'TEXT(-' + ca["min_headroom"] + ',"#,##0")&"m below the $"&TEXT(min_cash,"#,##0")&"m floor: the plan needs '
+         'debt or a smaller return.")')
+    for ref in ("A3", "A4"):
+        out[ref].font = B.Font(name=B.FONT, bold=True)
+    out["B3"].alignment = out["B4"].alignment = B.Alignment(wrap_text=False, vertical="top")   # runs across the
+    # empty cells to its right (merged cells are not allowed in a data area, X10)
+    model_ws, rws = wb["Model"], ca["rows"]
+    out["A6"] = "Cash against the floor, $m"
+    out["A6"].font = B.Font(name=B.FONT, bold=True)
+    B.header(out, 7, ["", *[str(y) for y in years]])
+    out["A8"], out["A9"] = "Closing cash", "Cash floor"
+    from openpyxl.utils import get_column_letter as _gcl
+    for i in range(len(years)):
+        c = _gcl(2 + i)
+        B._f(out, f"{c}8", f"='Model'!{c}{rws['close']}", "usd")
+        B._f(out, f"{c}9", "=min_cash", "usd")
+    B.chart(out, "line", (1, 8, 1 + len(years), 9), (2, 7, 1 + len(years), 7), "D12",
+            "Closing cash against the board's floor ($m)", y_fmt="usd")
+    from openpyxl.chart import Reference as _R  # the line chart reads its two series by row
+    ch = out._charts[-1]
+    ch.series.clear() if hasattr(ch.series, "clear") else None
+    for rr in (8, 9):
+        ch.add_data(_R(out, min_col=1, min_row=rr, max_col=1 + len(years), max_row=rr), from_rows=True,
+                    titles_from_data=True)
+    ch.set_categories(_R(out, min_col=2, min_row=7, max_col=1 + len(years), max_row=7))
+    B.header(out, 11, ["Measure", "Value"])
     rows = [("Free cash flow, all forecast years ($m)", f"={ca['fcf_total']}", "usd"),
             ("Cash returned, all years ($m)", f"={ca['uses_total']}", "usd"),
             (f"Closing cash, {years[-1]} ($m)", f"={ca['cash_end']}", "usd"),
             ("Lowest headroom over the cash floor ($m)", f"={ca['min_headroom']}", "usd"),
             ("Closing shares (m)", f"={ca['shares_end']}", "num"),
             ("Funded without new debt?", f'=IF({ca["min_headroom"]}>=0,"Yes","No: cash falls below the floor")', None)]
-    for i, (lab, expr, fmt) in enumerate(rows, start=4):
+    for i, (lab, expr, fmt) in enumerate(rows, start=12):
         out.cell(row=i, column=1, value=lab)
         B._f(out, f"B{i}", expr, fmt)
-    B.widths(out, {"A": 46, "B": 22})
+    B.widths(out, {"A": 46, "B": 22, "C": 14, "D": 14, "E": 14, "F": 14, "G": 14})
     B.widths(wb["Model"], default=14, first=40)
     safe = re.sub(r"[^A-Za-z0-9]+", "_", company).strip("_") or "Company"
     path = Path(ws.root) / f"{safe}_capital_allocation_model.xlsx"
