@@ -308,3 +308,24 @@ def test_consistency_check_sends_a_conflict_to_the_later_slide():
     out = B.consistency_checks(slides, Stub(), ["m"])
     assert list(out) == [4] and "use one value" in out[4][0]
     assert B.consistency_checks(slides, None, ["m"]) == {}
+
+
+def test_unify_figures_replaces_the_losing_value_in_text_only():
+    """$6.92B on slide 3 becomes the $6.93B the rest of the deck uses; chart data and notes are left alone."""
+    import json as _j
+    from engines.forge import build as B
+    B._CONSISTENCY_CACHE.clear()
+
+    class Stub:
+        def chat(self, **kw):
+            return {"choices": [{"message": {"content": _j.dumps({"conflicts": [
+                {"slides": [2, 3], "quantity": "free cash flow after dividends", "values": ["$6.93B", "$6.92B"],
+                 "use": "$6.93B", "fix": "$9.38B - $2.45B"}]})}}]}
+    slides = [{"archetype": "cover", "title": "Board briefing"},
+              {"archetype": "argument_only", "title": "Free cash flow after dividends is $6.93B"},
+              {"archetype": "argument_only", "title": "Cash left is $6.92B, not $16.92B", "notes": "was $6.92B",
+               "chart": {"kind": "bar", "categories": ["a"], "series": [{"name": "s", "values": [6.92]}]}}]
+    done = B.unify_figures(slides, Stub(), ["m"])
+    assert done == ["slide 3: $6.92B -> $6.93B"]
+    assert slides[2]["title"] == "Cash left is $6.93B, not $16.92B" and slides[2]["notes"] == "was $6.92B"
+    assert slides[2]["chart"]["series"][0]["values"] == [6.92]

@@ -197,6 +197,9 @@ Rules:
   quarter' and cut the second bullet"), not advice ("improve the title").
 - research_requests: the specific facts that are missing and would change the answer or the evidence (question and
   why), only when the material cannot answer them.
+- Give detailed feedback, as you would to an associate you are developing: "strengths" are the specific things that
+  already work and must be kept through the next revision (where, what, and why it works); "to_8" is the 2-4
+  changes, most important first, that would take this to an 8 in your eyes, each concrete and in your own voice.
 {"- cut_or_merge: slides that should go or be merged, and missing slides that should exist (with their title)." if target == "storyboard" else ""}
 
 Return ONLY JSON:
@@ -204,6 +207,8 @@ Return ONLY JSON:
  "headline": "the one sentence you would say in the room", "verdict": "sign_off" or "revise",
  "issues": [{{"severity": "blocking|major|minor", "scope": "{'|'.join(scopes)}", "where": "...", "issue": "...",
              "fix": "..."}}],
+ "strengths": [{{"where": "...", "what": "...", "why": "..."}}],
+ "to_8": ["the most important change first", "..."],
  "research_requests": [{{"question": "...", "why": "..."}}]{', "cut_or_merge": [{"action": "cut|merge|add", "slides": [n], "title": "..."}]' if target == "storyboard" else ""}}}"""
 
 
@@ -278,7 +283,8 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
     d = _loads(text)
     if not isinstance(d, dict):
         return {"persona": persona, "target": target, "status": "unparsed", "verdict": "revise", "overall": None,
-                "scores": {}, "issues": [], "research_requests": [], "headline": "", "raw": (text or "")[:500]}
+                "scores": {}, "issues": [], "research_requests": [], "headline": "", "strengths": [], "to_8": [],
+                "raw": (text or "")[:500]}
     scores = {k: max(1.0, min(10.0, float(v))) for k, v in (d.get("scores") or {}).items()
               if isinstance(v, (int, float))}
     issues = []
@@ -295,6 +301,11 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
     ok, cal = passes(persona, target, scores, ov, issues, b)
     out = {"persona": persona, "target": target, "status": "ok", "scores": scores, "overall": ov, "calibrated": cal,
            "verdict": "sign_off" if ok else "revise", "headline": str(d.get("headline") or ""), "issues": issues,
+           "strengths": [{k: str(x.get(k) or "") for k in ("where", "what", "why")} if isinstance(x, dict)
+                         else {"where": "", "what": str(x), "why": ""} for x in d.get("strengths") or []
+                         if (x.get("what") if isinstance(x, dict) else str(x).strip())][:6],
+           "to_8": [str(x).strip() for x in (d.get("to_8") if isinstance(d.get("to_8"), list)
+                                            else [d.get("to_8")] if d.get("to_8") else []) if str(x).strip()][:4],
            "research_requests": [r for r in d.get("research_requests") or [] if isinstance(r, dict)
                                  and str(r.get("question") or "").strip()]}
     if target == "storyboard":
@@ -361,3 +372,20 @@ def summary(p: dict) -> str:
              for r in p.get("reviews") or [] if r.get("status") == "ok"]
     nr = [names.get(x, x) for x in p.get("not_run") or []]
     return ("Review: " + "; ".join(parts) + (f"; not run: {', '.join(nr)}" if nr else "")) if parts or nr else ""
+
+
+def coaching(reviews: list[dict], names: dict | None = None) -> str:
+    """The reviewers' detailed feedback for the writer: what to keep and what would make it an 8, per reviewer."""
+    out = []
+    for r in reviews or []:
+        if r.get("status") != "ok":
+            continue
+        who = (names or {}).get(r["persona"], r["persona"])
+        keep = [f"{x.get('where') + ': ' if x.get('where') else ''}{x.get('what')}"
+                + (f" ({x['why']})" if x.get("why") else "") for x in r.get("strengths") or []]
+        if keep:
+            out.append(f"{who}, keep (works, do not change in the revision):\n" + "\n".join(f"  - {k}" for k in keep))
+        if r.get("to_8"):
+            out.append(f"{who}, what would make it an 8 (most important first):\n"
+                       + "\n".join(f"  {i}. {t}" for i, t in enumerate(r["to_8"], 1)))
+    return "\n".join(out)

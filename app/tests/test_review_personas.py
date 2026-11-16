@@ -99,3 +99,17 @@ def test_calibration_puts_published_work_at_the_bar(monkeypatch):
     from engines.forge import critics
     from engines.forge.common import load_rules
     assert critics.settings(load_rules())["bar"]["calibration"] == {"partner": 3.2, "md": 2.3}
+
+
+def test_reviewers_give_detailed_feedback_strengths_and_path_to_8():
+    """A review carries what works (kept through the revision) and the ordered changes that would make it an 8."""
+    import json as _j
+    from engines.review.personas import parse_review, coaching, system_prompt
+    assert '"strengths"' in system_prompt("md", "deck") and '"to_8"' in system_prompt("md", "deck")
+    r = parse_review(_j.dumps({"scores": {"so_what": 7}, "headline": "Close", "issues": [],
+                               "strengths": [{"where": "slide 2", "what": "the cash bridge ties", "why": "auditable"}],
+                               "to_8": ["Size the buyback against the 1.88% yield on slide 3", "Cut slide 5"]}),
+                     "md", "deck")
+    assert r["strengths"][0]["what"] == "the cash bridge ties" and len(r["to_8"]) == 2
+    c = coaching([r], {"md": "MD"})
+    assert "keep" in c and "slide 2: the cash bridge ties (auditable)" in c and "1. Size the buyback" in c

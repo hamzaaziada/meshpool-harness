@@ -699,7 +699,49 @@ given different values on different lines or slides, where a footnote or label c
 or where one figure is shown at different precisions (1.9% on one page, 1.88% on another: pick one). Do not flag
 different quantities that merely look alike, and do not judge the argument. Return ONLY JSON:
 {"conflicts": [{"slides": [<slide numbers>], "quantity": "<what is measured>", "values": ["<as written>", ...],
+"use": "<that one value exactly as it should be written, e.g. $6.93B>",
 "fix": "<the one value to use everywhere and why, from the deck's own figures>"}]}  ([] when every figure agrees)"""
+_NUMTOK = re.compile(r"^[$€£]?-?\d[\d,]*(?:\.\d+)?\s?(?:%|pp|x|bn|[BMK])?$")
+
+
+def unify_figures(slides, client, models: list[str], task_id: str = "consistency") -> list[str]:
+    """Apply the checker's mechanical fixes before a render: where it names the one value to use and the others are
+    plain figures ($6.92B for $6.93B, 1.9% for 1.88%), those exact tokens are replaced on the slides it names, in
+    reader-facing text only (never chart data or notes). Returns what was replaced."""
+    consistency_checks(slides, client, models, task_id)        # fills the cache for this text
+    got = _CONSISTENCY_CACHE.get(_consistency_key(slides)) or {}
+    done = []
+    for c in got.get("conflicts") or []:
+        use = str(c.get("use") or "").strip() if isinstance(c, dict) else ""
+        if not _NUMTOK.match(use):
+            continue
+        olds = [str(v).strip() for v in c.get("values") or [] if _NUMTOK.match(str(v).strip()) and str(v).strip() != use]
+        ns = {int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= len(slides)}
+        for v in olds:
+            pat = re.compile(r"(?<![\d.,])" + re.escape(v) + r"(?![\d])")
+
+            def sub(node):
+                if isinstance(node, str):
+                    return pat.sub(use, node)
+                if isinstance(node, list):
+                    return [sub(x) for x in node]
+                if isinstance(node, dict):
+                    return {k: (x if k in ("chart", "charts", "notes", "prov", "title_prov", "calcs", "options")
+                                else sub(x)) for k, x in node.items()}
+                return node
+            for n in ns:
+                if slides[n - 1].get("fixed"):
+                    continue
+                new = sub(slides[n - 1])
+                if new != slides[n - 1]:
+                    slides[n - 1].clear()
+                    slides[n - 1].update(new)
+                    done.append(f"slide {n}: {v} -> {use}")
+    return done
+
+
+def _consistency_key(slides) -> str:
+    return str(hash(_consistency_text(slides)))
 _CONSISTENCY_CACHE: dict[str, dict] = {}
 
 
@@ -707,9 +749,26 @@ def consistency_checks(slides, client, models: list[str], task_id: str = "consis
     """One metric, one value, across lines, footnotes and charts: a cheap model reads the whole deck once (cached on
     its text) and lists disagreements the regex tie check cannot key (different wording, a footnote against a chart
     label). Each conflict goes to every slide it names after the first, as a failure the writer must fix."""
-    from engines.forge.render import normalize
     if client is None or not models or os.environ.get("FORGE_CONSISTENCY", "1") == "0":
         return {}
+    text = _consistency_text(slides)
+    if not text:
+        return {}
+    key = str(hash(text))
+    if key not in _CONSISTENCY_CACHE:
+        got = None
+        for m in models:
+            try:
+                got = _call(client, m, CONSISTENCY, text[:40000], task_id, max_tokens=3000)
+                break
+            except Exception:  # noqa: BLE001 - a checker that cannot run adds nothing
+                continue
+        _CONSISTENCY_CACHE[key] = got or {}
+    return _conflict_msgs(_CONSISTENCY_CACHE[key], len(slides))
+
+
+def _consistency_text(slides) -> str:
+    from engines.forge.render import normalize
     pages = []
     for n, sl in enumerate(slides, 1):
         if sl.get("archetype") in ("section_divider", "agenda"):
@@ -723,24 +782,15 @@ def consistency_checks(slides, client, models: list[str], task_id: str = "consis
                         f"{k} = {v}" for k, v in zip(c.get("categories") or [], se.get("values") or [])))
         if lines_:
             pages.append(f"Slide {n}:\n" + "\n".join(f"- {re.sub(r'[*^]', '', t)}" for t in lines_))
-    text = "\n\n".join(pages)
-    if not text:
-        return {}
-    key = str(hash(text))
-    if key not in _CONSISTENCY_CACHE:
-        got = None
-        for m in models:
-            try:
-                got = _call(client, m, CONSISTENCY, text[:40000], task_id, max_tokens=3000)
-                break
-            except Exception:  # noqa: BLE001 - a checker that cannot run adds nothing
-                continue
-        _CONSISTENCY_CACHE[key] = got or {}
+    return "\n\n".join(pages)
+
+
+def _conflict_msgs(got: dict, n_slides: int) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
-    for c in (_CONSISTENCY_CACHE[key].get("conflicts") or [])[:12]:
+    for c in (got.get("conflicts") or [])[:12]:
         if not isinstance(c, dict):
             continue
-        ns = sorted({int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= len(slides)})
+        ns = sorted({int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= n_slides})
         vals = ", ".join(map(str, c.get("values") or []))
         msg = (f"{c.get('quantity', 'a figure')} is given as {vals} across slides {', '.join(map(str, ns))}; use one "
                f"value and one precision everywhere: {c.get('fix', '')}")[:400]
@@ -1041,6 +1091,9 @@ def replan_storyline(client, story_sys: str, story: dict, panel: dict, new_facts
                        f"{i['issue']} -> {i.get('fix') or ''}" for i in panel.get("issues") or [])
     cm = "\n".join(f"- {c.get('action')} slides {c.get('slides')}: {c.get('title') or ''}"
                    for r in panel.get("reviews") or [] for c in r.get("cut_or_merge") or [])
+    from engines.review.personas import coaching
+    from engines.forge.critics import NAMES as _N
+    coach = coaching(panel.get("reviews") or [], _N)
     found = "\n".join(f"- {f['id']}: {f['text']}" for f in new_facts)
     none = "\n".join(f"- {q['question']}" for q in (research or {}).get("questions") or []
                      if isinstance(q, dict) and q.get("status") != "found")
@@ -1054,6 +1107,7 @@ def replan_storyline(client, story_sys: str, story: dict, panel: dict, new_facts
     user = (f"Brief:\n{brief[:12000]}\n\nFacts (cite by id):\n" + "\n".join(f"{f['id']}: {f['text']}" for f in facts)
             + f"\n\nCurrent storyboard ({len(story.get('slides') or [])} slides, must stay {n}):\n{json.dumps(story)}"
             + f"\n\nReviewers' issues:\n{issues or '- none listed'}"
+            + (f"\n\nReviewers' coaching (keep what works; make the changes that reach an 8):\n{coach}" if coach else "")
             + (f"\n\nCut, merge or add:\n{cm}" if cm else "")
             + (f"\n\nNew facts from research:\n{found}" if found else "")
             + (f"\n\nResearch found nothing for:\n{none}" if none else "")
@@ -1461,7 +1515,14 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         specs = designer.specs(slides) if designer else {}
         return specs, [dict(s_, _design=specs[i]) if i in specs else s_ for i, s_ in enumerate(slides)]
 
+    unified: list[str] = []
+
     def draw():
+        try:                                  # one value per figure across the deck, fixed in code where mechanical
+            unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
+                                         f"{task_id}-consistency"))
+        except Exception:  # noqa: BLE001 - a checker that cannot run changes nothing
+            pass
         for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
             specs, view_ = designed()
             r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
@@ -1642,6 +1703,17 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 asks.setdefault(n, []).extend(msgs)
             for n in asks:                                     # with the slide's open rule failures, fixed together
                 asks[n] += [m for m in fails.get(n, []) if m not in asks[n]]
+            for r in pn.get("reviews") or []:                  # the reviewers' coaching: their path to an 8 goes in
+                who = critics.NAMES.get(r.get("persona"), r.get("persona"))   # as asks, what works is protected
+                for t in r.get("to_8") or []:
+                    n = critics.P.slide_of(t) or 1
+                    if n <= len(slides) and not is_fixed(n - 1):
+                        asks.setdefault(n, []).append(f"[review] {who}, to reach an 8"
+                                                      + ("" if critics.P.slide_of(t) else " (deck-wide)") + f": {t}")
+                for x in r.get("strengths") or []:
+                    n = critics.P.slide_of(x.get("where", ""))
+                    if n and n in asks:
+                        asks[n].append(f"[keep] {who} says this works, keep it: {x.get('what')}")
             act["to_writer"] = sorted(asks)
             whole = revise_deck(asks, tag) if asks and os.environ.get("MH_DECK_REVISE", "1") != "0" else None
             if whole is not None:                         # one pass over the whole deck keeps numbers and story tied

@@ -638,6 +638,10 @@ class WorkbookReview:
             if r.get("status") == "ok" and r.get("headline"):
                 lines.append(f"- {NAMES.get(r['persona'], r['persona'])}: \"{r['headline']}\"")
         lines.append("Sign-off bar: weighted score at least 8.0, no dimension below 7, no blocking issue.")
+        from engines.review.personas import coaching
+        coach = coaching(rnd.get("reviews") or [], NAMES)
+        if coach:
+            lines.append("Their coaching (keep what works; these changes would reach an 8):\n" + coach)
         b = self.best()
         if b and b["round"] != rnd["round"] and rnd["score"] is not None and b["score"] > rnd["score"]:
             lines.append(f"This version scores lower than round {b['round']} ({_scores_line(b)}); the engine keeps "
@@ -851,6 +855,10 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
         issues = [i for i in last["issues"] if i["severity"] in ("blocking", "major")][:12]
         notes = "\n".join(f"- [{i['severity']}, {i.get('persona')}] {i.get('where')}: {i['issue']} Fix: {i.get('fix', '')}"
                           for i in issues)
+        from engines.review.personas import coaching
+        coach = coaching(last.get("reviews") or [], NAMES)
+        if coach:
+            notes += "\n\nTheir coaching (keep what works; these changes would reach an 8):\n" + coach
         try:                                            # the inputs again, with the reviewers' issues
             res = PL.build(task + "\n\nThe partner and MD reviewed the model built from your last inputs. Revise the "
                            "inputs where their issues are about a value, its source or its anchor (cite the fact; "
