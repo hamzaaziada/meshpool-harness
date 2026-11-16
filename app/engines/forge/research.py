@@ -497,6 +497,15 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
         if ocf is not None and capex is not None:
             add(co, "free cash flow", f"{_money(ocf - capex, 'USD')} = operating cash flow {_money(ocf, 'USD')} less "
                 f"capital expenditure {_money(capex, 'USD')}", [(c, "operating cash flow"), (c, "capital expenditure")])
+        if ocf is not None and capex is not None and cash is not None:   # the dated schedule an MD asks for
+            q = (ocf - capex) / 4
+            end = c["cash and cash equivalents"].get("end", "") or "the balance date"
+            add(co, "dated cash schedule (run-rate)", f"cash {_money(cash, 'USD')} at {end}, plus about "
+                f"{_money(q, 'USD')} of free cash flow a quarter at last year's run-rate ({_money(ocf - capex, 'USD')} "
+                "/ 4): cash before payouts after 1 quarter "
+                f"{_money(cash + q, 'USD')}, 2 quarters {_money(cash + 2 * q, 'USD')}; subtract each payout in the "
+                "quarter it is paid to find the trough (a run-rate estimate, not a forecast; state it as one)",
+                [(c, "cash and cash equivalents"), (c, "operating cash flow"), (c, "capital expenditure")])
         if cash is not None and capex:
             add(co, "cash cover of capex", f"{cash / capex:.1f}x = cash {_money(cash, 'USD')} / capital expenditure "
                 f"{_money(capex, 'USD')}", [(c, "cash and cash equivalents"), (c, "capital expenditure")])

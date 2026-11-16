@@ -1392,6 +1392,12 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
         start_story = json.loads((start / "storyline.json").read_text())
         start_slides = json.loads((start / "slides.json").read_text())
         start_slides = start_slides.get("slides", start_slides) if isinstance(start_slides, dict) else start_slides
+        try:                      # the computed economics may be newer than the run: add the ones it lacks
+            from engines.forge.research import economics_facts, next_fact_no
+            have = {(f.get("company"), f.get("label")) for f in facts if f.get("derived")}
+            facts += [f for f in economics_facts(facts, next_fact_no(facts)) if (f["company"], f["label"]) not in have]
+        except Exception:  # noqa: BLE001
+            pass
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
     agenda = wants_agenda(brief, slides_wanted, insert)
     narrative_n = max(3, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
