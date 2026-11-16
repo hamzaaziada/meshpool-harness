@@ -1870,9 +1870,16 @@ choice or the number of items; never layout. Keep node and keep the point of the
         stall = 0
         max_rv = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"]))
         for rnd in range(1, max_rv + 1):
-            pn = critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}"), cfg,
-                                    task_id=f"{task_id}-panel{rnd}")
-            calls += len(pn["reviews"]) * int(pn.get("batches") or 1)
+            pns = [critics.deck_panel(client, str(pptx), slides, str(out / ".review" / f"r{rnd}" / f"s{k}"), cfg,
+                                      task_id=f"{task_id}-panel{rnd}" + (f"s{k}" if k else ""))
+                   for k in range(max(1, int(os.environ.get("MH_DECK_REVIEW_SAMPLES") or 1)))]
+            calls += sum(len(x["reviews"]) * int(x.get("batches") or 1) for x in pns)
+            # one reviewer reply moves by up to 2 points and can raise a false issue: with n samples the panel with the
+            # median score is the round's verdict and the issues the writer gets
+            scored = sorted(pns, key=lambda x: critics.score(x) if critics.score(x) is not None else -1)
+            pn = scored[len(scored) // 2]
+            if len(pns) > 1:
+                pn = dict(pn, samples=[critics.score(x) for x in pns])
             sc = critics.score(pn)
             entry = {"round": rnd, "panel": pn, "score": sc, "signed_off": pn["signed_off"]}
             deck_hist.append(entry)
