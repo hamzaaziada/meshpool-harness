@@ -1490,6 +1490,9 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
+        from engines.forge.playbooks import playbook_checks
+        for n, msgs in playbook_checks(slides, brief).items():
+            fails.setdefault(n, []).extend(msgs)
         for n, msgs in consistency_checks(slides, client, critics.text_models(critics.settings(rules)),
                                           f"{task_id}-consistency").items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)

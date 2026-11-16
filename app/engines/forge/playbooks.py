@@ -8,6 +8,7 @@ writer prompt (storyline, slides, revisions) when the brief matches, whatever th
 """
 from __future__ import annotations
 
+import json
 import re
 
 PLAYBOOKS = [
@@ -37,3 +38,26 @@ PLAYBOOKS = [
 def playbook_for(brief: str) -> str:
     """The playbooks whose trigger matches the brief, as one block for the writer prompts ("" when none)."""
     return "\n".join(text for rx, text in PLAYBOOKS if rx.search(brief or ""))
+
+
+_EY = re.compile(r"(?i)\b(earnings yield|buy ?backs? (earns?|yields?|returns?)|repurchases? (earns?|yields?))\b")
+_CASH = re.compile(r"(?i)\b(t-?bills?|treasury|cash yield|cash earns|interest on cash|risk-free)\b")
+
+
+def playbook_checks(slides: list[dict], brief: str) -> dict[int, list[str]]:
+    """What the playbook forbids, caught in code (the writer reads the playbook, and still uses the easy argument):
+    a capital-allocation slide that sets a buyback's earnings yield against a cash or Treasury yield."""
+    if not playbook_for(brief):
+        return {}
+    out: dict[int, list[str]] = {}
+    for n, s in enumerate(slides, 1):
+        if s.get("fixed"):
+            continue
+        txt = json.dumps({k: v for k, v in s.items() if k not in ("notes", "prov", "source")}, ensure_ascii=False)
+        if _EY.search(txt) and _CASH.search(txt) and not re.search(r"(?i)accretion test", txt):
+            out.setdefault(n, []).append(
+                "[playbook] this slide sets a buyback's earnings yield against a cash or Treasury yield; a reviewing MD "
+                "rejects that as a valuation test. Value the buyback against intrinsic value (the implied return of "
+                "buying at today's price, or the share price against a DCF or multiple range from the facts), and if "
+                "earnings yield stays, label it an EPS-accretion test only, not a comparison with cash")
+    return out

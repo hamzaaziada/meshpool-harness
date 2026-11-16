@@ -368,3 +368,14 @@ def test_capital_allocation_brief_gets_its_playbook():
     pb = playbook_for("Should Costco's board return more cash (buybacks or a special dividend)?")
     assert "authorization is a ceiling" in pb and "sources-and-uses" in pb
     assert playbook_for("Market entry strategy for a coffee chain in Egypt") == ""
+
+
+def test_playbook_check_rejects_earnings_yield_against_cash():
+    from engines.forge.playbooks import playbook_checks
+    brief = "Should the board return more cash through buybacks?"
+    slides = [{"archetype": "cover", "title": "Board briefing"},
+              {"archetype": "argument_only", "title": "A buyback earns 1.88%, below the 4.12% T-bill"},
+              {"archetype": "argument_only", "title": "At $1,106 the shares trade above our $900-1,000 DCF range"}]
+    out = playbook_checks(slides, brief)
+    assert list(out) == [2] and "intrinsic value" in out[2][0]
+    assert playbook_checks(slides, "Market entry in Egypt") == {}
