@@ -365,6 +365,12 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
             seen.add(label)
         for g in growth:
             out.append(dict(g, id=f"F{no + len(out)}", research=True, derived=True, annual=True))
+        if fetch is None and os.environ.get("MH_RESEARCH_GUIDANCE", "1") != "0":   # the primary source for plans:
+            try:                                          # the earnings release and announcements (8-K), 10-Q, 10-K
+                from engines.research.guidance import guidance_facts
+                out += guidance_facts(cik, hit["title"], no + len(out))
+            except Exception:  # noqa: BLE001
+                pass
     return out
 
 
