@@ -430,6 +430,15 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
                 add(f"{name} ({tic}) beta {b:.2f} against the S&P 500, from 2 years of weekly returns to {day(common[-1])} "
                     f"(computed from Yahoo Finance weekly closes; {url})", url)
     if rates and out:
+        try:                                             # the short rate: what cash on the balance sheet earns
+            tb = get("^IRX", "5d", "1d")
+            cl = [(t, c) for t, c in zip(tb.get("timestamp") or [], tb["indicators"]["quote"][0].get("close") or []) if c]
+            if cl:
+                add(f"US 13-week Treasury bill yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance, "
+                    "13-week T-bill index; https://finance.yahoo.com/quote/%5EIRX)", "https://finance.yahoo.com/quote/%5EIRX",
+                    label="treasury bill yield", value=float(cl[-1][1]))
+        except Exception:  # noqa: BLE001
+            pass
         try:
             tn = get("^TNX", "5d", "1d")
             cl = [(t, c) for t, c in zip(tn.get("timestamp") or [], tn["indicators"]["quote"][0].get("close") or []) if c]

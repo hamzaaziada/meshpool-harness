@@ -417,15 +417,17 @@ def test_market_facts_give_price_range_beta_and_risk_free_rate_with_sources():
             return series(idx, wk)
         if sym == "^TNX":
             return series([4.1, 4.2], 86400)
+        if sym == "^IRX":
+            return series([3.9, 3.8], 86400)
         return series(stock, wk) if iv == "1wk" else series([90.0, 120.5, 101.25], 86400)
 
     got = R.market_facts([("ACME CORP", "ACME")], 7, fetch=fetch)
     txt = [f["text"] for f in got]
-    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10"]
+    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10", "F11"]
     assert "share price $101.25" in txt[0] and "finance.yahoo.com/quote/ACME" in txt[0]
     assert "$90.00 to $120.50" in txt[1]
     assert "beta" in txt[2] and abs(float(txt[2].split("beta ")[1].split()[0]) - 2.0) < 0.3
-    assert "10-year Treasury yield 4.20%" in txt[3]
+    assert "13-week Treasury bill yield 3.80%" in txt[3] and "10-year Treasury yield 4.20%" in txt[4]
     assert all(f["research"] and f["source"] for f in got)
 
 

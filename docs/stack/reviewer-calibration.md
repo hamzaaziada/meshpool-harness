@@ -31,5 +31,7 @@ Goldman's own board materials.
 
 - One reference book, one bank. The partner's anchor is a banking book, which his consulting checklist dislikes,
   so his offset is generous; a published consulting deck is the missing second anchor.
+- Workbook reviews use the same per-persona offsets. They measure how harsh each reviewer is and were taken on a
+  deck; no published reference workbook was available to measure a workbook offset directly.
 - The reviewers are DeepSeek v4.1 flash; another reviewer model needs its own calibration
   (`testkit/calibration/reviewers.py` measures it).

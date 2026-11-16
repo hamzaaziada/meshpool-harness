@@ -531,6 +531,17 @@ def _issue_line(i: dict) -> str:
             f"{i['issue']}" + (f" Fix: {i['fix']}" if i.get("fix") else ""))
 
 
+def _review_bar() -> dict:
+    """The sign-off bar with the reviewer calibration (review.personas.bar in the forge rules; the per-persona offsets
+    were measured on a published Goldman Sachs board book, docs/stack/reviewer-calibration.md)."""
+    try:
+        from engines.forge import critics
+        from engines.forge.common import load_rules
+        return critics.settings(load_rules())["bar"]
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 class WorkbookReview:
     """The partner and MD review the workbook each time it passes the engine's finish gate. Not signed off and budget
     left: their merged issues go back to the agent, which keeps working with its tools and calls finish again; the
@@ -573,7 +584,8 @@ class WorkbookReview:
             material = (f"Workbook to review: {rel}. The digest below was built by the engine from the recalculated "
                         f"workbook.\n\n{text}")
             for m in self.models:
-                res = panel(self.client, "workbook", material, model=m, task_id=f"{self.task_id}-r{k}")
+                res = panel(self.client, "workbook", material, model=m, task_id=f"{self.task_id}-r{k}",
+                            bar=_review_bar())
                 used = m
                 errors = [f"{r['persona']}: {r.get('error')}" for r in res["reviews"] if r.get("status") == "not_run"]
                 if len(res["not_run"]) < len(res["reviews"]) or any(x in " ".join(errors) for x in

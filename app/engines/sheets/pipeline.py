@@ -39,7 +39,8 @@ CA_INPUTS = [
     ("dps_growth", "Regular dividend growth per year", "pct", "decimal"),
     ("special_dps", "Special dividend per share, first forecast year ($)", "usd2", "$ per share; 0 if none"),
     ("buyback", "Share buyback per year ($m)", "usd", "$ millions spent each year; 0 if none"),
-    ("cash_yield", "Interest earned on cash", "pct", "decimal, e.g. the short-term rate"),
+    ("cash_yield", "Interest earned on cash", "pct", "decimal: the short-term rate (Treasury bill yield fact), "
+                   "never the 10-year yield; the fact's value as stated"),
 ]
 
 
