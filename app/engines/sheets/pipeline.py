@@ -41,8 +41,8 @@ CA_INPUTS = [
     ("buyback", "Share buyback per year ($m)", "usd", "$ millions spent each year; 0 if none"),
     ("cash_yield", "Interest earned on cash", "pct", "decimal: the short-term rate (Treasury bill yield fact), "
                    "never the 10-year yield; the fact's value as stated"),
-    ("down_growth", "Downside: revenue growth per year", "pct", "decimal: a weak-demand case anchored on the "
-                    "history (e.g. half the 3-year growth); say why"),
+    ("down_growth", "Downside: revenue growth per year", "pct", "decimal: a stress case anchored on the weakest "
+                    "year in the history; say why"),
     ("down_margin_cut", "Downside: cut to the operating cash flow margin", "pct", "decimal points taken off the "
                         "margin, e.g. 0.01; anchored on how far it moved in the history"),
     ("capex_overrun", "Downside: capex overrun", "pct", "decimal, e.g. 0.15 for 15% over plan"),
@@ -63,8 +63,10 @@ guidance: cite that fact in the source and say in the rationale whether you keep
 and why. Only a floor the board would keep and similar policy choices are plain assumptions. Never invent a
 reported figure. Units are fixed: money in $ millions (10-K figures in billions times 1000),
 per-share amounts in $, rates as decimals (6% = 0.06), shares in millions.
-For rev_growth, capex_growth, min_cash, buyback and down_growth also give "low" and "high": the range a committee
-would test, with the reason in the rationale. When a value departs from the history it cites (e.g. 6% growth against
+For rev_growth, capex_growth, ocf_margin, cash_yield, min_cash, buyback and down_growth also give "low" and "high":
+the range a committee would test, with the reason in the rationale (cash_yield: where short rates could go).
+The downside is a stress a credit committee would accept as severe but plausible (the weakest year in the
+history, not half of the average), so it tests whether the buyback must give. When a value departs from the history it cites (e.g. 6% growth against
 a 7.8% three-year history), the rationale says why (guidance, base effects, the plan).
 Return ONLY JSON:
 {"company": "short company name", "title": "workbook title", "first_year": 2027, "years": 5,

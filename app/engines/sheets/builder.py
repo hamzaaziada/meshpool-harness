@@ -2047,7 +2047,7 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     line("fcf", "Free cash flow", "={c}{ocf}+{c}{capex}", total=True)
     r += 1
     line("open", "Opening cash", f"={N['cash']}", "={p}{close}")
-    line("int", "Interest income (on opening cash: on average cash the model would be circular)",
+    line("int", "Interest income",
          "={c}{open}*" + N["cash_yield"])
     line("sh_open", "Opening shares", f"={N['shares']}", "={p}{sh_close}", fmt="num")
     line("dps", "Regular dividend per share", f"={N['dps']}", "={p}{dps}*(1+" + N["dps_growth"] + ")", fmt="usd2")
@@ -2073,6 +2073,12 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     ws.cell(row=rows["regdiv"], column=1, value="Regular dividends (on average shares: buybacks spread over the year)")
     for c in cols:                         # the year's dividends on its average share count, not the opening count
         _f(ws, f"{c}{rows['regdiv']}", f"=-{c}{rows['dps']}*AVERAGE({c}{rows['sh_open']},{c}{rows['sh_close']})", "usd")
+    ws.cell(row=rows["int"], column=1,
+            value="Interest income (special dividend paid at the start of the year, other flows mid-year)")
+    for c in cols:                         # average balance without circularity: the year's own interest is excluded
+        start = f"{c}{rows['open']}+{c}{rows['special']}"
+        _f(ws, f"{c}{rows['int']}", f"=AVERAGE({start},{start}+{c}{rows['fcf']}+{c}{rows['regdiv']}"
+                                    f"+{c}{rows['buyback']})*{N['cash_yield']}", "usd")
     ws.cell(row=rows["special"], column=1, value="Special dividend (paid at the start of the first year, opening shares)")
     line("head", "Headroom over the cash floor", "={c}{close}-" + N["min_cash"])
     line("cover", "Cash cover of capex (x)", '=IF({c}{capex}=0,"NM",{c}{close}/-{c}{capex})', fmt="x")
