@@ -953,7 +953,7 @@ class Agent:
         attempt, recoveries, swapped = -1, 0, False
         # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
-        rl_waited, rl_budget = 0.0, _rate_limit_budget()
+        rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
         self._first_scale = 1.0
         while True:
             attempt += 1
@@ -1067,8 +1067,12 @@ class Agent:
                     wait = min(left, rate_limit_wait(msg, self._n429, cap=left))
                     rl_waited += wait
                     attempt -= 1                           # a rate limit is not a failed attempt
-                    self.emit({"type": "status", "text": f"Rate limited by the endpoint. Waiting {_dur(wait)}, then "
-                                                         "carrying on where it stopped. Press Stop to end."})
+                    if rl_waited - wait - rl_told >= 60 or wait >= 60:   # one line, then at most one a minute
+                        rl_told = rl_waited - wait
+                        so_far = f" (rate limited for {_dur(rl_told)} so far)" if rl_told > 0 else ""
+                        self.emit({"type": "status", "text": f"Rate limited by the endpoint{so_far}. Waiting "
+                                                             f"{_dur(wait)}, then carrying on where it stopped. "
+                                                             "Press Stop to end."})
                     self._sleep(wait)
                     continue
                 if kind == "gateway_reject" and attempt >= 2:

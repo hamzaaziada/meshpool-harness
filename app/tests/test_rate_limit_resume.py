@@ -50,6 +50,16 @@ def test_many_rate_limits_in_a_row_are_waited_out_not_counted_as_failures(tmp_pa
     assert a._n429 == 0                                          # a success resets the backoff
 
 
+def test_a_long_run_of_short_retry_afters_shows_one_line_a_minute_not_one_per_retry(tmp_path):
+    ev = []
+    a = Agent(str(tmp_path), mode="auto", emit=ev.append)
+    a._sleep = lambda s: None
+    a._post, _ = _limited(240, "HTTP 429: slow down [retry-after: 1]")   # 4 min of 1 s waits
+    a._chat(dict(TURN))
+    lines = [e["text"] for e in ev if e["type"] == "status" and "Rate limited" in e["text"]]
+    assert 4 <= len(lines) <= 5 and "so far" in lines[-1], lines
+
+
 def test_a_long_retry_after_is_honoured_up_to_the_budget(tmp_path, monkeypatch):
     monkeypatch.setenv("MH_RATE_LIMIT_WAIT_S", "900")
     a = Agent(str(tmp_path), mode="auto")
