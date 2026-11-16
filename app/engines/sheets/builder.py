@@ -2068,6 +2068,10 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     r += 1
     for i, c in enumerate(cols[1:], 1):
         _f(ws, f"{c}{rows['sh_open']}", f"={cols[i - 1]}{rows['sh_close']}", "num")
+    ws.cell(row=rows["regdiv"], column=1, value="Regular dividends (on average shares: buybacks spread over the year)")
+    for c in cols:                         # the year's dividends on its average share count, not the opening count
+        _f(ws, f"{c}{rows['regdiv']}", f"=-{c}{rows['dps']}*AVERAGE({c}{rows['sh_open']},{c}{rows['sh_close']})", "usd")
+    ws.cell(row=rows["special"], column=1, value="Special dividend (paid at the start of the first year, opening shares)")
     line("head", "Headroom over the cash floor", "={c}{close}-" + N["min_cash"])
     line("cover", "Cash cover of capex (x)", '=IF({c}{capex}=0,"NM",{c}{close}/-{c}{capex})', fmt="x")
     F0, L = cols[0], cols[-1]
