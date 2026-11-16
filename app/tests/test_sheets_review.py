@@ -295,3 +295,16 @@ def test_formulas_with_unformatted_python_placeholders_are_named(tmp_path):
            and i["check"] == "unformatted_placeholder"]
     assert len(got) == 6 and "{ocf_row}" in got[0]["detail"] and "f-string" in got[0]["detail"]
     assert "8 formulas" in got[-1]["detail"]
+
+
+def test_median_panel_keeps_the_middle_sample(monkeypatch, tmp_path):
+    """MH_REVIEW_SAMPLES=3: the panel whose mean score is the median is kept; every sample is recorded."""
+    from engines.sheets.engine import WorkbookReview
+    monkeypatch.setenv("MH_REVIEW_SAMPLES", "3")
+    replies = iter([{"scores": {"md": 5.0, "partner": 5.0}, "not_run": [], "tag": "low"},
+                    {"scores": {"md": 9.0, "partner": 9.0}, "not_run": [], "tag": "high"}])
+    rv = WorkbookReview.__new__(WorkbookReview)
+    rv.client, rv.task_id = None, "t"
+    first = {"scores": {"md": 7.0, "partner": 7.0}, "not_run": [], "tag": "mid"}
+    out = rv._median_panel(first, "m", "material", 1, lambda *a, **k: next(replies))
+    assert out["tag"] == "mid" and len(out["samples"]) == 3

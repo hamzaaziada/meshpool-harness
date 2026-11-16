@@ -2108,23 +2108,32 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
         line("d_fcf", "Free cash flow, downside",
              "={c}{d_rev}*(" + N["ocf_margin"] + "-" + N["down_margin_cut"] + ")+{c}{capex}*(1+" + N["capex_overrun"] + ")",
              total=True)
-        # management's response: the buyback is suspended in any year it would take cash below the floor
+        # management's response, in order: suspend the buyback first, then defer the special dividend, in any year
+        # paying it would take cash below the floor; regular dividends are kept
+        line("d_special", "Special dividend, downside (deferred if it breaches the floor with the buyback suspended)",
+             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}<" + N["min_cash"]
+             + ",0,{c}{special})")
         line("d_buyback", "Share buyback, downside (suspended in a year it would breach the floor)",
-             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}<" + N["min_cash"]
+             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{buyback}<" + N["min_cash"]
              + ",0,{c}{buyback})")
-        line("d_close", "Closing cash, downside (dividends kept, buyback suspended where needed)",
-             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{d_buyback}",
-             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{d_buyback}", total=True)
+        line("d_close", "Closing cash, downside (regular dividends kept; buyback, then special, give way)",
+             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{d_buyback}",
+             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{d_buyback}", total=True)
         for i, c in enumerate(cols[1:], 1):          # later years test last year's downside closing cash
             pc = cols[i - 1]
-            _f(ws, f"{c}{rows['d_buyback']}", f"=IF({pc}{rows['d_close']}+{c}{rows['d_fcf']}+{c}{rows['int']}"
-                                              f"+{c}{rows['regdiv']}+{c}{rows['special']}+{c}{rows['buyback']}<"
+            base = (f"{pc}{rows['d_close']}+{c}{rows['d_fcf']}+{c}{rows['int']}+{c}{rows['regdiv']}")
+            _f(ws, f"{c}{rows['d_special']}", f"=IF({base}+{c}{rows['special']}<{N['min_cash']},0,"
+                                               f"{c}{rows['special']})", "usd")
+            _f(ws, f"{c}{rows['d_buyback']}", f"=IF({base}+{c}{rows['d_special']}+{c}{rows['buyback']}<"
                                               f"{N['min_cash']},0,{c}{rows['buyback']})", "usd")
         line("d_head", "Headroom over the cash floor, downside", "={c}{d_close}-" + N["min_cash"])
         for key, expr, lab in (("down_cash_end", f"={cols[-1]}{rows['d_close']}", "Closing cash, downside"),
                                ("down_suspended", f"=COUNTIFS({cols[0]}{rows['d_buyback']}:{cols[-1]}{rows['d_buyback']},0,"
                                                   f"{cols[0]}{rows['buyback']}:{cols[-1]}{rows['buyback']},\"<>0\")",
                                 "Years the buyback is suspended, downside"),
+                               ("down_special_deferred", f"=SUM({cols[0]}{rows['d_special']}:{cols[-1]}{rows['d_special']})"
+                                                         f"-SUM({cols[0]}{rows['special']}:{cols[-1]}{rows['special']})",
+                                "Special dividend deferred, downside"),
                                ("down_min_headroom", f"=MIN({cols[0]}{rows['d_head']}:{cols[-1]}{rows['d_head']})",
                                 "Lowest headroom, downside")):
             ws.cell(row=r, column=1, value=lab)

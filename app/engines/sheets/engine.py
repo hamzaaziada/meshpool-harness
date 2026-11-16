@@ -591,6 +591,7 @@ class WorkbookReview:
                 if len(res["not_run"]) < len(res["reviews"]) or any(x in " ".join(errors) for x in
                                                                      ("HTTP 401", "HTTP 403")):
                     break                       # someone answered, or the key itself was refused: no other model helps
+            res = self._median_panel(res, used, material, k, panel) if res and used else res
         else:
             errors = [err]
         rnd = {"round": k, "turn": getattr(self.ws, "turn", 0) + 1, "final": final, "workbook": rel,
@@ -598,13 +599,33 @@ class WorkbookReview:
                "signed_off": bool(res and res["signed_off"]), "scores": (res or {}).get("scores", {}),
                "not_run": (res or {}).get("not_run", ["md", "partner"]), "errors": errors,
                "reviews": (res or {}).get("reviews", []), "issues": (res or {}).get("issues", []),
-               "research_requests": (res or {}).get("research_requests", [])}
+               "research_requests": (res or {}).get("research_requests", []),
+               "samples": (res or {}).get("samples", [])}
         rnd["score"] = _rscore(rnd)
         self.rounds.append(rnd)
         if rnd["score"] is None and not any(r.get("status") == "unparsed" for r in rnd["reviews"]):
             self.stopped = "; ".join(errors)[:400] or "no reply"
         self.save()
         return rnd
+
+    def _median_panel(self, first: dict, model: str, material: str, k: int, panel) -> dict:
+        """A single reviewer reply moves by up to 1.5 points on the same workbook. With MH_REVIEW_SAMPLES=n (default
+        1) the panel is asked n times and the panel whose mean score is the median is kept, so one generous or harsh
+        reply neither signs a workbook off nor sinks it. All samples are kept in the round record."""
+        n = max(1, int(os.environ.get("MH_REVIEW_SAMPLES") or 1))
+        if n == 1 or first.get("not_run"):
+            return first
+        runs = [first] + [panel(self.client, "workbook", material, model=model, task_id=f"{self.task_id}-r{k}s{i}",
+                                bar=_review_bar()) for i in range(1, n)]
+        ok = [r for r in runs if not r.get("not_run") and r.get("scores")
+              and all(v is not None for v in r["scores"].values())]
+        if not ok:
+            return first
+        mean = lambda r: sum(r["scores"].values()) / len(r["scores"])     # noqa: E731
+        ok.sort(key=mean)
+        pick = dict(ok[len(ok) // 2])
+        pick["samples"] = [r.get("scores", {}) for r in runs]
+        return pick
 
     def best(self) -> dict | None:
         scored = [r for r in self.rounds if r["score"] is not None and r.get("passed_checks", True)]
