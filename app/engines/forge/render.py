@@ -3360,7 +3360,18 @@ def _reading_order(prs) -> None:
         shapes = [sh for sh in sl.shapes if sh._element.tag.rsplit("}", 1)[-1] in tags]
         tops = [round((sh.top if sh.top is not None else 0) / 9144) for sh in shapes]   # 0.01in steps
         title = [sh.is_placeholder and sh.placeholder_format.type in (1, 3) for sh in shapes]   # TITLE, CENTER_TITLE
-        order = sorted(range(len(shapes)), key=lambda i: (not title[i], tops[i], i))   # the title is read first
+        ti = title.index(True) if any(title) else None
+        behind = set()                                     # fills drawn under the title (a full-bleed cover, a band)
+        if ti is not None:                                 # stay under it: the title is read first, never hidden
+            t = shapes[ti]
+            for i in range(ti):
+                sh = shapes[i]
+                if (not (sh.has_text_frame and sh.text_frame.text.strip()) and None not in (sh.left, sh.top, t.left, t.top)
+                        and sh.left < t.left + t.width and t.left < sh.left + sh.width
+                        and sh.top < t.top + t.height and t.top < sh.top + sh.height):
+                    behind.add(i)
+        rank = [0 if i in behind else 1 if title[i] else 2 for i in range(len(shapes))]
+        order = sorted(range(len(shapes)), key=lambda i: (rank[i], tops[i] if rank[i] == 2 else 0, i))
         if order == list(range(len(shapes))):
             continue
         anchor = shapes[-1]._element.getnext()           # extLst (if any) stays last

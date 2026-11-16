@@ -50,3 +50,16 @@ def test_reading_order_puts_the_title_first():
     sl.shapes._spTree.insert(2, low._element)                # drawn first, sits lowest
     _reading_order(prs)
     assert [sh.text_frame.text for sh in sl.shapes] == ["The title", "Kicker above the title", "Body"]
+
+
+def test_reading_order_keeps_a_cover_fill_behind_the_title(tmp_path):
+    """The dark cover's full-bleed rectangle is drawn first; the title must stay above it (not hidden under it)."""
+    from pptx import Presentation as P
+    from engines.forge.render import render
+    out = tmp_path / "c.pptx"
+    render([{"archetype": "cover", "title": "Fund the warehouses and return cash", "subtitle": "Board briefing",
+             "date": "November 2026"}], str(out), carry=False)
+    shapes = list(P(str(out)).slides[0].shapes)
+    ti = next(i for i, sh in enumerate(shapes) if sh.is_placeholder and sh.placeholder_format.type in (1, 3))
+    big = [i for i, sh in enumerate(shapes) if sh.width and sh.height and sh.width * sh.height > 0.5 * 12192000 * 6858000]
+    assert all(i < ti for i in big), (ti, big, [sh.name for sh in shapes])
