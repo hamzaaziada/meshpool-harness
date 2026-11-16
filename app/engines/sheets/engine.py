@@ -795,8 +795,11 @@ def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> 
 
 def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | None:
     """A request a recipe covers (engines/sheets/pipeline.py) is built in code: one model call for the sourced inputs,
-    then the engine checks and the partner and MD review. None when no recipe applies or the build fails (the agent
-    then builds it as before)."""
+    then the engine checks and the partner and MD review. Not signed off: their issues go back to the input call
+    (re-source, re-anchor, never invent), the workbook is rebuilt and reviewed again, up to the review rounds; the
+    best-scoring version that passes the checks is delivered. None when no recipe applies or the first build fails
+    (the agent then builds it as before)."""
+    import shutil
     from engines.sheets import pipeline as PL
     recipe = PL.applies(task)
     if not recipe:
@@ -807,24 +810,49 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
         ws.pipeline_note = f"The {recipe} recipe could not build it ({type(e).__name__}: {e}); the agent built it."
         return None
     path = res["path"]
-    rep: dict = {}
-    msg = finish_check("", [path], ws, report=rep)
     answer = [f"Built {Path(path).name}: " + " ".join(res["notes"])]
-    if msg:
-        answer.append("Engine checks: " + msg)
-    else:
-        answer.append("It passes the engine checks (recalculated, every check OK).")
+    rounds = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or 3)) if rv else 1
+    msg, last = None, None
+    for k in range(1, rounds + 1):
+        rep: dict = {}
+        msg = finish_check("", [path], ws, report=rep)
+        if not rv:
+            break
+        try:
+            last = rv.run_round(path, rep, final=True)
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Partner and MD review failed: {type(e).__name__}: {e}")
+            break
+        if msg:
+            last["passed_checks"] = False
+        if last["signed_off"] or last["score"] is None or k == rounds:
+            break
+        issues = [i for i in last["issues"] if i["severity"] in ("blocking", "major")][:12]
+        notes = "\n".join(f"- [{i['severity']}, {i.get('persona')}] {i.get('where')}: {i['issue']} Fix: {i.get('fix', '')}"
+                          for i in issues)
+        try:                                            # the inputs again, with the reviewers' issues
+            res = PL.build(task + "\n\nThe partner and MD reviewed the model built from your last inputs. Revise the "
+                           "inputs where their issues are about a value, its source or its anchor (cite the fact; "
+                           "never invent a figure). Issues the inputs cannot fix are recorded in the review.\n" + notes,
+                           ws, client, model, task_id)
+            path = res["path"]
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Revision round {k + 1} could not rebuild ({type(e).__name__}: {e}).")
+            break
+    best = rv.best() if rv else None
+    if best and best.get("copy") and Path(best["copy"]).exists():
+        if Path(best["copy"]).resolve() != Path(path).resolve():
+            shutil.copy2(best["copy"], path)           # deliver the best-scoring version that passed the checks
+        msg = None
+    answer.append("It passes the engine checks (recalculated, every check OK)." if not msg else "Engine checks: " + msg)
     out = {"ok": not msg, "answer": "", "artifacts": [path], "evidence": [f"engine finish check on {Path(path).name}: "
                                                                           + ("PASS" if not msg else "FAIL")],
            "turns": 1, "reason": None if not msg else "engine checks failed", "usage": {}, "recipe": recipe}
     if rv:
         try:
-            rnd = rv.run_round(path, rep, final=True)
-            if msg:
-                rnd["passed_checks"] = False
-            answer.append(rv.report(rnd["round"]))
+            answer.append(rv.report(best["round"] if best else (last or {}).get("round")))
         except Exception as e:  # noqa: BLE001
-            answer.append(f"Partner and MD review failed: {type(e).__name__}: {e}")
+            answer.append(f"Partner and MD review report failed: {type(e).__name__}: {e}")
     out["answer"] = "\n\n".join(a for a in answer if a)
     return out
 

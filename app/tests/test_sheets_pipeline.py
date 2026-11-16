@@ -38,3 +38,39 @@ def test_capital_allocation_recipe_builds_a_workbook_that_passes_the_engine_chec
     assert finish_check("", [res["path"]], ws) is None
     assert qa.value(res["path"], "Checks!F3") == "OK"
     assert "assumption" in " ".join(res["notes"])
+
+
+@pytest.mark.skipif(not find_soffice(), reason="LibreOffice not installed")
+def test_the_pipeline_revises_its_inputs_with_the_reviewers_issues(tmp_path, monkeypatch):
+    """Round 1 not signed off: the issues go back to the input call, the workbook is rebuilt and reviewed again."""
+    from engines.sheets import engine as E
+    monkeypatch.setenv("MH_REVIEW_ROUNDS", "2")
+    asked = []
+
+    class Model(Inputs):
+        def chat(self, *, model, messages, **kw):
+            asked.append(messages[-1]["content"])
+            return super().chat(model=model, messages=messages, **kw)
+
+    class Review:
+        def __init__(self):
+            self.rounds = []
+
+        def run_round(self, path, rep, final=False):
+            k = len(self.rounds) + 1
+            rnd = {"round": k, "signed_off": k == 2, "score": 6.0 + k, "copy": path, "issues": [
+                {"severity": "blocking", "persona": "md", "where": "Inputs!rev_growth", "issue": "unsourced growth",
+                 "fix": "anchor on the 3-year history"}] if k == 1 else []}
+            self.rounds.append(rnd)
+            return rnd
+
+        def best(self):
+            return max(self.rounds, key=lambda r: r["score"])
+
+        def report(self, k):
+            return f"best round {k}"
+
+    ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    out = E._pipeline("capital allocation model for Costco", ws, Model(), "m", "t", Review())
+    assert len(asked) == 2 and "unsourced growth" in asked[1] and "anchor on the 3-year history" in asked[1]
+    assert out["ok"] and "best round 2" in out["answer"]
