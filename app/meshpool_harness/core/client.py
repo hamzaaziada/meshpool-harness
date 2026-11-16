@@ -84,20 +84,21 @@ def classify_error(msg: str) -> str:
     return "fatal"
 
 
-def rate_limit_wait(msg: str, n429: int, backoff: bool = True) -> float:
-    """Seconds to wait after the n-th 429 in a row: the reset time when the message gives one, else 3, 6, 12 ... 60 s
-    (backoff; "please slow down" 429s clear in seconds) or 65 s (a token window)."""
+def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None = None) -> float:
+    """Seconds to wait after the n-th 429 in a row: the reset time when the message gives one (up to cap), else
+    3, 6, 12 ... 60 s (backoff; "please slow down" 429s clear in seconds) or 65 s (a token window). With no cap a
+    retry-after is held to 300 s and a reset time to 120 s; the app agent passes what is left of its wait budget."""
     import calendar
     import re
     import time
     wait = min(60, 3 * 2 ** (max(1, n429) - 1)) if backoff else 65
     ra = re.search(r"\[retry-after: (\d+(?:\.\d+)?)\]", msg or "")   # the gateway said how long
     if ra:
-        return max(1.0, min(300.0, float(ra.group(1))))
+        return max(1.0, min(300.0 if cap is None else max(1.0, cap), float(ra.group(1))))
     mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg or "")
     if mt:
         reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
-        wait = max(5, min(120, reset - time.time() + 3))
+        wait = max(5, min(120.0 if cap is None else max(5.0, cap), reset - time.time() + 3))
     return wait
 
 

@@ -27,8 +27,14 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
-_NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429",
+_NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429|"
+                     r"rate.?limit|too many requests|(?:code|status)\W{0,3}429\b|overloaded",
                      re.I)                          # an outage or a key whose slots are full: wait it out
+# A turn cut off by a rate limit or an outage (no goal set): the chat waits, then picks the task up by itself, up to
+# RESUME_TRIES times in a row (30 s, 1, 2, 4, 5 min). Typing a message or pressing Stop takes over at once.
+RESUME_NEXT = "Continue where you left off."
+RESUME_WAIT_S = 30
+RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
          "checkpoint", "status", "plan"}
@@ -603,6 +609,8 @@ class Session:
                         self.queue = []
                 if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
                     nxt = self._goal_next(ev0)
+                elif not nxt and not getattr(self.agent, "_stop", False) and not self._stop_req:
+                    nxt = self._resume_next(ev0)
                 if nxt:
                     self.emit({"type": "queued", "text": "", "n": 0})
                     self._start_turn(*nxt)               # stays "working": the queued message goes straight in
@@ -679,18 +687,7 @@ class Session:
             wait = min(10 * GOAL_NET_WAIT_S, GOAL_NET_WAIT_S * 2 ** (n - 1))
             self.emit({"type": "status", "text": f"Goal: the model connection failed. Picking the goal up again in "
                                                  f"{wait:.0f} s (try {n}). Press Stop or clear the goal to end it."})
-            end = time.time() + wait
-            while time.time() < end:
-                if not self.goal or getattr(self, "_stop_req", False) or getattr(self.agent, "_stop", False):
-                    return None
-                if hasattr(self.agent, "has_steers") and self.agent.has_steers():
-                    break                            # the user wrote meanwhile: go now, their message goes along
-                with self.lock:
-                    if getattr(self, "queue", None):  # ACP harnesses queue it instead: send it, not GOAL_NEXT
-                        items, self.queue = self.queue, []
-                        return ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                time.sleep(min(0.5, max(0.0, end - time.time())))
-            return (GOAL_NEXT, [])
+            return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal))
         if not failed:
             self._goal_net = 0
         if verdict == "DONE":
@@ -710,6 +707,48 @@ class Session:
                                                  "with what to try next; the goal stays set."})
             return None
         return (GOAL_NEXT, [])
+
+    def _pause(self, wait: float, then: str, keep=lambda: True):
+        """Wait out an outage or a rate limit before the next turn. Returns (message, images) to send next: `then`
+        when the wait runs out, or what the user wrote meanwhile; None when Stop is pressed or keep() turns false."""
+        end = time.time() + wait
+        while time.time() < end:
+            if not keep() or getattr(self, "_stop_req", False) or getattr(self.agent, "_stop", False):
+                return None
+            if hasattr(self.agent, "has_steers") and self.agent.has_steers():
+                break                                # the user wrote meanwhile: go now, their message goes along
+            with self.lock:
+                if getattr(self, "queue", None):     # ACP harnesses queue it instead: send it, not `then`
+                    items, self.queue = self.queue, []
+                    return ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
+            time.sleep(min(0.5, max(0.0, end - time.time())))
+        return (then, [])
+
+    def _resume_next(self, ev0: int):
+        """After a turn with no goal: when it ended on a rate limit or an outage (not Stop), wait and pick the task
+        up again by itself, so a long task is not left half done. None when there is nothing to pick up."""
+        if os.environ.get("MH_AUTO_RESUME", "1") == "0":
+            return None
+        with self.lock:
+            evs = self.events[ev0:]
+        if any(e.get("type") == "interrupted" for e in evs):
+            self._resume_n = 0
+            return None
+        if not any(e.get("type") == "error" and _NET_RE.search(e.get("text") or "") for e in evs):
+            self._resume_n = 0                       # a good turn (or another kind of error): start the count again
+            return None
+        n = self._resume_n = getattr(self, "_resume_n", 0) + 1
+        if n > RESUME_TRIES:
+            self._resume_n = 0
+            self.emit({"type": "status", "text": f"The model is still unavailable after {RESUME_TRIES} tries. "
+                                                 "Everything done so far is kept: send \"continue\" when it is back "
+                                                 "to pick up where it stopped."})
+            return None
+        wait = min(10 * RESUME_WAIT_S, RESUME_WAIT_S * 2 ** (n - 1))
+        self.emit({"type": "status", "text": f"The model is unavailable right now (rate limit or outage). Picking "
+                                             f"the task up again in {wait:.0f} s (try {n} of {RESUME_TRIES}). Type "
+                                             "a message or press Stop to take over."})
+        return self._pause(wait, RESUME_NEXT)
 
     def set_plan(self, on: bool):
         self.plan = bool(on)
