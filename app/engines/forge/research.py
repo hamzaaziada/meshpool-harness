@@ -301,6 +301,9 @@ def _days_between(a: str, b: str) -> int:
         return 0
 
 
+GROWTH_LINES = {"revenue", "operating cash flow", "capital expenditure"}
+
+
 def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=None) -> list[dict]:
     """Latest reported values for each named company that files with the SEC, as sourced facts (F ids from no).
     Each fact names the form, period end, filing date and the filing's URL."""
@@ -323,6 +326,7 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
         except Exception:  # noqa: BLE001
             continue
         seen = set()
+        growth: list[dict] = []
         ends = [u.get("end", "") for ns, tag, unit, _ in XBRL_LINES for u in
                 ((facts.get("facts", {}).get(ns, {}).get(tag) or {}).get("units") or {}).get(unit) or []
                 if u.get("form") in ("10-K", "10-Q")]
@@ -342,12 +346,25 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
             else:
                 per = f"at {u['end']}"
             url = SP._filing_url(cik, u.get("accn", ""))
+            if label in GROWTH_LINES and u.get("start") and _days_between(u["start"], u["end"]) > 330:
+                past = [x for x in pts if x.get("start") and _days_between(x["start"], x["end"]) > 330
+                        and 1050 <= _days_between(x["end"], u["end"]) <= 1140 and float(x.get("val") or 0) > 0]
+                if past and float(u["val"]) > 0:      # the company's own 3-year growth: what a forecast is anchored on
+                    x = max(past, key=lambda z: z.get("filed", ""))
+                    cagr = (float(u["val"]) / float(x["val"])) ** (1 / 3) - 1
+                    growth.append({"label": f"{label} 3-year growth", "value": cagr, "text":
+                                   f"{hit['title']} {label} grew {cagr:.1%} a year over three years, from "
+                                   f"{_money(float(x['val']), unit)} (year to {x['end']}) to "
+                                   f"{_money(float(u['val']), unit)} (year to {u['end']}) (computed from SEC XBRL {tag}; "
+                                   f"{url})", "company": hit["title"], "source": url})
             out.append({"id": f"F{no + len(out)}", "text": f"{hit['title']} {label} {_money(float(u['val']), unit)} "
                         f"{per} ({u.get('form')} filed {u.get('filed')}; SEC XBRL {tag}; {url})",
                         "source": url, "research": True, "company": hit["title"], "label": label,
                         "value": float(u["val"]), "annual": not u.get("start") or
                         _days_between(u["start"], u["end"]) > 330, "end": u.get("end", "")})
             seen.add(label)
+        for g in growth:
+            out.append(dict(g, id=f"F{no + len(out)}", research=True, derived=True, annual=True))
     return out
 
 
@@ -411,13 +428,22 @@ def market_facts(tickers: list[tuple[str, str]], no: int, fetch=None, rates: boo
             b = _beta([sw[k] for k in common], [iw[k] for k in common])
             if b is not None:
                 add(f"{name} ({tic}) beta {b:.2f} against the S&P 500, from 2 years of weekly returns to {day(common[-1])} "
-                    f"(computed from Yahoo Finance weekly closes; {url})", url)
+                    f"(computed from Yahoo Finance weekly closes; {url})", url, company=name, label="beta", value=b)
     if rates and out:
+        try:                                             # the short rate: what cash on the balance sheet earns
+            tb = get("^IRX", "5d", "1d")
+            cl = [(t, c) for t, c in zip(tb.get("timestamp") or [], tb["indicators"]["quote"][0].get("close") or []) if c]
+            if cl:
+                add(f"US 13-week Treasury bill yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance, "
+                    "13-week T-bill index; https://finance.yahoo.com/quote/%5EIRX)", "https://finance.yahoo.com/quote/%5EIRX",
+                    label="treasury bill yield", value=float(cl[-1][1]))
+        except Exception:  # noqa: BLE001
+            pass
         try:
             tn = get("^TNX", "5d", "1d")
             cl = [(t, c) for t, c in zip(tn.get("timestamp") or [], tn["indicators"]["quote"][0].get("close") or []) if c]
             if cl:
-                add(f"US 10-year Treasury yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance ^TNX; "
+                add(f"US 10-year Treasury yield {cl[-1][1]:.2f}% at close on {day(cl[-1][0])} (Yahoo Finance, US 10-year Treasury yield index; "
                     "https://finance.yahoo.com/quote/%5ETNX)", "https://finance.yahoo.com/quote/%5ETNX",
                     label="treasury yield", value=float(cl[-1][1]))
         except Exception:  # noqa: BLE001
@@ -441,6 +467,9 @@ def _tickers(names: list[str], ticker_map: dict | None = None) -> list[tuple[str
         if hit:
             out.append((str(hit["title"]), str(hit["ticker"])))
     return out
+
+
+ERP = 0.05            # equity risk premium for the CAPM cost of equity: an assumption, said so wherever it is used
 
 
 def economics_facts(facts: list[dict], no: int) -> list[dict]:
@@ -474,13 +503,31 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
         if price and shares:
             add(co, "market capitalisation", f"{_money(price * shares, 'USD')} = share price ${price:,.2f} x "
                 f"{shares / 1e6:,.1f}M shares", [(c, "share price"), (c, "shares outstanding")])
-            add(co, "per $1B returned", f"a buyback retires {1e9 / price / 1e6:,.2f}M shares ({1e9 / price / shares:.2%} of "
-                f"{shares / 1e6:,.1f}M) at ${price:,.2f}; a special dividend pays ${1e9 / shares:,.2f} per share",
-                [(c, "share price"), (c, "shares outstanding")])
+            add(co, "scaling rule for any amount returned", "(a rate to multiply, not a proposed amount): every $1B "
+                f"spent on a buyback retires {1e9 / price / 1e6:,.2f}M shares ({1e9 / price / shares:.2%} of "
+                f"{shares / 1e6:,.1f}M) at ${price:,.2f}, and every $1B paid as a special dividend is "
+                f"${1e9 / shares:,.2f} per share; for $X billion multiply both by X (shares retired = amount / price, "
+                "dividend per share = amount / shares)", [(c, "share price"), (c, "shares outstanding")])
         if price and eps:
-            add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (the "
-                "return a buyback earns on each dollar, before lost interest on the cash)",
-                [(c, "diluted EPS"), (c, "share price")])
+            add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (an "
+                "EPS-accretion test only: it ignores growth, so it is not the return a buyback earns and is never "
+                "compared with a cash yield)", [(c, "diluted EPS"), (c, "share price")])
+            rf = next((f for f in facts if f.get("label") == "treasury yield" and isinstance(f.get("value"), (int, float))),
+                      None)
+            beta = v(c, "beta")
+            if rf is not None and beta is not None:      # what a shareholder's dollar must earn: the buyback's hurdle
+                ke = rf["value"] / 100 + beta * ERP
+                add(co, "cost of equity (CAPM)", f"{ke:.1%} = 10-year Treasury {rf['value']:.2f}% ({rf['id']}) + beta "
+                    f"{beta:.2f} x {ERP:.1%} equity risk premium (the premium is an assumption, a common long-run "
+                    "estimate; state it as one)", [(c, "beta")])
+            g_key = next((k for k in ("operating cash flow 3-year growth", "revenue 3-year growth") if k in c), None)
+            if g_key:                                  # the valuation test an MD accepts: earnings yield plus growth
+                g = c[g_key]["value"]
+                add(co, "implied return of buying shares at today's price",
+                    f"{eps / price + g:.1%} a year = earnings yield {eps / price:.2%} + {g_key.replace(' 3-year growth', '')} "
+                    f"growth {g:.1%} a year over three years (a growing-perpetuity estimate: the return a buyback "
+                    "earns if that growth holds; compare it with the cost of equity, and show it at lower growth)",
+                    [(c, "diluted EPS"), (c, "share price"), (c, g_key)])
         if price and eps and shares and ni:
             left = shares - 1e9 / price
             add(co, "diluted EPS after a $1B buyback", f"${eps * shares / left:,.2f} "
@@ -498,9 +545,32 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
     return out
 
 
+_ASK = {"what", "how", "which", "does", "do", "is", "are", "why", "when", "who", "will", "can", "should", "has",
+        "have", "the", "a", "an", "if", "at", "in", "on", "for", "of", "and", "or", "board", "management", "company"}
+
+
+def _about_subject(question: str, subj: list[str]) -> bool:
+    """True when the question names no company other than the subject (it is about the subject even if unnamed)."""
+    if not subj:
+        return False
+    low = {n.lower() for n in subj}
+    words = re.findall(r"\b[A-Z][a-zA-Z&'.-]{2,}\b", question)
+    others = [w for w in words if w.lower() not in _ASK and w.lower().rstrip("'s") not in low and not w.isupper()
+              and not re.match(r"^(FY|Q)\d", w) and w.lower() not in ("treasury", "fed", "federal", "sec", "gaap",
+                                                                     "january", "february", "march", "april", "may",
+                                                                     "june", "july", "august", "september",
+                                                                     "october", "november", "december")]
+    return not others
+
+
+def _mentions(p, subj: list[str]) -> bool:
+    hay = " ".join(str(x or "") for x in (p.text, p.source.label if p.source else "", p.source.url if p.source else ""))
+    return any(re.search(r"(?i)\b" + re.escape(n), hay) for n in subj)
+
+
 def investigate(questions: list[dict | str], facts: list[dict], *, client=None, models: list[str] | None = None,
                 out_dir: str | None = None, rules: dict | None = None, task_id: str = "forge-research",
-                search_fn=None, fetch_fn=None) -> dict:
+                search_fn=None, fetch_fn=None, names: list[str] | None = None) -> dict:
     """Answer each question from the web (capped and timed). Returns {"facts": [new facts], "questions": [{question,
     why, status, facts, sources}], "seconds", "budget"}. New fact ids continue after the highest F id in `facts`."""
     from engines.research.library import Corpus
@@ -515,16 +585,25 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
 
     edgar_ok = search_fn is None and os.environ.get("MH_RESEARCH_EDGAR", "1") != "0"   # tests stub the web
     dead0: set = set()
-    mq = _queries_model([q["question"] for q in qs], client, models, task_id, dead0) if qs else None
-    for i, q in enumerate(qs):                         # short queries a search engine can use, not the sentence
+    need = [q for q in qs if not q.get("queries")]       # a caller (the dossier) may bring its own queries
+    mq = _queries_model([q["question"] for q in need], client, models, task_id, dead0) if need else None
+    for i, q in enumerate(need):                         # short queries a search engine can use, not the sentence
         q["queries"] = [x for x in ((mq[i] if mq else []) + [_keywords(q["question"])]) if x.strip()][:3]
+
+    subj = [w for w in (re.sub(r"[^\w ]", " ", str(n or "")).split()[:1] for n in (names or [])) if w]
+    subj = [w[0] for w in subj if len(w[0]) >= 3]       # "Costco Wholesale" -> "Costco": the name people search
+    for q in qs:                                        # a reviewer's question rarely names the company: a search
+        q["_subject"] = _about_subject(q["question"], subj)  # for "the FY2027 capex plan" finds someone else's
+        if q["_subject"]:
+            q["queries"] = [x if any(n.lower() in x.lower() for n in subj) else f'"{subj[0]}" {x}'
+                            for x in q["queries"]]
 
     def gather(q):                                     # search + read in parallel across questions
         if time.time() - t0 > budget:
             return q, None, "skipped: time budget used"
         try:
             got = corpus.search_and_read(q["queries"], per_query=max(4, n_src + 2), max_new=n_src,
-                                         workers=n_src)
+                                         workers=n_src, recency=q.get("recency") or "")
             if edgar_ok:                                # primary filings: the place a banker checks first
                 names = [w for w in _keywords(q["question"], 6).split() if w[:1].isupper() and len(w) > 2][:2]
                 if names:
@@ -543,8 +622,8 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
         gathered = list(ex.map(gather, qs))
     new_facts: list[dict] = []
     if edgar_ok:                                     # reported figures for every company the questions name
-        names = []
-        for q in qs:
+        names = list(names or [])
+        for q in qs if not names else []:
             names += [w for w in _keywords(q["question"], 8).split() if w[:1].isupper() and len(w) > 2
                       and not re.match(r"^(EV|NTM|GW|DCF|WACC|EPS|IC|CEO|CFO|FY\d*|Q\d)$", w)][:3]
         known0 = {re.sub(r"\W+", "", f.get("text", "").lower())[:200]: f for f in facts}
@@ -577,7 +656,7 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
             entry["status"] = why
             log.append(entry)
             continue
-        passages = corpus.find(q["question"], k=6, per_source=2, min_tier=3)
+        passages = corpus.find(q["question"], k=8, per_source=4, min_tier=3)   # 2 per source missed key 10-K facts
         picked = None
         if client is not None and models and passages and time.time() - t0 <= budget and "models" not in dead:
             picked = _pick_model(q["question"], passages, k, client, models, task_id, dead)
@@ -586,6 +665,8 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
         for text, p in picked:
             if not _holds(text, p.text):                # a number or words the passage does not state: dropped
                 continue
+            if q.get("_subject") and not _mentions(p, subj):   # about the subject, but the page is about
+                continue                                         # another company (a Microsoft call for Costco)
             key = re.sub(r"\W+", "", text.lower())[:200]
             if key in known:
                 continue

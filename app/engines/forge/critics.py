@@ -31,9 +31,17 @@ DEFAULTS = {"enabled": True, "bar": None, "max_storyboard_rounds": 3, "max_revie
             "who": ["partner", "md"]}
 
 
+REFERENCE_CALIBRATION = {"partner": 3.2, "md": 2.3}   # measured, docs/stack/reviewer-calibration.md
+
+
 def settings(rules: dict | None) -> dict:
     cfg = dict(DEFAULTS, **((rules or {}).get("review") or {}).get("personas") or {})
     cfg["bar"] = dict(P.BAR, **(cfg.get("bar") or {}))
+    flag = os.environ.get("MH_REVIEW_CALIBRATION", "")
+    if flag == "0":                                   # grade raw, without the published-work calibration
+        cfg["bar"]["calibration"] = {}
+    elif flag == "1" and not cfg["bar"].get("calibration"):   # opt in: shift each reviewer so the published
+        cfg["bar"]["calibration"] = dict(REFERENCE_CALIBRATION)  # Goldman Sachs board book scores 8
     return cfg
 
 
@@ -221,10 +229,10 @@ def merge_batches(target: str, per_batch: list[dict], bar: dict | None = None) -
                 scores[k] = round(sum(vals) / len(vals), 2)
         issues = [i for r in ok for i in r.get("issues") or []]
         ov = P.overall(who, target, scores)
-        passed = (ov is not None and ov >= b["overall"] and all(scores.get(k, 0) >= b["floor"] for k in dims)
-                  and sum(1 for i in issues if i["severity"] == "blocking") <= b["blocking"])
+        passed, cal = P.passes(who, target, scores, ov, issues, b)
         worst = min(ok, key=lambda r: r.get("overall") if isinstance(r.get("overall"), (int, float)) else 99)
         reviews.append({"persona": who, "target": target, "status": "ok", "scores": scores, "overall": ov,
+                        "calibrated": cal,
                         "verdict": "sign_off" if passed else "revise", "headline": worst.get("headline", ""),
                         "issues": issues, "research_requests": [q for r in ok for q in r.get("research_requests") or []],
                         "model": worst.get("model"), "batches": len(rs),

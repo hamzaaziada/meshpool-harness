@@ -29,6 +29,9 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
 
 
+PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
 def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcoded: bool = False) -> dict:
     """Returns {"issues": [...], "stats": {...}}. issues empty == pass."""
     issues = []
@@ -44,7 +47,7 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
         recalced, wb_v = None, None                  # recalculation failed: structure checks, and say so
         issues.append(f"Could not recalculate the workbook to check its values ({type(e).__name__}); formulas and "
                       "structure were checked, values were not.")
-    n_formula = n_numeric_const = 0
+    n_formula = n_numeric_const = n_ph = 0
     for ws in wb_f.worksheets:
         wv = wb_v[ws.title] if wb_v is not None else None
         is_calc = bool(CALC_SHEETS.search(ws.title)) and not INPUT_SHEETS.search(ws.title)
@@ -56,6 +59,15 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                 cv = wv[c.coordinate].value if wv is not None else None
                 if isinstance(v, str) and v.startswith("="):
                     n_formula += 1
+                    ph = PLACEHOLDER.findall(v)
+                    if ph:                    # a Python template written without formatting: Excel sees {ocf_row}
+                        n_ph += 1
+                        if n_ph <= 5:
+                            issues.append({"check": "unformatted_placeholder", "cell": f"{ws.title}!{c.coordinate}",
+                                           "detail": f"{v[:60]} holds the literal {ph[0]}: the formula was written "
+                                                     "from a plain string, not an f-string, so Excel shows #N/A. "
+                                                     "Write it with f'...' so the row number goes in."})
+                        continue
                     if cv is None and wv is not None:
                         issues.append({"check": "formula_no_value", "cell": f"{ws.title}!{c.coordinate}",
                                        "detail": v[:80]})
@@ -72,6 +84,9 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                     if is_calc and not allow_hardcoded and c.column > 1 and not is_label:
                         issues.append({"check": "hardcoded_number", "cell": f"{ws.title}!{c.coordinate}",
                                        "detail": f"{v} typed into a calculation sheet; reference Inputs instead"})
+    if n_ph > 5:
+        issues.append({"check": "unformatted_placeholder", "cell": "", "detail": f"{n_ph} formulas in all hold "
+                       "{name} placeholders; fix the code that writes them (use f-strings), then save again"})
     names = list(wb_f.defined_names.keys()) if hasattr(wb_f.defined_names, "keys") else [d.name for d in wb_f.defined_names.definedName]
     if expect_sheets:
         missing = [s for s in expect_sheets if s not in wb_f.sheetnames]

@@ -1,0 +1,7 @@
+# Lessons added after later reviews (slides)
+
+- When two authorizations overlap, state the combined ceiling and the incremental amount, not the sum of both: wrong -> "$XA remaining plus $XB renewal equals the $XC program"; right -> "$XC total ceiling, of which $XB is newly authorized and $XA remains undrawn." (2026-11-16)
+- Do not let the recommendation rest on a test the deck itself disclaims; use the stated hurdle or label the size as judgment: wrong -> "EPS-accretion test, not a value test" used to justify the buyback; right -> "Buyback returns X% against the Y% cost of capital" or "size is judgment pending a value test." (2026-11-16)
+- Make the recommended option's row foot to the same cash figures as the summary and bridge: wrong -> "$XB cash left for returns" minus "$YB buyback" not equalling the stated residual; right -> one reconciled residual carried into every row and title. (2026-11-16)
+- Source or range any per-unit estimate that a headline decision depends on: wrong -> "about $XM per unit" with no source or range funding the plan; right -> "$XM per unit, sourced to [primary disclosure], range $X1M-$X2M." (2026-11-16)
+- Score every option on the same metric; never blank the alternative while filling the recommendation: wrong -> recommended row shows a yield, alternative row shows "n/a"; right -> both rows show the same measure or both are labelled unavailable. (2026-11-16)

@@ -165,6 +165,13 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       "rate": "notes_rate"}}])   # sources & uses, sweep, IRR / MOIC, and lbo_floor_low / lbo_floor_high ($ per share
       a sponsor could pay at lbo_irr_high / lbo_irr_low): use them as the LBO bar in valuation_summary
       (needs lbo_entry_multiple, lbo_ltm_ebitda, lbo_fees_pct, lbo_exit_multiple, lbo_irr_low, lbo_irr_high)
+  ca = B.capital_allocation(wb["Model"], 3, [2027, 2028, 2029, 2030, 2031])   # cash generated and its uses (return
+      cash vs fund growth, buybacks, special dividends): revenue -> operating cash flow -> capex -> FCF; opening cash,
+      interest, regular dividends, special dividend, buyback, closing cash; shares retired; headroom over the cash
+      floor; a growth x capex grid of closing cash; checks that tie. Put these names in the assumption book first:
+      revenue_base, rev_growth, ocf_margin, capex_base, capex_growth, cash, min_cash, shares, share_price, dps,
+      dps_growth, special_dps, buyback, cash_yield (override with names={{...}}). Outputs: ca_fcf_total, ca_cash_end,
+      ca_min_headroom, ca_uses_total, ca_shares_end. Use it instead of writing these rows by hand.
   B.alerts(wb, m, d)               # Alerts tab: growth fades, capex vs depreciation, growth and margin both rising,
       cash shortfall, terminal value share, terminal growth vs risk-free; explain every REVIEW in your answer
   d = B.dcf_from_statements(wb["DCF"], 3, m)   # names risk_free, beta_unlevered, equity_risk_premium, cost_of_debt,
@@ -279,8 +286,25 @@ class SheetsWorkspace(Workspace):
     def _run(self, command, timeout_s, kind, record=True, raw=False):
         bare = command.replace(str(self.root), ".")                # the workdir may itself sit under ROOT
         if _INTROSPECT.search(bare) or (_SOURCE.search(bare) and _READER.search(bare)):
-            raise ToolError(REFUSED)
+            raise ToolError(self._refusal(command))
         return super()._run(command, timeout_s, kind, record, raw)
+
+    def _refusal(self, command: str) -> str:
+        """The refusal says what to run instead, and gets firmer when the same command comes back: a DeepSeek run
+        sent one refused command (cd into the engine folder, ls, python -c importing the builder) 40 times in a row."""
+        self.refused = getattr(self, "refused", {})
+        key = re.sub(r"\s+", " ", command.strip())[:300]
+        self.refused[key] = self.refused.get(key, 0) + 1
+        scripts = sorted(p.name for p in self.root.glob("*.py"))
+        run = f"python {scripts[0]}" if scripts else "write build_workbook.py, then run: python build_workbook.py"
+        msg = (REFUSED + f" Run your code from the working folder instead, with no cd and no listing of the engine "
+               f"folder: {run}. Import the helpers in the script with "
+               f"`import sys; sys.path.insert(0, r\"{ROOT}\"); from engines.sheets import builder as B` as your "
+               "instructions show.")
+        if self.refused[key] >= 2:
+            msg = (f"REFUSED again ({self.refused[key]} times): this exact command will always be refused. Do not send "
+                   f"it again. Your next call must be: {run}")
+        return msg
 
     def saved_workbooks(self) -> list[Path]:
         """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
@@ -507,6 +531,17 @@ def _issue_line(i: dict) -> str:
             f"{i['issue']}" + (f" Fix: {i['fix']}" if i.get("fix") else ""))
 
 
+def _review_bar() -> dict:
+    """The sign-off bar with the reviewer calibration (review.personas.bar in the forge rules; the per-persona offsets
+    were measured on a published Goldman Sachs board book, docs/stack/reviewer-calibration.md)."""
+    try:
+        from engines.forge import critics
+        from engines.forge.common import load_rules
+        return critics.settings(load_rules())["bar"]
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 class WorkbookReview:
     """The partner and MD review the workbook each time it passes the engine's finish gate. Not signed off and budget
     left: their merged issues go back to the agent, which keeps working with its tools and calls finish again; the
@@ -549,12 +584,14 @@ class WorkbookReview:
             material = (f"Workbook to review: {rel}. The digest below was built by the engine from the recalculated "
                         f"workbook.\n\n{text}")
             for m in self.models:
-                res = panel(self.client, "workbook", material, model=m, task_id=f"{self.task_id}-r{k}")
+                res = panel(self.client, "workbook", material, model=m, task_id=f"{self.task_id}-r{k}",
+                            bar=_review_bar())
                 used = m
                 errors = [f"{r['persona']}: {r.get('error')}" for r in res["reviews"] if r.get("status") == "not_run"]
                 if len(res["not_run"]) < len(res["reviews"]) or any(x in " ".join(errors) for x in
                                                                      ("HTTP 401", "HTTP 403")):
                     break                       # someone answered, or the key itself was refused: no other model helps
+            res = self._median_panel(res, used, material, k, panel) if res and used else res
         else:
             errors = [err]
         rnd = {"round": k, "turn": getattr(self.ws, "turn", 0) + 1, "final": final, "workbook": rel,
@@ -562,13 +599,33 @@ class WorkbookReview:
                "signed_off": bool(res and res["signed_off"]), "scores": (res or {}).get("scores", {}),
                "not_run": (res or {}).get("not_run", ["md", "partner"]), "errors": errors,
                "reviews": (res or {}).get("reviews", []), "issues": (res or {}).get("issues", []),
-               "research_requests": (res or {}).get("research_requests", [])}
+               "research_requests": (res or {}).get("research_requests", []),
+               "samples": (res or {}).get("samples", [])}
         rnd["score"] = _rscore(rnd)
         self.rounds.append(rnd)
         if rnd["score"] is None and not any(r.get("status") == "unparsed" for r in rnd["reviews"]):
             self.stopped = "; ".join(errors)[:400] or "no reply"
         self.save()
         return rnd
+
+    def _median_panel(self, first: dict, model: str, material: str, k: int, panel) -> dict:
+        """A single reviewer reply moves by up to 1.5 points on the same workbook. With MH_REVIEW_SAMPLES=n (default
+        3) the panel is asked n times and the panel whose mean score is the median is kept, so one generous or harsh
+        reply neither signs a workbook off nor sinks it. All samples are kept in the round record."""
+        n = max(1, int(os.environ.get("MH_REVIEW_SAMPLES") or 3))
+        if n == 1 or first.get("not_run"):
+            return first
+        runs = [first] + [panel(self.client, "workbook", material, model=model, task_id=f"{self.task_id}-r{k}s{i}",
+                                bar=_review_bar()) for i in range(1, n)]
+        ok = [r for r in runs if not r.get("not_run") and r.get("scores")
+              and all(v is not None for v in r["scores"].values())]
+        if not ok:
+            return first
+        mean = lambda r: sum(r["scores"].values()) / len(r["scores"])     # noqa: E731
+        ok.sort(key=mean)
+        pick = dict(ok[len(ok) // 2])
+        pick["samples"] = [r.get("scores", {}) for r in runs]
+        return pick
 
     def best(self) -> dict | None:
         scored = [r for r in self.rounds if r["score"] is not None and r.get("passed_checks", True)]
@@ -581,6 +638,10 @@ class WorkbookReview:
             if r.get("status") == "ok" and r.get("headline"):
                 lines.append(f"- {NAMES.get(r['persona'], r['persona'])}: \"{r['headline']}\"")
         lines.append("Sign-off bar: weighted score at least 8.0, no dimension below 7, no blocking issue.")
+        from engines.review.personas import coaching
+        coach = coaching(rnd.get("reviews") or [], NAMES)
+        if coach:
+            lines.append("Their coaching (keep what works; these changes would reach an 8):\n" + coach)
         b = self.best()
         if b and b["round"] != rnd["round"] and rnd["score"] is not None and b["score"] > rnd["score"]:
             lines.append(f"This version scores lower than round {b['round']} ({_scores_line(b)}); the engine keeps "
@@ -729,10 +790,111 @@ class WorkbookReview:
             pass
 
 
+def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> str:
+    """Research the company before the first cell is written (engines/research/dossier.py): a model built from the
+    statements alone misses what changed since them (an asset-light shift, a disposal, new guidance). Returns the text
+    added to the task: the structural changes, the sourced findings and the open questions; '' when research is off
+    (MH_DOSSIER=0, MH_RESEARCH=0, an offline client, no network) or found nothing."""
+    if os.environ.get("MH_DOSSIER", "1") == "0":
+        return ""
+    try:
+        from engines.forge import research as RS
+        from engines.research.dossier import build_dossier, brief_block
+        ok, _ = RS.allowed(client, None, task, None)
+        if not ok:
+            return ""
+        d = build_dossier(task, [], client=client, models=[os.environ.get("MH_STORY_REVIEW_MODEL") or model],
+                          out_dir=workdir, task_id=f"{task_id}-dossier")
+    except Exception:  # noqa: BLE001 - research never costs the model
+        return ""
+    if not d.get("facts"):
+        return ""
+    found = "\n".join(f"- {f['id']}: {f['text']}" for f in d["facts"][:60])
+    return ("\n\nResearch dossier (dossier.md in this folder; read it before you plan the model). Build the model "
+            "for the business as it is NOW: where the findings show a structural change, the forecast follows it, "
+            "not the history (an asset-light shift changes capex, depreciation, leases and margins). Cite a finding "
+            "as each affected assumption's Source (its F id and URL); passages are in .research/ "
+            "(Corpus('.research').assumption_source('S3.p12')).\n"
+            + (brief_block(d) + "\n" if brief_block(d) else "") + "Findings:\n" + found)
+
+
+def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | None:
+    """A request a recipe covers (engines/sheets/pipeline.py) is built in code: one model call for the sourced inputs,
+    then the engine checks and the partner and MD review. Not signed off: their issues go back to the input call
+    (re-source, re-anchor, never invent), the workbook is rebuilt and reviewed again, up to the review rounds; the
+    best-scoring version that passes the checks is delivered. None when no recipe applies or the first build fails
+    (the agent then builds it as before)."""
+    import shutil
+    from engines.sheets import pipeline as PL
+    recipe = PL.applies(task)
+    if not recipe:
+        return None
+    try:
+        res = PL.build(task, ws, client, model, task_id)
+    except Exception as e:  # noqa: BLE001 - the agent is the fallback
+        ws.pipeline_note = f"The {recipe} recipe could not build it ({type(e).__name__}: {e}); the agent built it."
+        return None
+    path = res["path"]
+    answer = [f"Built {Path(path).name}: " + " ".join(res["notes"])]
+    rounds = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or 3)) if rv else 1
+    msg, last = None, None
+    for k in range(1, rounds + 1):
+        rep: dict = {}
+        msg = finish_check("", [path], ws, report=rep)
+        if not rv:
+            break
+        try:
+            last = rv.run_round(path, rep, final=True)
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Partner and MD review failed: {type(e).__name__}: {e}")
+            break
+        if msg:
+            last["passed_checks"] = False
+        if last["signed_off"] or last["score"] is None or k == rounds:
+            break
+        issues = [i for i in last["issues"] if i["severity"] in ("blocking", "major")][:12]
+        notes = "\n".join(f"- [{i['severity']}, {i.get('persona')}] {i.get('where')}: {i['issue']} Fix: {i.get('fix', '')}"
+                          for i in issues)
+        from engines.review.personas import coaching
+        coach = coaching(last.get("reviews") or [], NAMES)
+        if coach:
+            notes += "\n\nTheir coaching (keep what works; these changes would reach an 8):\n" + coach
+        try:                                            # the inputs again, with the reviewers' issues
+            res = PL.build(task + "\n\nThe partner and MD reviewed the model built from your last inputs. Revise the "
+                           "inputs where their issues are about a value, its source or its anchor (cite the fact; "
+                           "never invent a figure). Issues the inputs cannot fix are recorded in the review.\n" + notes,
+                           ws, client, model, task_id)
+            path = res["path"]
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Revision round {k + 1} could not rebuild ({type(e).__name__}: {e}).")
+            break
+    if rv and last:                                  # commit what this review taught to the team's memory
+        from engines.review import memory as _MEM
+        _MEM.learn("excel", last.get("reviews") or [], client, (getattr(rv, "models", None) or [model])[0],
+                   f"{task_id}-memory")
+    best = rv.best() if rv else None
+    if best and best.get("copy") and Path(best["copy"]).exists():
+        if Path(best["copy"]).resolve() != Path(path).resolve():
+            shutil.copy2(best["copy"], path)           # deliver the best-scoring version that passed the checks
+        msg = None
+    answer.append("It passes the engine checks (recalculated, every check OK)." if not msg else "Engine checks: " + msg)
+    out = {"ok": not msg, "answer": "", "artifacts": [path], "evidence": [f"engine finish check on {Path(path).name}: "
+                                                                          + ("PASS" if not msg else "FAIL")],
+           "turns": 1, "reason": None if not msg else "engine checks failed", "usage": {}, "recipe": recipe}
+    if rv:
+        try:
+            answer.append(rv.report(best["round"] if best else (last or {}).get("round")))
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Partner and MD review report failed: {type(e).__name__}: {e}")
+    out["answer"] = "\n\n".join(a for a in answer if a)
+    return out
+
+
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
+    os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     n = max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))
@@ -740,11 +902,15 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
+    task += dossier_brief(task, workdir, client, model, task_id)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
         if review_enabled(client, review) else None
     if rv:
         task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
                  "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
+    done = _pipeline(task, ws, client, model, task_id, rv)
+    if done is not None:                      # a known model shape: built in code from one call's sourced inputs
+        return done
     crashed = False
     try:
         r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,

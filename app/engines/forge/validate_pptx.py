@@ -52,7 +52,11 @@ face shape matter drive lack outweigh hinge rest lie set keep put let
 jump surge soar climb slip slide slump plunge tumble dip rebound recover edge outstrip top spike bottom flatten level
 plateau cluster cost total average comprise outnumber dominate signal suggest indicate point mean imply contract
 decelerate collapse explode balloon fade surpass eclipse rank remain persist concentrate account mark
-compound span bracket weigh sit straddle clear""".split())
+compound span bracket weigh sit straddle clear
+absorb retire buy repurchase cover add accrete dilute carry convert free back stretch burn bridge outrun owe pass hand
+distribute trim boost dent squeeze ease tighten loosen halt resume close beat lower overshoot undercut outlast cushion
+fuel underpin anchor justify warrant favour favor outweigh exceed deserve cost risk threaten justify limit cap free
+unlock lock idle shrink compress expand tilt skew depend rely""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 
@@ -591,6 +595,29 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                               "decorative lines.", slide=n, fix_scope="renderer"))
         if R["icons"]["forbid_emoji"] and s["emoji"]:
             failures.append(F("P9", "emoji", f"Slide {n}: remove {s['emoji']} emoji from the text.", slide=n))
+
+        # ---------------- P21 language lint (banned phrases, em dashes, exclamation marks, shouting)
+        L = R.get("language") or {}
+        if L:
+            ban = [b for b in L.get("banned_phrases") or [] if b]
+            ban_re = re.compile(r"(?i)(?<![\w-])(" + "|".join(b[3:] if b.startswith("re:") else re.escape(b)
+                                                              for b in ban) + r")(?![\w-])") if ban else None
+            for sh in texts:
+                t = sh["text"]
+                found = sorted({m.group(1).lower() for m in ban_re.finditer(t)}) if ban_re else []
+                if found:
+                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{'\", \"'.join(found)}\" "
+                                      "reads as machine-written; say it plainly.", slide=n, shape=sh["name"]))
+                if L.get("forbid_em_dash", True) and "\u2014" in t:
+                    failures.append(F("P21", "em_dash", f"Slide {n}, {sh['name']}: em dash; use a comma, colon or "
+                                      "two sentences.", slide=n, shape=sh["name"]))
+                if L.get("forbid_exclamation", True) and re.search(r"!(\s|$)", t):
+                    failures.append(F("P21", "exclamation", f"Slide {n}, {sh['name']}: exclamation mark; state it "
+                                      "plainly.", slide=n, shape=sh["name"]))
+                caps = int(L.get("max_caps_words", 2))
+                if re.search(r"(?:\b[A-Z]{6,}\b[\s,]+){" + str(caps) + r"}\b[A-Z]{6,}\b", t):
+                    failures.append(F("P21", "all_caps", f"Slide {n}, {sh['name']}: words in capitals for emphasis; "
+                                      "use sentence case.", slide=n, shape=sh["name"]))
 
         # ---------------- P10 density (caps per density mode: the slide's "density:<mode>" tag, or the call's)
         D = density_caps(R, slide_density(s, R, density))

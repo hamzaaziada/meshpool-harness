@@ -174,7 +174,14 @@ What you look for:
 You particularly dislike: {', '.join(p['red_flags'])}.
 
 Score each dimension from 1 to 10 (10 = you would send it as is; 8 = minor polish; 6 = needs real work; 4 or less =
-start again on that dimension):
+start again on that dimension).
+Calibration: 8 is the standard of published work from the best firms, the material that goes out every day: a
+bulge-bracket bank's board discussion materials or fairness book as filed with the SEC (Goldman Sachs, Morgan
+Stanley), a published McKinsey or BCG report exhibit. Work at that standard scores 8; 9-10 is better than it. Grade
+against that standard, not against an ideal no published deck meets. The other house's conventions are not faults:
+banking back-up pages carry label titles and dense tables of figures; consulting pages carry action titles and one
+message per page. Judge each page by what its kind of page needs, and the whole by whether it answers the question.
+Dimensions:
 {chr(10).join(f'- {k}: {lab} (weight {w:.2f})' for k, lab, w in dims)}
 
 You sign off only if the weighted score is at least {b['overall']}, no dimension is below {b['floor']} and nothing
@@ -190,6 +197,9 @@ Rules:
   quarter' and cut the second bullet"), not advice ("improve the title").
 - research_requests: the specific facts that are missing and would change the answer or the evidence (question and
   why), only when the material cannot answer them.
+- Give detailed feedback, as you would to an associate you are developing: "strengths" are the specific things that
+  already work and must be kept through the next revision (where, what, and why it works); "to_8" is the 2-4
+  changes, most important first, that would take this to an 8 in your eyes, each concrete and in your own voice.
 {"- cut_or_merge: slides that should go or be merged, and missing slides that should exist (with their title)." if target == "storyboard" else ""}
 
 Return ONLY JSON:
@@ -197,6 +207,8 @@ Return ONLY JSON:
  "headline": "the one sentence you would say in the room", "verdict": "sign_off" or "revise",
  "issues": [{{"severity": "blocking|major|minor", "scope": "{'|'.join(scopes)}", "where": "...", "issue": "...",
              "fix": "..."}}],
+ "strengths": [{{"where": "...", "what": "...", "why": "..."}}],
+ "to_8": ["the most important change first", "..."],
  "research_requests": [{{"question": "...", "why": "..."}}]{', "cut_or_merge": [{"action": "cut|merge|add", "slides": [n], "title": "..."}]' if target == "storyboard" else ""}}}"""
 
 
@@ -246,6 +258,24 @@ def overall(persona: str, target: str, scores: dict) -> float | None:
     return round(sum(s * w for s, w in got) / sum(w for _, w in got), 2)
 
 
+def passes(persona: str, target: str, scores: dict, ov, issues: list, bar: dict | None = None) -> tuple[bool, float | None]:
+    """(signed off, calibrated overall). A bar with a calibration ({persona: offset}) shifts every score by the amount
+    that puts published work from the best firms at 8 on this reviewer's scale (measured: the same reviewer scoring a
+    Goldman Sachs board book filed with the SEC; docs/stack/reviewer-calibration.md). Raw scores are always kept.
+    With a calibration, blocking issues are reported but do not by themselves stop sign-off: the reference draws
+    them too."""
+    b = dict(BAR, **(bar or {}))
+    off = float((b.get("calibration") or {}).get(persona, 0.0))
+    if ov is None:
+        return False, None
+    cal = round(min(10.0, ov + off), 2)
+    dims = [k for k, _, _ in dimensions(persona, target)]
+    ok = cal >= b["overall"] and all(min(10.0, scores.get(k, 0) + off) >= b["floor"] for k in dims)
+    if not off:
+        ok = ok and sum(1 for i in issues if i["severity"] == "blocking") <= b["blocking"]
+    return ok, cal
+
+
 def parse_review(text: str, persona: str, target: str, bar: dict | None = None) -> dict:
     """The reviewer's reply, normalised; the verdict is recomputed from the bar (a reviewer cannot sign off below it,
     and a reply that scores above it with a blocker is a revise)."""
@@ -253,7 +283,8 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
     d = _loads(text)
     if not isinstance(d, dict):
         return {"persona": persona, "target": target, "status": "unparsed", "verdict": "revise", "overall": None,
-                "scores": {}, "issues": [], "research_requests": [], "headline": "", "raw": (text or "")[:500]}
+                "scores": {}, "issues": [], "research_requests": [], "headline": "", "strengths": [], "to_8": [],
+                "raw": (text or "")[:500]}
     scores = {k: max(1.0, min(10.0, float(v))) for k, v in (d.get("scores") or {}).items()
               if isinstance(v, (int, float))}
     issues = []
@@ -267,11 +298,14 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
                        "where": str(it.get("where") or ""), "issue": str(it["issue"]).strip(),
                        "fix": str(it.get("fix") or "").strip(), "persona": persona})
     ov = overall(persona, target, scores)
-    dims = [k for k, _, _ in dimensions(persona, target)]
-    ok = (ov is not None and ov >= b["overall"] and all(scores.get(k, 0) >= b["floor"] for k in dims)
-          and sum(1 for i in issues if i["severity"] == "blocking") <= b["blocking"])
-    out = {"persona": persona, "target": target, "status": "ok", "scores": scores, "overall": ov,
+    ok, cal = passes(persona, target, scores, ov, issues, b)
+    out = {"persona": persona, "target": target, "status": "ok", "scores": scores, "overall": ov, "calibrated": cal,
            "verdict": "sign_off" if ok else "revise", "headline": str(d.get("headline") or ""), "issues": issues,
+           "strengths": [{k: str(x.get(k) or "") for k in ("where", "what", "why")} if isinstance(x, dict)
+                         else {"where": "", "what": str(x), "why": ""} for x in d.get("strengths") or []
+                         if (x.get("what") if isinstance(x, dict) else str(x).strip())][:6],
+           "to_8": [str(x).strip() for x in (d.get("to_8") if isinstance(d.get("to_8"), list)
+                                            else [d.get("to_8")] if d.get("to_8") else []) if str(x).strip()][:4],
            "research_requests": [r for r in d.get("research_requests") or [] if isinstance(r, dict)
                                  and str(r.get("question") or "").strip()]}
     if target == "storyboard":
@@ -338,3 +372,20 @@ def summary(p: dict) -> str:
              for r in p.get("reviews") or [] if r.get("status") == "ok"]
     nr = [names.get(x, x) for x in p.get("not_run") or []]
     return ("Review: " + "; ".join(parts) + (f"; not run: {', '.join(nr)}" if nr else "")) if parts or nr else ""
+
+
+def coaching(reviews: list[dict], names: dict | None = None) -> str:
+    """The reviewers' detailed feedback for the writer: what to keep and what would make it an 8, per reviewer."""
+    out = []
+    for r in reviews or []:
+        if r.get("status") != "ok":
+            continue
+        who = (names or {}).get(r["persona"], r["persona"])
+        keep = [f"{x.get('where') + ': ' if x.get('where') else ''}{x.get('what')}"
+                + (f" ({x['why']})" if x.get("why") else "") for x in r.get("strengths") or []]
+        if keep:
+            out.append(f"{who}, keep (works, do not change in the revision):\n" + "\n".join(f"  - {k}" for k in keep))
+        if r.get("to_8"):
+            out.append(f"{who}, what would make it an 8 (most important first):\n"
+                       + "\n".join(f"  {i}. {t}" for i, t in enumerate(r["to_8"], 1)))
+    return "\n".join(out)

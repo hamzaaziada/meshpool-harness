@@ -417,15 +417,17 @@ def test_market_facts_give_price_range_beta_and_risk_free_rate_with_sources():
             return series(idx, wk)
         if sym == "^TNX":
             return series([4.1, 4.2], 86400)
+        if sym == "^IRX":
+            return series([3.9, 3.8], 86400)
         return series(stock, wk) if iv == "1wk" else series([90.0, 120.5, 101.25], 86400)
 
     got = R.market_facts([("ACME CORP", "ACME")], 7, fetch=fetch)
     txt = [f["text"] for f in got]
-    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10"]
+    assert [f["id"] for f in got] == ["F7", "F8", "F9", "F10", "F11"]
     assert "share price $101.25" in txt[0] and "finance.yahoo.com/quote/ACME" in txt[0]
     assert "$90.00 to $120.50" in txt[1]
     assert "beta" in txt[2] and abs(float(txt[2].split("beta ")[1].split()[0]) - 2.0) < 0.3
-    assert "10-year Treasury yield 4.20%" in txt[3]
+    assert "13-week Treasury bill yield 3.80%" in txt[3] and "10-year Treasury yield 4.20%" in txt[4]
     assert all(f["research"] and f["source"] for f in got)
 
 
@@ -451,7 +453,8 @@ def test_economics_facts_compute_the_capital_allocation_arithmetic_with_their_in
     assert "$10.00B" in got["free cash flow"] and "F1" in got["free cash flow"] and "F2" in got["free cash flow"]
     assert "4.0x" in got["cash cover of capex"]
     assert "$100.00B" in got["market capitalisation"]
-    assert "10.00M shares" in got["per $1B returned"] and "$1.00 per share" in got["per $1B returned"]
+    k = "scaling rule for any amount returned"
+    assert "10.00M shares" in got[k] and "$1.00 per share" in got[k] and "not a proposed amount" in got[k]
     assert "5.00%" in got["earnings yield"]
     assert "$5.05" in got["diluted EPS after a $1B buyback"]          # 5 x 1000M / 990M
     assert "18.8%" in got["after-tax return on capital"]               # 10B x (1 - 25%) / 40B

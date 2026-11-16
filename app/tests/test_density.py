@@ -328,3 +328,19 @@ def test_condense_keeps_computed_tables_whole():
     for mode in ("present", "balanced"):
         out = condense(s, mode)
         assert out["table"]["rows"] == rows and out["table"]["heat_grid"] == s["table"]["heat_grid"]
+
+
+def test_word_budget_moves_supporting_lines_to_notes():
+    """A balanced closing slide far over its word cap keeps every action; long details and extra milestones go to
+    the notes, never cut mid-sentence."""
+    from engines.forge.density import condense
+    long = ("The plan funds the capital programme from operating cash flow and returns the surplus to shareholders "
+            "while keeping cash above the floor the board set last year for the next three years")
+    s = {"archetype": "closing", "title": "Approve the plan today",
+         "steps": [{"action": f"Action {i}", "detail": long, "milestones": [long, long], "owner": "CFO",
+                    "timing": "Q1"} for i in range(5)]}
+    out = condense(s, "balanced")
+    assert [st["action"] for st in out["steps"]] == [f"Action {i}" for i in range(5)]
+    body = " ".join(" ".join([st.get("detail", "")] + st.get("milestones", [])) for st in out["steps"])
+    assert len(body.split()) < len(long.split()) * 15 and "…" not in body
+    assert "Detail for the presenter" in out["notes"]

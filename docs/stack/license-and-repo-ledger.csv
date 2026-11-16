@@ -1,0 +1,33 @@
+repo,commit,license_at_commit,license_file,decision,reason,checked
+icip-cas/PPTAgent,9dacac53ac9ef39346461063df729396551d929e,MIT,LICENSE,borrow ideas + eval,MIT; reference-deck induction and PPTEval rubric; teardown pending (needs its own services),2026-11-15
+likaku/Mck-ppt-design-skill,49221997c05e0013c6d4f6ec4d9923e936ad058f,Apache-2.0,LICENSE,borrow ideas,Apache-2.0; archetype method catalogue to compare against forge's archetypes,2026-11-15
+albertojb/mbb-ppt-generator,74169bc5672d25a762e3dde3f96ee74380ace0d8,Apache-2.0,LICENSE,borrow ideas,Apache-2.0; gated 5-stage workflow; forge already gates on its validator,2026-11-15
+tmustier/clean-slides,c67a56a31cba898eb6e76314f80d6b3301d71975,MIT,LICENSE,borrow ideas,MIT; YAML spec contract and render-to-PNG CLI,2026-11-15
+swak/pptx-mcp,,NOT FOUND / clone failed,,skip,repository not found on GitHub (2026-11-15),2026-11-15
+seulee26/mckinsey-pptx,,NOT FOUND / clone failed,,skip,repository not found on GitHub (2026-11-15),2026-11-15
+ginlix-ai/LangAlpha,d0c893ce62fa276d7f11b904b1ace55d143d8810,Apache-2.0,LICENSE,borrow ideas,Apache-2.0; typography budgets and render-then-audit loop,2026-11-15
+para-lost/AutoPresent,98e0c012e89469863d9c3c8bc87eac967d82b2e6,MIT,LICENSE,eval only,MIT; SlidesLib design ideas and SlidesBench as a secondary eval,2026-11-15
+vinsontang1/SlideCoder,c71faa5b76caaa09e407e17c845bbabc0ed8a3fa,NO LICENSE FILE,,ideas only,no LICENSE file: all rights reserved,2026-11-15
+presenton/presenton,9af2b47dda31060d3d5070e020a0825b15c94b32,Apache-2.0,LICENSE,baseline,Apache-2.0; run as the baseline to beat,2026-11-15
+scanny/python-pptx,278b47b1dedd5b46ee84c286e77cdfb0bf4594be,MIT,LICENSE,adopt (in use),MIT; already the forge renderer,2026-11-15
+gitbrent/PptxGenJS,3c9ec1b687c174952166f6a34b5e87ebf69fa469,MIT,LICENSE,skip for now,MIT; cannot load client templates; forge writes OOXML via python-pptx,2026-11-15
+libraz/formulon,636e32f1158f973b549b7cc6a309959716a444e5,Apache-2.0,LICENSE,evaluate,Apache-2.0; second calc engine to cross-check LibreOffice,2026-11-15
+anthropics/financial-services,3e32c2287dcb637c184c01cc0ad82d6af7e9bb0f,Apache-2.0,LICENSE,adopt recipes,Apache-2.0; comps/DCF/LBO/3-statement recipes and QC checklists,2026-11-15
+anthropics/skills,1780c5e5a552fd4d1c9d6a7b0cab26b0c2bef064,NO LICENSE FILE,,ideas only (pending user call),docx/pptx/xlsx/pdf folders carry an Apache-2.0 LICENSE.txt at this commit; spec says treat as source-available,2026-11-15
+docling-project/docling,440492ac0d0e14952b32dda28fede7495611c899,MIT,LICENSE,adopt (evaluate first),MIT; default parser for PDFs/DOCX/PPTX with page and bbox,2026-11-15
+datalab-to/marker,d580b63874d9c8510fa54494975b9df1e8b527d0,Apache-2.0,LICENSE,isolated optional service,"code Apache-2.0 at this commit (not GPL); model weights under modified OpenRAIL-M, free under $5M revenue",2026-11-15
+opendatalab/MinerU,f0497e0c6e9575fa553ce57cc9aa867906a00572,other/see file,LICENSE.md,isolated optional service,Apache-2.0 plus extra terms: commercial licence above 100M MAU or $20M monthly revenue; attribution required,2026-11-15
+usefolio/folio,8b6ec1bb25013ae3ac1e751d6391569034796c25,NO LICENSE FILE,,ideas only,no LICENSE file: all rights reserved,2026-11-15
+dgunning/edgartools,574c2bd15f6c629bceef03b6550ea8ac8abf3473,MIT,LICENSE.txt,adopt,MIT; SEC filings and XBRL statements without a key,2026-11-15
+OpenBB-finance/OpenBB,fac2bd450fac5e0b69ca33f11c931f8b1b0b79fa,Apache-2.0,LICENSE,skip the platform,"Apache-2.0 monorepo, but openbb-yfinance 2.1.0 (the provider behind every no-key price and non-US call) is AGPL-3.0-only and published outside the repo; pip 'openbb' 5.0 ships without the equity module (tested 2026-11-15)",2026-11-15
+JerBouma/FinanceToolkit,f7ca32720377b79c504e0e13942948a8465ced58,MIT,LICENSE.txt,borrow ideas / evaluate,MIT; transparent ratio formulas; default data is FMP (paid),2026-11-15
+assafelovic/gpt-researcher,ddd4db36208d9c8e49f3b2436efda97baecb5433,Apache-2.0,LICENSE,evaluate as research base,Apache-2.0; planner/executor/publisher loop,2026-11-15
+virattt/dexter,534f6be455523c5926eba72bdaf4f914555be5c9,NO LICENSE FILE,,ideas only,no LICENSE file (README says MIT): all rights reserved under our rule,2026-11-15
+AI4Finance-Foundation/FinRobot,63e1884a42ea7b729551a5424b4bd6a65af636e0,Apache-2.0,LICENSE,borrow ideas,Apache-2.0; report structure ideas,2026-11-15
+vals-ai/finance-agent,72239d10448c9dc9654f30466372fc932f8b509f,MIT,LICENSE,eval,MIT; 50 public validation questions,2026-11-15
+patronus-ai/financebench,cc39aeb4afdf33909ee1412188bf89035950c2eb,NO LICENSE FILE,,eval (data use only),no LICENSE file in repo: check dataset terms before redistributing,2026-11-15
+RUCKBReasoning/SpreadsheetBench,49b73a94775fb489063f60ca1865e3a650079a79,NO LICENSE FILE,,eval (data use only),no LICENSE file in repo: check dataset terms before redistributing,2026-11-15
+opendataloader-project/opendataloader-bench,7af1d8f4d0c09f51ea1a5c6ba5f66e993286d109,Apache-2.0,LICENSE,eval,Apache-2.0,2026-11-15
+deedy5/ddgs,8e74959141106702645020dcb853c6453b5e5195,MIT,LICENSE.md,adopt,MIT; free metasearch for out-of-the-box web search,2026-11-15
+knorq-ai/pptx-mcp-server,d5c41228fcc81e7a0ffdd7b870500a1d25136d0f,MIT,LICENSE,borrow ideas,MIT (PyPI pptx-mcp-server 0.5.1); flex layout primitives and validator design,2026-11-15
+hewliyang/headless-excel,294064fa25a132456ca505bf14296b8d2534fc29,Apache-2.0,LICENSE,evaluate,Apache-2.0 (PyPI headless-excel 0.1.4); LibreOffice recalc daemon,2026-11-15

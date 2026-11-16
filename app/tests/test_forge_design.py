@@ -430,7 +430,8 @@ def test_build_with_design_records_the_path_and_keeps_images(tmp_path, monkeypat
     assert json.loads((tmp_path / "qa.json").read_text())["design"]["slides"]["2"]["path"] == "image"
     prs = Presentation(res["pptx"])
     assert all("design:image" in prs.slides[i]._element.cSld.get("name") for i in (1, 2))
-    assert "Do NOT use these layouts" in imgs.prompts[1]                    # the second page avoids the first's
+    # the second page avoids the first's; designs run in parallel threads, so the stub's prompt order varies
+    assert sum("Do NOT use these layouts" in p for p in imgs.prompts) == 1
     from engines.forge.engine import design_sentence
     assert "2 of 2 content slides were image-designed" in design_sentence(res["design"])
 
@@ -444,3 +445,14 @@ def test_build_without_design_is_unchanged(tmp_path, monkeypatch):
 @pytest.mark.parametrize("task", ["Make it image-designed", "6 slides with a designed look"])
 def test_engine_passes_the_design_wording(task):
     assert D.mode_from(task) == "image"
+
+
+def test_house_style_names_the_genre_but_not_on_the_page(monkeypatch):
+    """The image prompt names the house style the model knows (consulting or banking) and forbids logos."""
+    from engines.forge import design as D
+    monkeypatch.delenv("MH_DESIGN_HOUSE", raising=False)
+    bank = D.house_line({"title": "A $8B buyback earns 1.88% at today's price"})
+    cons = D.house_line({"title": "Growth comes from new markets, not pricing"})
+    assert "pitch book" in bank and "McKinsey" in cons and "logo" in bank and "logo" in cons
+    monkeypatch.setenv("MH_DESIGN_HOUSE", "consulting")
+    assert "McKinsey" in D.house_line({"title": "A $8B buyback"})

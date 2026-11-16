@@ -97,6 +97,18 @@ pptx:
     forbid_decorative_lines: true    # diagonal or heavy (>1.5pt) unconnected lines; axis-aligned hairlines are structure
     max_rule_weight_pt: 1.5
     forbid_emoji: true
+  language:                     # P21: words that mark a slide as machine-written, linted on every text frame
+    # finance terms stay legal: "synergies" (merger maths) and "leverage" as debt ("net leverage 3.0x"); "re:" entries
+    # are regular expressions, so only the verb "leverage our/the/its..." is flagged
+    banned_phrases: ["in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
+                     "leveraging", "unlock", "unlocking",
+                     "game-changer", "game changer", "delve", "robust", "seamless", "seamlessly", "key takeaways",
+                     "it's important to note", "it is important to note", "holistic", "cutting-edge",
+                     "best-in-class", "paradigm", "revolutionize", "revolutionise", "elevate", "empower",
+                     "navigate the landscape", "ever-evolving", "in conclusion", "moreover", "furthermore"]
+    forbid_em_dash: true
+    forbid_exclamation: true
+    max_caps_words: 2           # consecutive all-caps words longer than 5 letters (acronyms such as EBITDA pass)
   density:                      # P10. The keys below are the "read" caps (dense send-ahead deliverable); "modes" holds
                                 # the caps for the other density modes (engines/forge/density.py), merged over these.
                                 # A forge slide declares its mode in its name ("density:present"); a deck without one is
@@ -306,8 +318,11 @@ review:
   personas:                     # the senior partner and the MD (engines/review/personas.py, engines/forge/critics.py)
     enabled: true               # off: the single generic partner review above runs instead (MH_PERSONAS=0 too)
     who: [partner, md]
-    bar: {overall: 8.0, floor: 7, blocking: 0}   # sign-off: weighted score >= 8, no dimension below 7, no blocker
-    max_storyboard_rounds: 3    # storyboard reviews before any slide is written (review, research, re-plan, review)
+    bar: {overall: 8.0, floor: 7, blocking: 0,   # sign-off: weighted score >= 8, no dimension below 7, no blocker,
+          calibration: {}}      # graded raw (the strict bar). {partner: 3.2, md: 2.3} would shift each reviewer so a
+                                # Goldman Sachs board book filed with the SEC scores 8 (it got partner ~4.8, MD ~5.7
+                                # raw; docs/stack/reviewer-calibration.md)
+    max_storyboard_rounds: 4    # storyboard reviews before any slide is written (review, research, re-plan, review)
     max_review_rounds: 3        # deck reviews (review, fix, review, fix, review); stops early on sign-off or no gain
     batch: 6                    # pages per reviewer message (vision models limit images per call)
     image_width: 1100           # page image width in pixels

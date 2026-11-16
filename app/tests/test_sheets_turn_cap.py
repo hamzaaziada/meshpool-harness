@@ -164,3 +164,18 @@ def test_gateway_error_after_the_workbook_was_saved_still_delivers_it(tmp_path, 
     with pytest.raises(RuntimeError, match="502"):
         E.solve("Build a model", workdir=str(tmp_path / "empty"), task_id="t", max_turns=20, client=Flaky([]),
                 model="mock")
+
+
+def test_a_refused_command_says_what_to_run_and_firms_up_on_repeat(tmp_path):
+    import pytest
+    from engines.sheets.engine import ROOT, SheetsWorkspace
+    from meshpool_harness.core.tools import ToolError
+    ws = SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    (tmp_path / "build_workbook.py").write_text("print(1)\n")
+    cmd = f"cd {ROOT} && ls | head; python -c 'from engines.sheets.builder import *'"
+    with pytest.raises(ToolError) as e1:
+        ws._run(cmd, 30, "bash")
+    assert "python build_workbook.py" in str(e1.value) and "no cd" in str(e1.value)
+    with pytest.raises(ToolError) as e2:
+        ws._run(cmd, 30, "bash")
+    assert "REFUSED again (2 times)" in str(e2.value) and "python build_workbook.py" in str(e2.value)

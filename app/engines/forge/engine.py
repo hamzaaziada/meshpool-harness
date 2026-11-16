@@ -125,6 +125,26 @@ def _plain_office(deck: str) -> bool:
     return bool(re.search(r'<a:clrScheme name="Office', theme)) and fonts <= stock and not pics
 
 
+_WORDN = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+          "ten": 10, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+
+
+def insert_position(task: str) -> int | None:
+    """Where the new slides go in the user's deck (1-based place of the first new slide), or None to append:
+    "after slide 4" -> 5, "before slide 7" / "as slide 7" / "at slide 7" / "in position 7" -> 7, "at the start" -> 1."""
+    t = (task or "").lower()
+    if re.search(r"\b(at|to) the (start|beginning|front)\b|\bbefore (the )?first slide\b", t):
+        return 1
+    words = "|".join(_WORDN)
+    m = re.search(r"\b(after|before|as|at|in position|into position)\s+(?:slide|page|position)?\s*(?:number\s*)?"
+                  r"(\d{1,3}|" + words + r")\b", t) or \
+        re.search(r"\b(after|before)\s+the\s+(" + words + r")\s+(?:slide|page)\b", t)
+    if not m:
+        return None
+    n = int(m.group(2)) if m.group(2).isdigit() else _WORDN[m.group(2)]
+    return n + 1 if m.group(1) == "after" else max(1, n)
+
+
 def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None, files: list[str] | None = None,
                 model: str | None = None, density: str | None = None) -> dict:
     """Slides added to a deck the user already has: forge builds them in that deck's look (its master and theme
@@ -150,10 +170,16 @@ def add_to_deck(task: str, deck: str, *, workdir: str, task_id: str, client=None
     while out.exists():
         out = home / f"{src.stem} (updated {i}){src.suffix}"
         i += 1
-    added = append(str(src), res["pptx"], str(out))
+    at = insert_position(task)
+    if at:                                                # "after slide 4", "before slide 7", "as slide 3"
+        from engines.forge.merge import insert
+        added = insert(str(src), res["pptx"], str(out), at)
+    else:
+        added = append(str(src), res["pptx"], str(out))
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())
     return {"ok": out.exists(), "artifacts": [str(out)], "evidence": [], "turns": res.get("calls"), "reason": None,
-            "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name} and saved it as {out.name} "
+            "answer": (f"Added {added} slide{'s' if added != 1 else ''} to {src.name}"
+                       + (f" at slide {at}" if at else "") + f" and saved it as {out.name} "
                        f"(the original is unchanged). They follow the deck's look and were checked after rendering"
                        + (f"; {left} items are flagged in the speaker notes ([QA] lines)." if left else "."))}
 

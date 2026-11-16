@@ -79,3 +79,56 @@ def test_a_review_cut_off_mid_json_keeps_its_scores_and_complete_issues():
     assert r["status"] == "ok" and r["verdict"] == "revise" and r["overall"] < 2
     assert len(r["issues"]) == 1 and r["issues"][0]["where"] == "Model!C5"
     assert r["headline"] == "This file cannot leave the desk"
+
+
+def test_calibration_puts_published_work_at_the_bar(monkeypatch):
+    """The same reviewers gave a Goldman Sachs board book filed with the SEC about 4.8 (partner) and 5.7 (MD); the
+    calibration shifts each reviewer so that work scores 8, and blocking issues no longer gate on their own."""
+    from engines.review import personas as P
+    bar = {"overall": 8.0, "floor": 7, "blocking": 0, "calibration": {"partner": 3.2, "md": 2.3}}
+    dims = [k for k, _, _ in P.dimensions("md", "deck")]
+    ref = {k: 5.8 for k in dims}
+    blocker = [{"severity": "blocking", "issue": "no football field"}]
+    ok, cal = P.passes("md", "deck", ref, P.overall("md", "deck", ref), blocker, bar)
+    assert ok and cal == 8.1                                   # reference-grade work signs off, blocker or not
+    weak = {k: 5.0 for k in dims}
+    assert P.passes("md", "deck", weak, P.overall("md", "deck", weak), [], bar)[0] is False
+    raw = dict(bar, calibration={})
+    assert P.passes("md", "deck", ref, P.overall("md", "deck", ref), blocker, raw)[0] is False
+    monkeypatch.setenv("MH_REVIEW_CALIBRATION", "1")
+    from engines.forge import critics
+    from engines.forge.common import load_rules
+    assert critics.settings(load_rules())["bar"]["calibration"] == {"partner": 3.2, "md": 2.3}
+
+
+def test_reviewers_give_detailed_feedback_strengths_and_path_to_8():
+    """A review carries what works (kept through the revision) and the ordered changes that would make it an 8."""
+    import json as _j
+    from engines.review.personas import parse_review, coaching, system_prompt
+    assert '"strengths"' in system_prompt("md", "deck") and '"to_8"' in system_prompt("md", "deck")
+    r = parse_review(_j.dumps({"scores": {"so_what": 7}, "headline": "Close", "issues": [],
+                               "strengths": [{"where": "slide 2", "what": "the cash bridge ties", "why": "auditable"}],
+                               "to_8": ["Size the buyback against the 1.88% yield on slide 3", "Cut slide 5"]}),
+                     "md", "deck")
+    assert r["strengths"][0]["what"] == "the cash bridge ties" and len(r["to_8"]) == 2
+    c = coaching([r], {"md": "MD"})
+    assert "keep" in c and "slide 2: the cash bridge ties (auditable)" in c and "1. Size the buyback" in c
+
+
+def test_memory_loads_the_masterclass_and_learns_new_lessons(tmp_path, monkeypatch):
+    """Writers read the partner's and MD's masterclass; a review adds only lessons it does not already cover."""
+    import json as _j
+    from engines.review import memory as M
+    monkeypatch.setattr(M, "HERE", tmp_path)
+    (tmp_path / "masterclass_slides.md").write_text("# Masterclass\n- Every bridge foots.\n")
+    assert "Every bridge foots" in M.load("slides") and "MASTERCLASS" in M.load("slides")
+
+    class Stub:
+        def chat(self, **kw):
+            return {"choices": [{"message": {"content": _j.dumps({"lessons": ["Date every balance -> 'cash $XB at "
+                                                                              "period end' not 'cash $XB'"]})}}]}
+    rv = [{"persona": "md", "status": "ok", "issues": [{"severity": "major", "issue": "undated cash", "fix": "date it"}]}]
+    assert M.learn("slides", rv, Stub(), "m") and "Date every balance" in M.load("slides")
+    assert M.learn("slides", rv, Stub(), "m") == []                  # the same lesson is not added twice
+    monkeypatch.setenv("MH_MEMORY", "0")
+    assert M.load("slides") == ""

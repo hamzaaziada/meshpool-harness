@@ -339,10 +339,93 @@ def condense(s: dict, mode: str) -> dict:
             notes.add("Footnote: " + str(f))
         s["footnotes"] = fn[:lim["footnotes"]]
         s = _drop_markers(s, lim["footnotes"])
+    _word_budget(s, mode, a, notes)
     if notes.lines:
         head = "Detail for the presenter (moved off the slide):"
         s["notes"] = (str(s.get("notes") or "") + "\n" + head + "\n" + "\n".join("- " + x for x in notes.lines)).strip()
     return s
+
+
+SKIP = {"title", "title_prov", "subtitle", "subtitle_prov", "source", "footnotes", "notes", "id", "node", "archetype",
+        "chart", "table", "calcs", "options", "tags", "section", "section_icon", "prov", "date", "layout", "look",
+        "type", "kind", "design", "_cont", "highlight_categories"}
+KEEP = {"action", "claim", "lead", "label", "heading", "takeaway", "decision", "title_right",   # the argument's
+        "owner", "timing"}                                                                         # spine, counted
+
+
+def _word_budget(s: dict, mode: str, arch: str, notes: _Notes) -> None:
+    """P10 holds a slide to a number of body words; the field limits above do not add up to it. While the slide is
+    over 85% of its cap (the page adds numerals and labels), the longest supporting line (evidence, detail, milestone, bullet) is cut to its headline and
+    the full text goes to the notes; titles, claims, actions and takeaways are never cut."""
+    try:
+        from .common import load_rules
+        from .validate_pptx import density_caps
+        D = density_caps(load_rules()["pptx"], mode)
+    except Exception:  # noqa: BLE001 - no rules, no budget
+        return
+    share = 0.92                                             # of the cap: the page adds numerals and labels
+    target = int(share * (D.get("by_archetype") or {}).get(arch, D["max_body_words"]))
+    words = lambda t: len(_plain(t).split())                # noqa: E731
+
+    def slots_of(v, parent=None, key=None, trim=True, out=None):
+        out = [] if out is None else out
+        if isinstance(v, str):
+            if parent is not None:
+                out.append((parent, key, trim))
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                if k not in SKIP:
+                    slots_of(x, v, k, trim and k not in KEEP, out)
+        elif isinstance(v, list):
+            for i, x in enumerate(v):
+                slots_of(x, v, i, trim, out)
+        return out
+
+    w = 16
+    for _ in range(60):
+        slots = slots_of(s)
+        if sum(words(par[k]) for par, k, _ in slots) <= target or w < 6:
+            return
+        cand = [(words(par[k]), par, k) for par, k, tr in slots if tr and words(par[k]) > w]
+        if not cand:
+            w -= 2
+            continue
+        n0, par, k = max(cand, key=lambda c: c[0])
+        short = headline(par[k], w)
+        if not short.endswith("\u2026") and words(short) < n0:
+            notes.add(_plain(par[k]))                      # a clean headline: keep it, the rest goes to the notes
+            par[k] = short
+            continue
+        bullet = isinstance(par, list) or not (set(par) - {"text", "prov", "bold"})   # a bare line, not a point
+        holder, idx = _holder(s, par, k) if bullet else (None, None)
+        if isinstance(holder, list) and len(holder) > 1:   # no clean break: move the whole line off the page
+            notes.add(_plain(par[k]))
+            holder.pop(idx)
+        elif k in ("detail", "evidence") and isinstance(par, dict):
+            notes.add(_plain(par.pop(k)))
+        else:
+            w -= 2
+
+
+def _holder(s, par, k):
+    """The list item that holds a slot (a bullet dict or a string in a list), so the whole line can be removed."""
+    if isinstance(par, list):
+        return par, k
+    def find(v):
+        if isinstance(v, list):
+            for i, x in enumerate(v):
+                if x is par:
+                    return v, i
+                r = find(x)
+                if r:
+                    return r
+        elif isinstance(v, dict):
+            for x in v.values():
+                r = find(x)
+                if r:
+                    return r
+        return None
+    return find(s) or (None, None)
 
 
 def _drop_markers(v, keep: int):

@@ -1990,3 +1990,198 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
     if ws.freeze_panes is None:
         freeze(ws, "B4")
     return {"cells": cell, "grid": f"'{ws.title}'!B{gh + 1}:F{gh + 5}", "grid_header_row": gh, "next_row": gh + 7}
+
+
+# --------------------------------------------------------------------------- capital allocation
+CA_NAMES = {"revenue_base": "revenue_base", "rev_growth": "rev_growth", "ocf_margin": "ocf_margin",
+            "capex_base": "capex_base", "capex_growth": "capex_growth", "cash": "cash", "min_cash": "min_cash",
+            "shares": "shares", "price": "share_price", "dps": "dps", "dps_growth": "dps_growth",
+            "special_dps": "special_dps", "buyback": "buyback", "cash_yield": "cash_yield",
+            "down_growth": None, "down_margin_cut": None, "capex_overrun": None}   # name them for a downside case
+
+
+def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.01, capex_step=0.1,
+                       title_text="Capital allocation") -> dict:
+    """Cash generation and its uses, year by year, every number a formula over named inputs (assumption book first).
+
+    Inputs (CA_NAMES, override with names=): revenue_base (last actual revenue), rev_growth, ocf_margin (operating
+    cash flow / revenue), capex_base (first forecast year's capex), capex_growth, cash (opening), min_cash (the floor
+    the board keeps), shares (opening), share_price (buyback price), dps (regular dividend per share, first forecast
+    year), dps_growth, special_dps (special dividend per share, paid in the first forecast year), buyback (amount
+    spent each year), cash_yield (interest earned on opening cash).
+    Writes: revenue -> operating cash flow -> capex -> free cash flow; opening cash, interest income, regular
+    dividends, special dividend, buyback, closing cash; shares retired and closing shares; headroom over the cash
+    floor and cash cover of capex; a growth x capex grid of the last year's closing cash (exact closed form over the
+    forecast, interest income excluded, so the grid centre ties to closing cash less cumulative interest); checks
+    that closing cash ties to its flows and that the grid centre ties. Names: <prefix>fcf_total, cash_end,
+    min_headroom, uses_total, shares_end."""
+    wb = ws.parent
+    N = {**CA_NAMES, **(names or {})}
+    labels = [y if isinstance(y, str) else f"{y}E" for y in years]
+    if len(labels) < 2:
+        raise ValueError("capital_allocation needs at least two forecast years")
+    cols = [get_column_letter(2 + i) for i in range(len(labels))]
+    width = max(len(labels) + 1, 6)
+    P = lambda k: f"{prefix}{k}"  # noqa: E731
+    rows: dict[str, int] = {}
+    r = row
+    section(ws, r, f"{title_text}: cash generated and its uses", width)
+    header(ws, r + 1, ["Line item"] + labels)
+    r += 2
+
+    def line(key, label, first, nxt=None, fmt="usd", total=False):
+        nonlocal r
+        rows[key] = r
+        ws.cell(row=r, column=1, value=label)
+        for i, c in enumerate(cols):
+            expr = first if i == 0 or nxt is None else nxt
+            expr = expr.replace("{c}", c).replace("{p}", cols[i - 1] if i else c)
+            for k, rr in rows.items():
+                expr = expr.replace("{" + k + "}", str(rr))
+            _f(ws, f"{c}{r}", expr, fmt, total=total)
+        r += 1
+
+    line("rev", "Revenue", f"={N['revenue_base']}*(1+{N['rev_growth']})", "={p}{rev}*(1+" + N["rev_growth"] + ")")
+    line("ocf", "Operating cash flow", "={c}{rev}*" + N["ocf_margin"])
+    line("capex", "Capital expenditure", f"=-{N['capex_base']}", "={p}{capex}*(1+" + N["capex_growth"] + ")")
+    line("fcf", "Free cash flow", "={c}{ocf}+{c}{capex}", total=True)
+    r += 1
+    line("open", "Opening cash", f"={N['cash']}", "={p}{close}")
+    line("int", "Interest income",
+         "={c}{open}*" + N["cash_yield"])
+    line("sh_open", "Opening shares", f"={N['shares']}", "={p}{sh_close}", fmt="num")
+    line("dps", "Regular dividend per share", f"={N['dps']}", "={p}{dps}*(1+" + N["dps_growth"] + ")", fmt="usd2")
+    line("regdiv", "Regular dividends", "=-{c}{dps}*{c}{sh_open}")
+    line("special", "Special dividend", f"=-{N['special_dps']}*{{c}}{{sh_open}}", "=0")
+    line("buyback", "Share buyback", f"=-{N['buyback']}")
+    rows["close"] = r                      # closing cash refers to rows above; the opening row of later years to it
+    ws.cell(row=r, column=1, value="Closing cash")
+    for i, c in enumerate(cols):
+        _f(ws, f"{c}{r}", f"={c}{rows['open']}+{c}{rows['fcf']}+{c}{rows['int']}+{c}{rows['regdiv']}"
+                          f"+{c}{rows['special']}+{c}{rows['buyback']}", "usd", total=True)
+    r += 1
+    for i, c in enumerate(cols[1:], 1):    # now that closing cash exists, link each later opening balance to it
+        _f(ws, f"{c}{rows['open']}", f"={cols[i - 1]}{rows['close']}", "usd")
+    line("retired", "Shares retired", "={c}{buyback}/-" + N["price"], fmt="num")
+    rows["sh_close"] = r
+    ws.cell(row=r, column=1, value="Closing shares")
+    for c in cols:
+        _f(ws, f"{c}{r}", f"={c}{rows['sh_open']}-{c}{rows['retired']}", "num")
+    r += 1
+    for i, c in enumerate(cols[1:], 1):
+        _f(ws, f"{c}{rows['sh_open']}", f"={cols[i - 1]}{rows['sh_close']}", "num")
+    ws.cell(row=rows["regdiv"], column=1, value="Regular dividends (on average shares: buybacks spread over the year)")
+    for c in cols:                         # the year's dividends on its average share count, not the opening count
+        _f(ws, f"{c}{rows['regdiv']}", f"=-{c}{rows['dps']}*AVERAGE({c}{rows['sh_open']},{c}{rows['sh_close']})", "usd")
+    ws.cell(row=rows["int"], column=1,
+            value="Interest income (on the opening balance after the special dividend; conservative: the year's "
+                  "free cash flow earns nothing until the next year)")
+    for c in cols:                         # the bank convention: no averaging, no circularity
+        _f(ws, f"{c}{rows['int']}", f"=({c}{rows['open']}+{c}{rows['special']})*{N['cash_yield']}", "usd")
+    ws.cell(row=rows["special"], column=1, value="Special dividend (paid at the start of the first year, opening shares)")
+    line("head", "Headroom over the cash floor", "={c}{close}-" + N["min_cash"])
+    line("cover", "Cash cover of capex (x)", '=IF({c}{capex}=0,"NM",{c}{close}/-{c}{capex})', fmt="x")
+    F0, L = cols[0], cols[-1]
+    out = {}
+    for key, expr in (("fcf_total", f"=SUM({F0}{rows['fcf']}:{L}{rows['fcf']})"),
+                      ("cash_end", f"={L}{rows['close']}"),
+                      ("min_headroom", f"=MIN({F0}{rows['head']}:{L}{rows['head']})"),
+                      ("uses_total", f"=-SUM({F0}{rows['regdiv']}:{L}{rows['buyback']})"),
+                      ("int_total", f"=SUM({F0}{rows['int']}:{L}{rows['int']})"),
+                      ("shares_end", f"={L}{rows['sh_close']}")):
+        ws.cell(row=r, column=1, value={"fcf_total": "Free cash flow, all years", "cash_end": "Closing cash, last year",
+                                        "min_headroom": "Lowest headroom over the floor", "uses_total": "Cash returned, all years",
+                                        "int_total": "Interest income, all years", "shares_end": "Closing shares"}[key])
+        _f(ws, f"B{r}", expr, "num" if key == "shares_end" else "usd")
+        define_name(wb, P(key), _abs(ws, f"B{r}"))
+        out[key] = P(key)
+        r += 1
+    # downside case: growth, margin and capex all go the wrong way at once; closing cash and headroom by year
+    if all(N.get(k) for k in ("down_growth", "down_margin_cut", "capex_overrun")):
+        r += 1
+        section(ws, r, f"{title_text}: downside case (lower growth, thinner margin, capex overrun at once)", width)
+        header(ws, r + 1, ["Line item"] + labels)
+        r += 2
+        line("d_rev", "Revenue, downside", f"={N['revenue_base']}*(1+{N['down_growth']})",
+             "={p}{d_rev}*(1+" + N["down_growth"] + ")")
+        line("d_fcf", "Free cash flow, downside",
+             "={c}{d_rev}*(" + N["ocf_margin"] + "-" + N["down_margin_cut"] + ")+{c}{capex}*(1+" + N["capex_overrun"] + ")",
+             total=True)
+        # management's response, in order: suspend the buyback first, then defer the special dividend, in any year
+        # paying it would take cash below the floor; regular dividends are kept
+        line("d_special", "Special dividend, downside (deferred if it breaches the floor with the buyback suspended)",
+             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}<" + N["min_cash"]
+             + ",0,{c}{special})")
+        line("d_buyback", "Share buyback, downside (suspended in a year it would breach the floor)",
+             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{buyback}<" + N["min_cash"]
+             + ",0,{c}{buyback})")
+        line("d_close", "Closing cash, downside (regular dividends kept; buyback, then special, give way)",
+             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{d_buyback}",
+             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{d_special}+{c}{d_buyback}", total=True)
+        for i, c in enumerate(cols[1:], 1):          # later years test last year's downside closing cash
+            pc = cols[i - 1]
+            base = (f"{pc}{rows['d_close']}+{c}{rows['d_fcf']}+{c}{rows['int']}+{c}{rows['regdiv']}")
+            _f(ws, f"{c}{rows['d_special']}", f"=IF({base}+{c}{rows['special']}<{N['min_cash']},0,"
+                                               f"{c}{rows['special']})", "usd")
+            _f(ws, f"{c}{rows['d_buyback']}", f"=IF({base}+{c}{rows['d_special']}+{c}{rows['buyback']}<"
+                                              f"{N['min_cash']},0,{c}{rows['buyback']})", "usd")
+        line("d_head", "Headroom over the cash floor, downside", "={c}{d_close}-" + N["min_cash"])
+        for key, expr, lab in (("down_cash_end", f"={cols[-1]}{rows['d_close']}", "Closing cash, downside"),
+                               ("down_suspended", f"=COUNTIFS({cols[0]}{rows['d_buyback']}:{cols[-1]}{rows['d_buyback']},0,"
+                                                  f"{cols[0]}{rows['buyback']}:{cols[-1]}{rows['buyback']},\"<>0\")",
+                                "Years the buyback is suspended, downside"),
+                               ("down_special_deferred", f"=SUM({cols[0]}{rows['d_special']}:{cols[-1]}{rows['d_special']})"
+                                                         f"-SUM({cols[0]}{rows['special']}:{cols[-1]}{rows['special']})",
+                                "Special dividend deferred, downside"),
+                               ("down_min_headroom", f"=MIN({cols[0]}{rows['d_head']}:{cols[-1]}{rows['d_head']})",
+                                "Lowest headroom, downside")):
+            ws.cell(row=r, column=1, value=lab)
+            _f(ws, f"B{r}", expr, "num" if key == "down_suspended" else "usd")
+            define_name(wb, P(key), _abs(ws, f"B{r}"))
+            out[key] = P(key)
+            r += 1
+    # sensitivity: last-year closing cash, interest excluded, exact over the forecast (geometric sums)
+    r += 1
+    section(ws, r, f"{title_text}: closing cash in {labels[-1]} by revenue growth and capex (interest excluded)", width)
+    n = len(labels)
+    n_name = P("years")
+    model_constant(wb, n_name, "Forecast years", n, "num")
+    gst = model_constant(wb, P("g_step"), "Growth step in the cash grid", growth_step, "pct")
+    cst = model_constant(wb, P("c_step"), "Capex step in the cash grid", capex_step, "pct")
+    eps = model_constant(wb, P("eps"), "Rate treated as zero growth", 1e-9, "num")
+    hdr = r + 1
+    ws.cell(row=hdr, column=1, value="Growth change (rows), investment plan change (columns)")
+    for j in range(5):                       # one pattern per row and column: start at -2 steps, then add a step
+        c = get_column_letter(2 + j)
+        _f(ws, f"{c}{hdr}", f"=-2*{cst}" if j == 0 else f"={get_column_letter(1 + j)}{hdr}+{cst}", "pct")
+    centre = f"D{hdr + 3}"
+    for i in range(5):
+        rr = hdr + 1 + i
+        _f(ws, f"A{rr}", f"=-2*{gst}" if i == 0 else f"=A{rr - 1}+{gst}", "pct")
+        q = f"(1+{N['rev_growth']}+$A{rr})"
+        p = f"(1+{N['capex_growth']})"
+        sum_q = f"IF(ABS({q}-1)<{eps},{n_name},{q}*({q}^{n_name}-1)/({q}-1))"
+        sum_p = f"IF(ABS({p}-1)<{eps},{n_name},({p}^{n_name}-1)/({p}-1))"
+        for j in range(5):
+            c = get_column_letter(2 + j)
+            _f(ws, f"{c}{rr}", f"={N['cash']}+{N['revenue_base']}*{N['ocf_margin']}*{sum_q}"
+                               f"-{N['capex_base']}*(1+{c}${hdr})*{sum_p}-{P('uses_total')}", "usd")
+    for key, fn, lab in (("grid_low", "MIN", "Grid: lowest closing cash"), ("grid_high", "MAX", "Grid: highest closing cash")):
+        rr = hdr + 1 + 5 + (1 if key == "grid_low" else 2)
+        ws.cell(row=rr, column=1, value=lab)
+        _f(ws, f"B{rr}", f"={fn}(B{hdr + 1}:F{hdr + 5})", "usd")
+        define_name(wb, P(key), _abs(ws, f"B{rr}"))
+        out[key] = P(key)
+    r = hdr + 1 + 5 + 3
+    if "Checks" not in wb.sheetnames:
+        wb.create_sheet("Checks")
+    add_check(wb, f"{title_text}: closing cash ties to its flows",
+              f"={_abs(ws, L + str(rows['close']))}-({N['cash']}+{P('fcf_total')}+{P('int_total')}-{P('uses_total')})")
+    if centre:
+        add_check(wb, f"{title_text}: grid centre = closing cash less interest",
+                  f"={_abs(ws, centre)}-({P('cash_end')}-{P('int_total')})")
+    if "down_cash_end" in out:                       # the downside never ends with more cash than the base
+        add_check(wb, f"{title_text}: downside closing cash is not above the base",
+                  f"=MAX(0,{P('down_cash_end')}-{P('cash_end')})")
+    out.update({"rows": rows, "next_row": r})
+    return out

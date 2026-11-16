@@ -114,7 +114,13 @@ def _profile_fonts(profile: Path) -> None:
             '<?xml version="1.0" encoding="UTF-8"?><oor:items xmlns:oor="http://openoffice.org/2001/registry" '
             'xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
             '<item oor:path="/org.openoffice.Office.Common/Font/Substitution"><prop oor:name="Replacement" '
-            'oor:op="fuse"><value>true</value></prop></item>' + pairs + '</oor:items>', encoding="utf-8")
+            'oor:op="fuse"><value>true</value></prop></item>' + pairs +
+            # recalculate every formula on load: by default LibreOffice keeps the values cached in an xlsx, so a
+            # workbook whose inputs were edited elsewhere was checked against stale results (0 = always)
+            '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="OOXMLRecalcMode" '
+            'oor:op="fuse"><value>0</value></prop></item>'
+            '<item oor:path="/org.openoffice.Office.Calc/Formula/Load"><prop oor:name="ODFRecalcMode" '
+            'oor:op="fuse"><value>0</value></prop></item></oor:items>', encoding="utf-8")
     except OSError:                                        # the conversion still runs, with the system's fonts
         pass
 
@@ -198,7 +204,34 @@ def _pil_font(path: str, size_pt: float):
     return f
 
 
+ARABIC = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+ARABIC_FONT = {False: str(Path(__file__).parent / "fonts" / "NotoSansArabic-Regular.ttf"),
+               True: str(Path(__file__).parent / "fonts" / "NotoSansArabic-Bold.ttf")}
+
+
+def is_rtl(text: str, share: float = 0.3) -> bool:
+    """Is this text mostly Arabic script (letters only counted)?"""
+    letters = [c for c in text or "" if c.isalpha()]
+    return bool(letters) and sum(bool(ARABIC.match(c)) for c in letters) / len(letters) >= share
+
+
+@lru_cache(maxsize=64)
+def _arabic_font(bold: bool, size_pt: float):
+    from PIL import ImageFont
+    try:
+        return ImageFont.truetype(ARABIC_FONT[bold], max(1, int(round(size_pt * 10))), layout_engine=ImageFont.Layout.RAQM)
+    except Exception:  # noqa: BLE001 - no raqm: basic layout still gives the advance widths
+        return ImageFont.truetype(ARABIC_FONT[bold], max(1, int(round(size_pt * 10))))
+
+
 def text_width_in(text: str, size_pt: float, path: str | None) -> float:
+    if text and ARABIC.search(text):                 # Arabic is measured shaped (joined letters), right to left, with
+        bold = bool(path) and "bold" in path.lower()  # the bundled Noto Sans Arabic: Latin fonts have no Arabic glyphs
+        f = _arabic_font(bold, size_pt)
+        try:
+            return f.getlength(text, direction="rtl") / 10 / 72
+        except Exception:  # noqa: BLE001
+            return f.getlength(text) / 10 / 72
     if not path:
         return len(text) * size_pt * 0.5 / 72          # crude average advance when no font file exists at all
     return _pil_font(path, size_pt).getlength(text) / 10 / 72

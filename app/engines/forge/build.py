@@ -43,7 +43,9 @@ renderer applies a strict consulting design; you only fill fields.
   answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
   1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
   today, written "Decision today: <approve / choose / fund what, by when>"; it must NOT restate the title (the title
-  is the answer, the decision line is the ask) - leave it out when there is no decision to take.
+  is the answer, the decision line is the ask) - leave it out when there is no decision to take; "metrics": 2-3 of
+  {"value": the figure as shown, e.g. "$13.3B", "label": what it is, <= 8 words, "prov"} - the numbers that size the
+  decision, shown large in a panel beside the points (always give them when the answer has a size).
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,
@@ -53,8 +55,8 @@ renderer applies a strict consulting design; you only fill fields.
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
   cell is {"lead": one bold sentence (<= 10 words), "bullets": 1-3 evidence lines (<= 22 words) each starting
   with its number}. Use for 'N issues/challenges/drivers, each with evidence'.
-- exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, may end with "…"),
-  "title_right" (<= 9 words, continues the thought, may start with "…but"), "exhibit": {"title": what is shown,
+- exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, a complete sentence,
+  never ending in "…"), "title_right" (<= 9 words, a complete sentence: the implication or the counter-point), "exhibit": {"title": what is shown,
   "unit": measure and period}, "chart" (bar/column/line, or bubble with points[{x,y,size,label,focus}],
   x_range, y_range, x_major, y_major, x_cross, y_cross, x_title), "blocks": 2-3 of {"text": intro sentence with
   **bold key phrases**, "bullets": 1-3 lines with the numbers as **bold phrases**}, "callout": {"bullets": 2-3
@@ -130,6 +132,7 @@ CONSULTING = """House style (always, whatever the brief says about look):
   on the page, never asserted. One recommendation, the same amount on every slide.
 - Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
 - Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
+CONSULTING_BASE = CONSULTING
 
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
 SIDE_PANEL = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "table_focus",
@@ -145,6 +148,11 @@ visual on two slides in a row; at most two chart-plus-side-panel slides (bar_tak
 waterfall_bridge, table_focus, benchmark) in a row; in 8 or more slides use at least 5 different visuals; when the
 brief asks a question or a decision, one slide weighs the options against criteria; when it ends on action, the
 plan is a roadmap or process (or the closing steps), not bullets."""
+
+
+TEXT_LED = {"challenge_matrix", "text_matrix", "argument_only", "table_focus"}
+CHART_LED = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "benchmark",
+             "football_field", "exhibit_argument"}
 
 
 def story_variety(slides: list, brief: str = "") -> list[str]:
@@ -166,6 +174,18 @@ def story_variety(slides: list, brief: str = "") -> list[str]:
                         "another form (big numbers, 2x2, options vs criteria, roadmap, icon rows, exhibit + argument)")
     if len(body) >= 7 and len({v for v in vis if v}) < 5:
         msgs.append(f"only {len({v for v in vis if v})} different visuals in {len(slides)} slides; use at least 5")
+    content = [(i, x) for i, x in enumerate(slides, 1) if isinstance(x, dict) and x.get("archetype") not in
+               ("cover", "agenda", "section_divider", "executive_summary", "closing", "next_steps", "end")]
+    wordy = [i for i, x in content if x.get("archetype") in TEXT_LED or
+             re.search(r"text|words|bullets|icon rows|argument only", (x.get("visual") or "").lower())]
+    charts = [i for i, x in content if x.get("archetype") in CHART_LED or
+              re.search(r"chart|bars?\b|waterfall|bridge|football|line|column", (x.get("visual") or "").lower())]
+    if len(content) >= 2 and len(wordy) > 1:            # the deck reads as the same page of words again and again
+        msgs.append(f"slides {', '.join(map(str, wordy))} are pages of words; keep at most one and turn the others "
+                    "into exhibits from the facts (a bar or column chart, a waterfall bridge, a benchmark)")
+    if len(content) >= 2 and len(charts) * 3 < len(content):
+        msgs.append(f"only {len(charts)} of {len(content)} content slides show a chart; at least a third must plot "
+                    "the facts (bar, column, line, waterfall, benchmark)")
     if re.search(r"\?|\bshould\b|\bwhether\b|\boptions?\b|\bdecide\b|\bchoose\b", brief or "", re.I) and len(body) >= 6 \
             and not any(re.search(r"option|criteria|2x2|matrix|harvey", v) for v in vis):
         msgs.append("the brief asks for a decision: add one slide that weighs the options against criteria "
@@ -644,7 +664,8 @@ def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int,
                 bad_out.setdefault(n, []).append(f"calc {cid}: value '{value}' has no number")
                 continue
             raw, v, u = nums[0]
-            if not any(_same_number(raw, v, u, abs(r), "") for r in (res, res * 100 if u in ("%", "pp") else res)):
+            pct = u in ("%", "pp")                               # a formula may or may not carry the *100 itself
+            if not any(_same_number(raw, v, u, abs(r), u if pct else "") for r in ((res, res * 100) if pct else (res,))):
                 bad_out.setdefault(n, []).append(f"calc {cid}: '{formula}' = {res:,.4g}, not {value}; fix the value "
                                                  "or the formula")
                 continue
@@ -665,6 +686,224 @@ def _strings(node, where=""):
     elif isinstance(node, list):
         for i, v in enumerate(node):
             yield from _strings(v, f"{where}[{i}]")
+
+
+_TIE_STOP = {"of", "is", "at", "the", "a", "an", "and", "to", "on", "in", "its", "for", "by", "with", "from", "was",
+             "are", "be", "this", "that", "only", "about", "around", "just", "now", "still", "after-tax", "pre-tax"}
+
+
+PER_SHARE = {"dividend", "dividends", "payout", "price", "eps", "earnings", "buyback", "return", "distribution",
+             "book", "value", "cash"}
+
+
+CONSISTENCY = """You check a board deck for figures that disagree. Below is every line a reader sees, slide by slide,
+including footnotes and chart values. List each place where the SAME quantity (same metric, entity and period) is
+given different values on different lines or slides, where a footnote or label contradicts a figure or chart value,
+or where one figure is shown at different precisions (1.9% on one page, 1.88% on another: pick one). Also flag two
+statements of the SAME effect that reach different conclusions (each $1B "adds 4 cents of EPS" on one slide and nets
+"-3 cents a share" on another; "funded from cash" on one, "needs debt" on another): say which statement the deck's own
+figures support. Do not flag different quantities that merely look alike. Return ONLY JSON:
+{"conflicts": [{"slides": [<slide numbers>], "quantity": "<what is measured>", "values": ["<as written>", ...],
+"use": "<that one value exactly as it should be written, e.g. $6.93B>",
+"fix": "<the one value to use everywhere and why, from the deck's own figures>"}]}  ([] when every figure agrees)"""
+_NUMTOK = re.compile(r"^[$€£]?-?\d[\d,]*(?:\.\d+)?\s?(?:%|pp|x|bn|[BMK])?$")
+
+
+def unify_figures(slides, client, models: list[str], task_id: str = "consistency") -> list[str]:
+    """Apply the checker's mechanical fixes before a render: where it names the one value to use and the others are
+    plain figures ($6.92B for $6.93B, 1.9% for 1.88%), those exact tokens are replaced on the slides it names, in
+    reader-facing text only (never chart data or notes). Returns what was replaced."""
+    consistency_checks(slides, client, models, task_id)        # fills the cache for this text
+    got = _CONSISTENCY_CACHE.get(_consistency_key(slides)) or {}
+    done = []
+    for c in got.get("conflicts") or []:
+        use = str(c.get("use") or "").strip() if isinstance(c, dict) else ""
+        if not _NUMTOK.match(use):
+            continue
+        olds = [str(v).strip() for v in c.get("values") or [] if _NUMTOK.match(str(v).strip()) and str(v).strip() != use]
+        ns = {int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= len(slides)}
+        for v in olds:
+            pat = re.compile(r"(?<![\d.,])" + re.escape(v) + r"(?![\d])")
+
+            def sub(node):
+                if isinstance(node, str):
+                    return pat.sub(use, node)
+                if isinstance(node, list):
+                    return [sub(x) for x in node]
+                if isinstance(node, dict):
+                    return {k: (x if k in ("chart", "charts", "notes", "prov", "title_prov", "calcs", "options")
+                                else sub(x)) for k, x in node.items()}
+                return node
+            for n in ns:
+                if slides[n - 1].get("fixed"):
+                    continue
+                new = sub(slides[n - 1])
+                if new != slides[n - 1]:
+                    slides[n - 1].clear()
+                    slides[n - 1].update(new)
+                    done.append(f"slide {n}: {v} -> {use}")
+    return done
+
+
+def _consistency_key(slides) -> str:
+    return str(hash(_consistency_text(slides)))
+_CONSISTENCY_CACHE: dict[str, dict] = {}
+
+
+def consistency_checks(slides, client, models: list[str], task_id: str = "consistency") -> dict[int, list[str]]:
+    """One metric, one value, across lines, footnotes and charts: a cheap model reads the whole deck once (cached on
+    its text) and lists disagreements the regex tie check cannot key (different wording, a footnote against a chart
+    label). Each conflict goes to every slide it names after the first, as a failure the writer must fix."""
+    if client is None or not models or os.environ.get("FORGE_CONSISTENCY", "1") == "0":
+        return {}
+    text = _consistency_text(slides)
+    if not text:
+        return {}
+    key = str(hash(text))
+    if key not in _CONSISTENCY_CACHE:
+        got = None
+        for m in models:
+            try:
+                got = _call(client, m, CONSISTENCY, text[:40000], task_id, max_tokens=3000)
+                break
+            except Exception:  # noqa: BLE001 - a checker that cannot run adds nothing
+                continue
+        _CONSISTENCY_CACHE[key] = got or {}
+    return _conflict_msgs(_CONSISTENCY_CACHE[key], len(slides))
+
+
+def _consistency_text(slides) -> str:
+    from engines.forge.render import normalize
+    pages = []
+    for n, sl in enumerate(slides, 1):
+        if sl.get("archetype") in ("section_divider", "agenda"):
+            continue
+        nz = normalize(sl)
+        lines_ = [t for _, t in _strings(nz) if re.search(r"\d", t)]
+        for c in [sl.get("chart")] + [p.get("chart") for p in sl.get("parts") or [] if isinstance(p, dict)]:
+            if isinstance(c, dict):
+                for se in c.get("series") or []:
+                    lines_.append("chart " + str(se.get("name", "")) + ": " + ", ".join(
+                        f"{k} = {v}" for k, v in zip(c.get("categories") or [], se.get("values") or [])))
+        if lines_:
+            pages.append(f"Slide {n}:\n" + "\n".join(f"- {re.sub(r'[*^]', '', t)}" for t in lines_))
+    return "\n\n".join(pages)
+
+
+def _conflict_msgs(got: dict, n_slides: int) -> dict[int, list[str]]:
+    out: dict[int, list[str]] = {}
+    for c in (got.get("conflicts") or [])[:12]:
+        if not isinstance(c, dict):
+            continue
+        ns = sorted({int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= n_slides})
+        vals = ", ".join(map(str, c.get("values") or []))
+        msg = (f"{c.get('quantity', 'a figure')} is given as {vals} across slides {', '.join(map(str, ns))}; use one "
+               f"value and one precision everywhere: {c.get('fix', '')}")[:400]
+        for n in (ns[1:] or ns):
+            out.setdefault(n, []).append(msg)
+    return out
+
+
+_AMT = r"(\$\s?\d[\d,]*(?:\.\d+)?\s?(?:B|bn|billion|M|m|million|K)?\b|\d[\d,]*(?:\.\d+)?\s?%)"
+_ARITH = re.compile(_AMT + r"[^.;$%\d]{0,40}?\b(less|minus|after paying|after|funds|covers|pays for|plus|and)\b[^.;$%\d]{0,40}?"
+                    + _AMT + r"[^.;$%\d]{0,50}?\b(leaves|leaving|left|is|are|=|equals|gives|giving|totals?|to)\b"
+                    r"[^.;$%\d]{0,25}?" + _AMT, re.I)
+
+
+def _amount(t: str):
+    """($ value in billions or % value, kind) for a figure as written, or None."""
+    t = t.replace(",", "").strip()
+    m = re.match(r"(\$)?\s?(\d+(?:\.\d+)?)\s?(B|bn|billion|M|m|million|K|%)?$", t, re.I)
+    if not m:
+        return None
+    v, u = float(m.group(2)), (m.group(3) or "").lower()
+    if u == "%":
+        return v, "%"
+    if not m.group(1):
+        return None
+    return v * {"m": 1e-3, "million": 1e-3, "k": 1e-6}.get(u, 1.0), "$"
+
+
+def arith_checks(slides) -> dict[int, list[str]]:
+    """Arithmetic stated in prose must hold: "$15.82B funds $7.5B capex and leaves $6B" is wrong ($8.32B) and a
+    reviewing MD circles it first. A less/minus/funds/covers B leaves C, and A plus B is C, are checked to the
+    rounding shown; the slide fails with the right figure."""
+    from engines.forge.render import normalize
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        for _, t in _strings(normalize(sl)):
+            for m in _ARITH.finditer(re.sub(r"\*\*|\^\d+", "", t)):
+                a, op, b, c = _amount(m.group(1)), m.group(2).lower(), _amount(m.group(3)), _amount(m.group(5))
+                if not (a and b and c) or len({a[1], b[1], c[1]}) != 1:
+                    continue
+                if op == "and" and m.group(4).lower() not in ("is", "are", "=", "equals", "totals", "total", "gives"):
+                    continue
+                want = a[0] + b[0] if op in ("plus", "and") else a[0] - b[0]
+                dec = len((re.search(r"\.(\d+)", m.group(5)) or [None, ""])[1])
+                tol = max(0.5 * 10 ** -dec * (1 if c[1] == "%" else 1), 0.006 * abs(want))
+                if abs(want - c[0]) > tol + 1e-9:
+                    unit = "%" if c[1] == "%" else "B"
+                    shown = f"{want:,.{max(dec, 1 if unit == 'B' else 0)}f}{unit}" if unit == "%" else \
+                        f"${want:,.{max(dec, 2)}f}B"
+                    out.setdefault(n, []).append(
+                        f"arithmetic in the text does not hold: '{m.group(0).strip()[:120]}' - {m.group(1)} "
+                        f"{'+' if op in ('plus', 'and') else '-'} {m.group(3)} is {shown}, not {m.group(5)}. Fix the "
+                        "figure (or add the missing step as a calc) so every sum on the page adds up")
+    return out
+
+
+def tie_checks(slides) -> dict[int, list[str]]:
+    """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
+    another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
+    capital: the ones a company has one of), keyed on the two words either side of the figure plus any year in the
+    clause; values that agree at the coarser precision shown (22% and 22.2%) are the same. The later slide fails."""
+    from engines.forge.render import normalize
+    rate = re.compile(r"\b(return|returns|yield|margin|rate|wacc|roic|roe|irr|hurdle|payout|coupon)\b")
+    seen: dict[str, tuple[float, int, int, str]] = {}
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        for _, t in _strings(normalize(sl)):
+            for clause in re.split(r"[;:!?()\n]|[.,](?=\s|$)|\s[-–]\s|\bvs\.?\b|\bversus\b|\bagainst\b|\bbeats?\b|\bthan\b",
+                                   re.sub(r"\*\*", "", t)):
+                hits = [(m, m.group(1), "%") for m in re.finditer(r"(-?\d+(?:\.\d+)?)%", clause)]
+                hits += [(m, m.group(1).replace(",", ""), " per share") for m in
+                         re.finditer(r"\$(\d[\d,]*(?:\.\d+)?)\s*(?:per|a)\s+share\b", clause)]
+                for m, num, unit in hits:
+                    yr = " ".join(re.findall(r"\b(?:19|20)\d\d\b", clause))
+                    def words(txt):
+                        return [w for w in re.findall(r"[a-z][a-z'-]*", txt.lower()) if w not in _TIE_STOP]
+                    keys = []
+                    after, before = words(clause[m.end():])[:2], words(clause[:m.start()])[-2:]
+                    if unit == "%":
+                        for ws in (after, before):
+                            if len(ws) == 2 and rate.search(" ".join(ws)):
+                                keys.append(" ".join(ws) + (f" {yr}" if yr else ""))
+                    else:                                  # "$2.26 per share": what is paid or priced per share
+                        near = words(clause[m.end():])[:3] + words(clause[:m.start()])[-3:][::-1]
+                        near = ["dividend" if w in ("pay", "pays", "paid", "paying") else w for w in near]
+                        what = [w for w in near if w in PER_SHARE][:1]
+                        if what:
+                            keys.append(f"{what[0]} per share" + (f" {yr}" if yr else ""))
+                    dec = len(num.split(".")[1]) if "." in num else 0
+                    v = float(num)
+                    for key in keys:
+                        if key not in seen:
+                            seen[key] = (v, dec, n, num)
+                            continue
+                        v0, d0, n0, raw0 = seen[key]
+                        d = min(dec, d0)
+                        if n != n0 and round(v, d) != round(v0, d) and abs(v - v0) > 0.05:
+                            u = "%" if unit == "%" else ""
+                            num_, raw0_ = (num, raw0) if unit == "%" else (f"${num}", f"${raw0}")
+                            msg = (f"'{key}' is {num_}{u} here but {raw0_}{u} on slide {n0}: one metric, one value across "
+                                   "the deck (use the same fact or calc; if it really changed, name what changed)")
+                            if msg not in out.get(n, []):
+                                out.setdefault(n, []).append(msg)
+    return out
 
 
 def prose_checks(slides) -> dict[int, list[str]]:
@@ -696,7 +935,7 @@ def prose_checks(slides) -> dict[int, list[str]]:
     return out
 
 
-WORDS_LED = {"argument_only"}
+WORDS_LED = {"argument_only", "challenge_matrix", "text_matrix"}     # pages of words, however they are arranged
 NO_VARIETY = {"cover", "section_divider", "agenda", "executive_summary", "closing", "next_steps", "end"}
 
 
@@ -728,6 +967,17 @@ def variety_checks(slides) -> dict[int, list[str]]:
     if body and len(words) > max(1, len(body) // 3):
         for i in words[max(1, len(body) // 3):]:
             out.setdefault(i, []).append(f"{len(words)} of {len(body)} content slides are words with icons; {ask}")
+
+    def plots(s):
+        return bool(s.get("chart") or s.get("charts") or any(isinstance(p, dict) and p.get("type") == "chart"
+                                                             for p in s.get("parts") or []))
+    charted = [i for i, s in body if plots(s)]
+    if len(body) >= 2 and len(charted) * 3 < len(body):  # at least a third of the content pages plot the facts
+        need = -(-len(body) // 3) - len(charted)
+        for i, s in [(i, s) for i, s in body if not plots(s)][:need]:
+            out.setdefault(i, []).append(f"only {len(charted)} of {len(body)} content slides show a chart; make this "
+                                         "one plot its numeric facts (bar_takeaway, column_trend, waterfall_bridge, "
+                                         "benchmark, or a grid with a chart part) and keep the point in the title")
     return out
 
 
@@ -896,6 +1146,9 @@ def replan_storyline(client, story_sys: str, story: dict, panel: dict, new_facts
                        f"{i['issue']} -> {i.get('fix') or ''}" for i in panel.get("issues") or [])
     cm = "\n".join(f"- {c.get('action')} slides {c.get('slides')}: {c.get('title') or ''}"
                    for r in panel.get("reviews") or [] for c in r.get("cut_or_merge") or [])
+    from engines.review.personas import coaching
+    from engines.forge.critics import NAMES as _N
+    coach = coaching(panel.get("reviews") or [], _N)
     found = "\n".join(f"- {f['id']}: {f['text']}" for f in new_facts)
     none = "\n".join(f"- {q['question']}" for q in (research or {}).get("questions") or []
                      if isinstance(q, dict) and q.get("status") != "found")
@@ -909,6 +1162,7 @@ def replan_storyline(client, story_sys: str, story: dict, panel: dict, new_facts
     user = (f"Brief:\n{brief[:12000]}\n\nFacts (cite by id):\n" + "\n".join(f"{f['id']}: {f['text']}" for f in facts)
             + f"\n\nCurrent storyboard ({len(story.get('slides') or [])} slides, must stay {n}):\n{json.dumps(story)}"
             + f"\n\nReviewers' issues:\n{issues or '- none listed'}"
+            + (f"\n\nReviewers' coaching (keep what works; make the changes that reach an 8):\n{coach}" if coach else "")
             + (f"\n\nCut, merge or add:\n{cm}" if cm else "")
             + (f"\n\nNew facts from research:\n{found}" if found else "")
             + (f"\n\nResearch found nothing for:\n{none}" if none else "")
@@ -1067,12 +1321,24 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
     help_ = arch_help(density)
+    global CONSULTING                                  # the decision type's playbook joins the house style for
+    from engines.forge.playbooks import playbook_for   # every writer prompt of this build (storyline, slides,
+    from engines.review import memory as _MEM          # and the partner's and MD's masterclass, every model
+    CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "") + \
+        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "")
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     facts = facts_from_brief(brief) + [dict(f) for f in extra_facts or []]
+    start = Path(os.environ["FORGE_START_FROM"]) if os.environ.get("FORGE_START_FROM") else None
+    if start:                     # build on a previous run: its facts, storyline and slides; only the review loop runs
+        facts = json.loads((start / "facts.json").read_text())
+        facts = facts.get("facts", facts) if isinstance(facts, dict) else facts
+        start_story = json.loads((start / "storyline.json").read_text())
+        start_slides = json.loads((start / "slides.json").read_text())
+        start_slides = start_slides.get("slides", start_slides) if isinstance(start_slides, dict) else start_slides
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
     agenda = wants_agenda(brief, slides_wanted, insert)
     narrative_n = max(3, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
@@ -1091,8 +1357,28 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
         opening = ("these slides go into an existing deck after its own slides: NO cover, NO agenda, NO divider and "
                    "NO closing slide, only content slides (charts, tables, comparisons) that make the brief's points; ")
         closing = ""
+    # ---- stage 1b: the dossier. Research the company BEFORE planning: what changed in the business, the latest
+    # results, guidance, deals, news (engines/research/dossier.py). Its facts join the brief's; its list of structural
+    # changes and unanswered questions goes to the planner.
+    dossier = None
+    subjects: list[str] = []                           # the companies the brief is about: research stays on them
+    if not insert and not start and os.environ.get("MH_DOSSIER", "1") != "0":
+        from engines.forge import critics as _CR, research as _RS
+        ok_, why_ = _RS.allowed(client, rules, brief, research)
+        if ok_:
+            from engines.research.dossier import build_dossier
+            dossier = build_dossier(brief, facts, client=client,
+                                    models=_CR.text_models(_CR.settings(rules)) or [MODEL], out_dir=str(out),
+                                    rules=rules, task_id=f"{task_id}-dossier")
+            facts.extend(dossier["facts"])
+            subjects[:] = [c.get("short") or c.get("name") for c in (dossier.get("identity") or {}).get("companies")
+                           or [] if isinstance(c, dict)]
     fact_txt = "\n".join(f"{f['id']}: {f['text']}" for f in facts)
     calls = 0
+    findings = ""
+    if dossier:
+        from engines.research.dossier import brief_block
+        findings = brief_block(dossier)
 
     # ---- stage 2: storyline (ghost deck)
     story_sys = f"""You are an engagement manager at a top strategy firm. Plan the storyline
@@ -1111,18 +1397,19 @@ points in one unit. If the facts are thin on a point, merge it into another slid
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
 {help_}"""
-    story, why = {}, ""
-    for budget in (8000, 16000):                 # once more with room when a reasoning model ran out of tokens
+    story, why = (start_story if start else {}), ""
+    for budget in (() if start else (8000, 16000)):   # once more with room when a reasoning model ran out of tokens
         try:
-            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}",
-                          task_id + "-story", budget)
+            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
+                          + (f"\n\n{findings}" if findings else ""), task_id + "-story", budget)
         except (RuntimeError, ValueError) as e:
             why = str(e)
         calls += 1
         if [x for x in (story.get("slides") or []) if isinstance(x, dict)] if isinstance(story, dict) else []:
             break
     else:
-        raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
+        if not (start and isinstance(story, dict) and story.get("slides")):   # a resumed run brings its storyline
+            raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
     notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
     if notes and len(story.get("slides") or []) >= 4:
         try:                                     # the partner's read of the storyboard, sent back once
@@ -1149,7 +1436,7 @@ supports it. Choose varied archetypes that prove each title.
     research_steps = 0
     research_log: list[dict] = []
     sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
-    if panel_on:
+    if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
         max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
         for rnd in range(1, max_sb + 1):
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
@@ -1165,7 +1452,7 @@ supports it. Choose varied archetypes that prove each title.
             qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
-                                      rules=rules, task_id=f"{task_id}-research-sb{rnd}")
+                                      rules=rules, task_id=f"{task_id}-research-sb{rnd}", names=subjects or None)
                 research_steps += 1
                 new = res_["facts"]
                 facts.extend(new)
@@ -1228,9 +1515,12 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
             return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", ""), "notes": f"content failed: {e}"}
-    with ThreadPoolExecutor(6) as ex:
-        content = {"slides": list(ex.map(one, plan))}
-    calls += len(plan)
+    if start:
+        content = {"slides": [dict(x) for x in start_slides]}
+    else:
+        with ThreadPoolExecutor(6) as ex:
+            content = {"slides": list(ex.map(one, plan))}
+        calls += len(plan)
     slides = [s for s in content.get("slides", []) if isinstance(s, dict)]
     if fixed:                                                  # model pages go in before the closing slide
         at = len(slides) - 1 if slides and slides[-1].get("archetype") in ("closing", "next_steps", "end") \
@@ -1261,6 +1551,16 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
         for n, msgs in variety_checks(slides).items():
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
+        for n, msgs in tie_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
+        for n, msgs in arith_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
+        from engines.forge.playbooks import playbook_checks
+        for n, msgs in playbook_checks(slides, brief).items():
+            fails.setdefault(n, []).extend(msgs)
+        for n, msgs in consistency_checks(slides, client, critics.text_models(critics.settings(rules)),
+                                          f"{task_id}-consistency").items():
+            fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
             if m and int(m.group(1)) - 1 < len(slides):
@@ -1291,7 +1591,14 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         specs = designer.specs(slides) if designer else {}
         return specs, [dict(s_, _design=specs[i]) if i in specs else s_ for i, s_ in enumerate(slides)]
 
+    unified: list[str] = []
+
     def draw():
+        try:                                  # one value per figure across the deck, fixed in code where mechanical
+            unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
+                                         f"{task_id}-consistency"))
+        except Exception:  # noqa: BLE001 - a checker that cannot run changes nothing
+            pass
         for _ in range(3):                    # a designed page that fails its checks is redrawn by its archetype
             specs, view_ = designed()
             r = render(view_, str(pptx), carry=False, theme=theme, density=density, template=template,
@@ -1442,7 +1749,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
             qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
-                                      rules=rules, task_id=f"{task_id}-research-{tag}")
+                                      rules=rules, task_id=f"{task_id}-research-{tag}", names=subjects or None)
                 research_steps += 1
                 facts.extend(res_["facts"])
                 research_log.append(dict(res_, step=f"deck review {tag}"))
@@ -1472,6 +1779,17 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 asks.setdefault(n, []).extend(msgs)
             for n in asks:                                     # with the slide's open rule failures, fixed together
                 asks[n] += [m for m in fails.get(n, []) if m not in asks[n]]
+            for r in pn.get("reviews") or []:                  # the reviewers' coaching: their path to an 8 goes in
+                who = critics.NAMES.get(r.get("persona"), r.get("persona"))   # as asks, what works is protected
+                for t in r.get("to_8") or []:
+                    n = critics.P.slide_of(t) or 1
+                    if n <= len(slides) and not is_fixed(n - 1):
+                        asks.setdefault(n, []).append(f"[review] {who}, to reach an 8"
+                                                      + ("" if critics.P.slide_of(t) else " (deck-wide)") + f": {t}")
+                for x in r.get("strengths") or []:
+                    n = critics.P.slide_of(x.get("where", ""))
+                    if n and n in asks:
+                        asks[n].append(f"[keep] {who} says this works, keep it: {x.get('what')}")
             act["to_writer"] = sorted(asks)
             whole = revise_deck(asks, tag) if asks and os.environ.get("MH_DECK_REVISE", "1") != "0" else None
             if whole is not None:                         # one pass over the whole deck keeps numbers and story tied
@@ -1537,6 +1855,15 @@ choice or the number of items; never layout. Keep node and keep the point of the
         panel_final = best["panel"] if best is not None else (deck_hist[-1]["panel"] if deck_hist else None)
         (out / "review.json").write_text(json.dumps({"rounds": deck_hist, "kept_round": best["round"] if best else None,
                                                      "bar": cfg["bar"]}, indent=1, default=str))
+        try:                                           # commit what this review taught to the team's memory
+            from engines.review import memory as _MEM
+            last = (deck_hist[-1]["panel"] if deck_hist else {}) or {}
+            learned = _MEM.learn("slides", last.get("reviews") or [], client,
+                                 (critics.text_models(cfg) or [MODEL])[0], f"{task_id}-memory")
+            if learned:
+                (out / "learned.json").write_text(json.dumps(learned, indent=1))
+        except Exception:  # noqa: BLE001
+            pass
     elif _review_on(client, rules):
         # the single generic partner review (review.personas.enabled false): content complaints go back to the
         # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
