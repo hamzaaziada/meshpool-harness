@@ -1996,7 +1996,8 @@ def merger(ws, row, names: dict | None = None, title_text="Merger: accretion / d
 CA_NAMES = {"revenue_base": "revenue_base", "rev_growth": "rev_growth", "ocf_margin": "ocf_margin",
             "capex_base": "capex_base", "capex_growth": "capex_growth", "cash": "cash", "min_cash": "min_cash",
             "shares": "shares", "price": "share_price", "dps": "dps", "dps_growth": "dps_growth",
-            "special_dps": "special_dps", "buyback": "buyback", "cash_yield": "cash_yield"}
+            "special_dps": "special_dps", "buyback": "buyback", "cash_yield": "cash_yield",
+            "down_growth": None, "down_margin_cut": None, "capex_overrun": None}   # name them for a downside case
 
 
 def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.01, capex_step=0.1,
@@ -2090,6 +2091,29 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
         define_name(wb, P(key), _abs(ws, f"B{r}"))
         out[key] = P(key)
         r += 1
+    # downside case: growth, margin and capex all go the wrong way at once; closing cash and headroom by year
+    if all(N.get(k) for k in ("down_growth", "down_margin_cut", "capex_overrun")):
+        r += 1
+        section(ws, r, f"{title_text}: downside case (lower growth, thinner margin, capex overrun at once)", width)
+        header(ws, r + 1, ["Line item"] + labels)
+        r += 2
+        line("d_rev", "Revenue, downside", f"={N['revenue_base']}*(1+{N['down_growth']})",
+             "={p}{d_rev}*(1+" + N["down_growth"] + ")")
+        line("d_fcf", "Free cash flow, downside",
+             "={c}{d_rev}*(" + N["ocf_margin"] + "-" + N["down_margin_cut"] + ")+{c}{capex}*(1+" + N["capex_overrun"] + ")",
+             total=True)
+        line("d_close", "Closing cash, downside (same cash returned, interest as base)",
+             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}",
+             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}", total=True)
+        line("d_head", "Headroom over the cash floor, downside", "={c}{d_close}-" + N["min_cash"])
+        for key, expr, lab in (("down_cash_end", f"={cols[-1]}{rows['d_close']}", "Closing cash, downside"),
+                               ("down_min_headroom", f"=MIN({cols[0]}{rows['d_head']}:{cols[-1]}{rows['d_head']})",
+                                "Lowest headroom, downside")):
+            ws.cell(row=r, column=1, value=lab)
+            _f(ws, f"B{r}", expr, "usd")
+            define_name(wb, P(key), _abs(ws, f"B{r}"))
+            out[key] = P(key)
+            r += 1
     # sensitivity: last-year closing cash, interest excluded, exact over the forecast (geometric sums)
     r += 1
     section(ws, r, f"{title_text}: closing cash in {labels[-1]} by revenue growth and capex (interest excluded)", width)
@@ -2124,5 +2148,8 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     if centre:
         add_check(wb, f"{title_text}: grid centre = closing cash less interest",
                   f"={_abs(ws, centre)}-({P('cash_end')}-{P('int_total')})")
+    if "down_cash_end" in out:                       # the downside never ends with more cash than the base
+        add_check(wb, f"{title_text}: downside closing cash is not above the base",
+                  f"=MAX(0,{P('down_cash_end')}-{P('cash_end')})")
     out.update({"rows": rows, "next_row": r})
     return out

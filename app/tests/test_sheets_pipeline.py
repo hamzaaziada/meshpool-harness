@@ -14,7 +14,9 @@ class Inputs:
                 "capex_growth": (0.03, "assumption"), "cash": (20210, "F5"), "min_cash": (8000, "assumption"),
                 "shares": (443.1, "F1"), "share_price": (1106.21, "F18"), "dps": (5.88, "F12"),
                 "dps_growth": (0.1, "assumption"), "special_dps": (30, "F35"), "buyback": (1000, "F36"),
-                "cash_yield": (4.0, "F17 Treasury yield")}                       # 4.0 meant 4%: normalised
+                "cash_yield": (4.0, "F17 Treasury yield"),                       # 4.0 meant 4%: normalised
+                "down_growth": (0.03, "F18 half the 3-year growth"), "down_margin_cut": (0.01, "assumption"),
+                "capex_overrun": (0.15, "assumption")}
         out = {"company": "Costco", "title": "Costco capital allocation", "first_year": 2027, "years": 5,
                "inputs": {k: {"value": v, "source": s, "rationale": "test"} for k, (v, s) in vals.items()}}
         return {"choices": [{"message": {"content": json.dumps(out)}}]}

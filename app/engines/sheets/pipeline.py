@@ -41,6 +41,11 @@ CA_INPUTS = [
     ("buyback", "Share buyback per year ($m)", "usd", "$ millions spent each year; 0 if none"),
     ("cash_yield", "Interest earned on cash", "pct", "decimal: the short-term rate (Treasury bill yield fact), "
                    "never the 10-year yield; the fact's value as stated"),
+    ("down_growth", "Downside: revenue growth per year", "pct", "decimal: a weak-demand case anchored on the "
+                    "history (e.g. half the 3-year growth); say why"),
+    ("down_margin_cut", "Downside: cut to the operating cash flow margin", "pct", "decimal points taken off the "
+                        "margin, e.g. 0.01; anchored on how far it moved in the history"),
+    ("capex_overrun", "Downside: capex overrun", "pct", "decimal, e.g. 0.15 for 15% over plan"),
 ]
 
 
@@ -118,14 +123,16 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
     B.title(wb["Inputs"], "Inputs: every number with its source")
     book = B.assumption_book(wb["Inputs"])
     sections = {"revenue_base": "Operations", "cash": "Balance sheet and shares", "dps": "Cash returned",
-                "cash_yield": "Rates"}
+                "cash_yield": "Rates", "down_growth": "Downside case"}
     for name, label, fmt, _ in CA_INPUTS:
         if name in sections:
             book.section(sections[name])
         it = inputs[name]
         book.add(label, it["value"], fmt, name=name, source=it["source"], rationale=it["rationale"])
     B.title(wb["Model"], f"{company}: cash generated and its uses, $m")
-    ca = B.capital_allocation(wb["Model"], 3, years)
+    ca = B.capital_allocation(wb["Model"], 3, years, names={"down_growth": "down_growth",
+                                                             "down_margin_cut": "down_margin_cut",
+                                                             "capex_overrun": "capex_overrun"})
     out = wb["Outputs"]
     B.title(out, "Outputs: the answer first")
     out["A3"], out["A4"] = "Question", "Answer"
@@ -166,7 +173,11 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
             (f"Closing cash, {years[-1]} ($m)", f"={ca['cash_end']}", "usd"),
             ("Lowest headroom over the cash floor ($m)", f"={ca['min_headroom']}", "usd"),
             ("Closing shares (m)", f"={ca['shares_end']}", "num"),
-            ("Funded without new debt?", f'=IF({ca["min_headroom"]}>=0,"Yes","No: cash falls below the floor")', None)]
+            ("Funded without new debt?", f'=IF({ca["min_headroom"]}>=0,"Yes","No: cash falls below the floor")', None),
+            ("Downside: closing cash ($m)", f"={ca['down_cash_end']}", "usd"),
+            ("Downside: lowest headroom over the floor ($m)", f"={ca['down_min_headroom']}", "usd"),
+            ("Funded in the downside?", f'=IF({ca["down_min_headroom"]}>=0,"Yes","No: in the downside cash falls below '
+             'the floor")', None)]
     for i, (lab, expr, fmt) in enumerate(rows, start=12):
         out.cell(row=i, column=1, value=lab)
         B._f(out, f"B{i}", expr, fmt)
