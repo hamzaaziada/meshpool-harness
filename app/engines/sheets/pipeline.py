@@ -159,7 +159,11 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
          + ca["cash_end"] + ',"#,##0")&"m and "&IF(' + ca["min_headroom"] + '>=0,"never falls below the $"&TEXT('
          'min_cash,"#,##0")&"m floor (lowest headroom $"&TEXT(' + ca["min_headroom"] + ',"#,##0")&"m).","falls $"&'
          'TEXT(-' + ca["min_headroom"] + ',"#,##0")&"m below the $"&TEXT(min_cash,"#,##0")&"m floor: the plan needs '
-         'debt or a smaller return.")')
+         'debt or a smaller return.")&" In the downside (lower growth, thinner margin, capex overrun) "&IF('
+         + ca["down_suspended"] + '>0,"the buyback is suspended in "&' + ca["down_suspended"] + '&" year(s) and ","")'
+         '&"cash "&IF(' + ca["down_min_headroom"] + '>=0,"stays above the floor (lowest headroom $"&TEXT('
+         + ca["down_min_headroom"] + ',"#,##0")&"m).","still falls $"&TEXT(-' + ca["down_min_headroom"]
+         + ',"#,##0")&"m below the floor: the special dividend or capex must give.")')
     for ref in ("A3", "A4"):
         out[ref].font = B.Font(name=B.FONT, bold=True)
     out["B3"].alignment = out["B4"].alignment = B.Alignment(wrap_text=False, vertical="top")   # runs across the
@@ -194,6 +198,9 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
             ("Downside: lowest headroom over the floor ($m)", f"={ca['down_min_headroom']}", "usd"),
             ("Funded in the downside?", f'=IF({ca["down_min_headroom"]}>=0,"Yes","No: in the downside cash falls below '
              'the floor")', None),
+            ("Downside: years the buyback is suspended", f"={ca['down_suspended']}", "num"),
+            ("Closing cash across growth +/-2pp and investment +/-20% ($m, low)", f"={ca['grid_low']}", "usd"),
+            ("Closing cash across growth +/-2pp and investment +/-20% ($m, high)", f"={ca['grid_high']}", "usd"),
             ("Year of the lowest headroom, base", f"=INDEX($B$7:${_col(len(years))}$7,MATCH(MIN('Model'!$B${rws['head']}:"
              f"${_col(len(years))}${rws['head']}),'Model'!$B${rws['head']}:${_col(len(years))}${rws['head']},0))", None),
             ("Year of the lowest headroom, downside", f"=INDEX($B$7:${_col(len(years))}$7,MATCH(MIN('Model'!$B${rws['d_head']}:"

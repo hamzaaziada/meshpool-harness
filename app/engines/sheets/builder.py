@@ -2102,15 +2102,27 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
         line("d_fcf", "Free cash flow, downside",
              "={c}{d_rev}*(" + N["ocf_margin"] + "-" + N["down_margin_cut"] + ")+{c}{capex}*(1+" + N["capex_overrun"] + ")",
              total=True)
-        line("d_close", "Closing cash, downside (same cash returned, interest as base)",
-             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}",
-             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}", total=True)
+        # management's response: the buyback is suspended in any year it would take cash below the floor
+        line("d_buyback", "Share buyback, downside (suspended in a year it would breach the floor)",
+             "=IF(" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{buyback}<" + N["min_cash"]
+             + ",0,{c}{buyback})")
+        line("d_close", "Closing cash, downside (dividends kept, buyback suspended where needed)",
+             "=" + N["cash"] + "+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{d_buyback}",
+             "={p}{d_close}+{c}{d_fcf}+{c}{int}+{c}{regdiv}+{c}{special}+{c}{d_buyback}", total=True)
+        for i, c in enumerate(cols[1:], 1):          # later years test last year's downside closing cash
+            pc = cols[i - 1]
+            _f(ws, f"{c}{rows['d_buyback']}", f"=IF({pc}{rows['d_close']}+{c}{rows['d_fcf']}+{c}{rows['int']}"
+                                              f"+{c}{rows['regdiv']}+{c}{rows['special']}+{c}{rows['buyback']}<"
+                                              f"{N['min_cash']},0,{c}{rows['buyback']})", "usd")
         line("d_head", "Headroom over the cash floor, downside", "={c}{d_close}-" + N["min_cash"])
         for key, expr, lab in (("down_cash_end", f"={cols[-1]}{rows['d_close']}", "Closing cash, downside"),
+                               ("down_suspended", f"=COUNTIFS({cols[0]}{rows['d_buyback']}:{cols[-1]}{rows['d_buyback']},0,"
+                                                  f"{cols[0]}{rows['buyback']}:{cols[-1]}{rows['buyback']},\"<>0\")",
+                                "Years the buyback is suspended, downside"),
                                ("down_min_headroom", f"=MIN({cols[0]}{rows['d_head']}:{cols[-1]}{rows['d_head']})",
                                 "Lowest headroom, downside")):
             ws.cell(row=r, column=1, value=lab)
-            _f(ws, f"B{r}", expr, "usd")
+            _f(ws, f"B{r}", expr, "num" if key == "down_suspended" else "usd")
             define_name(wb, P(key), _abs(ws, f"B{r}"))
             out[key] = P(key)
             r += 1
@@ -2140,7 +2152,13 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
             c = get_column_letter(2 + j)
             _f(ws, f"{c}{rr}", f"={N['cash']}+{N['revenue_base']}*{N['ocf_margin']}*{sum_q}"
                                f"-{N['capex_base']}*(1+{c}${hdr})*{sum_p}-{P('uses_total')}", "usd")
-    r = hdr + 1 + 5 + 1
+    for key, fn, lab in (("grid_low", "MIN", "Grid: lowest closing cash"), ("grid_high", "MAX", "Grid: highest closing cash")):
+        rr = hdr + 1 + 5 + (1 if key == "grid_low" else 2)
+        ws.cell(row=rr, column=1, value=lab)
+        _f(ws, f"B{rr}", f"={fn}(B{hdr + 1}:F{hdr + 5})", "usd")
+        define_name(wb, P(key), _abs(ws, f"B{rr}"))
+        out[key] = P(key)
+    r = hdr + 1 + 5 + 3
     if "Checks" not in wb.sheetnames:
         wb.create_sheet("Checks")
     add_check(wb, f"{title_text}: closing cash ties to its flows",

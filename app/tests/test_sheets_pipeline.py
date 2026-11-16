@@ -43,7 +43,7 @@ def test_capital_allocation_recipe_builds_a_workbook_that_passes_the_engine_chec
     assert qa.value(res["path"], "Checks!F3") == "OK"
     assert "assumption" in " ".join(res["notes"])
     assert abs(res["inputs"]["rev_growth"]["low"] - 0.035) < 1e-9 and abs(res["inputs"]["rev_growth"]["high"] - 0.105) < 1e-9
-    assert qa.value(res["path"], "Outputs!B21") in ("2027", "2028", "2029", "2030", "2031")
+    assert qa.value(res["path"], "Outputs!B24") in ("2027", "2028", "2029", "2030", "2031")
 
 
 @pytest.mark.skipif(not find_soffice(), reason="LibreOffice not installed")
