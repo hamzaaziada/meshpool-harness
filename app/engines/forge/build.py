@@ -854,6 +854,59 @@ def arith_checks(slides) -> dict[int, list[str]]:
     return out
 
 
+def _qty(cell) -> tuple[float, str] | None:
+    """A table cell as (value, kind): '$3.0B' -> (3e9, '$'), '2.7M' or '2.7M shares' -> (2.7e6, 'n')."""
+    if isinstance(cell, dict):                          # {"text"} or {"lead", "bullets"}: the lead is the value
+        cell = cell.get("lead") or cell.get("text") or cell.get("value") or ""
+    t = re.sub(r"\*\*|\^\d+", "", str(cell)).replace(",", "")
+    m = re.search(r"(\$)?\s?(-?\d+(?:\.\d+)?)\s?(B|bn|billion|M|m|million|K|k)?\b", t)
+    if not m:
+        return None
+    mult = {"b": 1e9, "bn": 1e9, "billion": 1e9, "m": 1e6, "million": 1e6, "k": 1e3}.get((m.group(3) or "").lower(), 1)
+    return float(m.group(2)) * mult, "$" if m.group(1) else "n"
+
+
+def table_checks(slides) -> dict[int, list[str]]:
+    """Option tables must be internally consistent: where a table has an amount column ($) and a shares column, every
+    row implies one share price (amount / shares). '$3.0B retires 2.7M shares' beside '$4.0B retires 3.6M' is the
+    MD's first circle. The writer gets the price the other rows imply and the share count it gives."""
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        tabs = [sl.get("table")] + [p.get("table") if isinstance(p.get("table"), dict) else p
+                                    for p in sl.get("parts") or [] if isinstance(p, dict) and p.get("type") == "table"]
+        for t in tabs:
+            if not isinstance(t, dict):
+                continue
+            cols = [str(c if not isinstance(c, dict) else c.get("text", "")).lower() for c in t.get("columns") or []]
+            si = next((i for i, c in enumerate(cols) if "share" in c and ("retire" in c or "bought" in c
+                                                                             or "repurchas" in c)), None)
+            if si is None:
+                continue
+            implied = []
+            for r in t.get("rows") or []:
+                cells = r if isinstance(r, list) else []
+                if len(cells) <= si:
+                    continue
+                sh = _qty(cells[si])
+                amt = next((q for j, c in enumerate(cells) if j != si and (q := _qty(c)) and q[1] == "$"
+                            and q[0] >= 1e7), None)
+                if sh and sh[1] == "n" and sh[0] > 0 and amt:
+                    implied.append((amt[0] / sh[0], amt[0], cells))
+            if len(implied) < 2:
+                continue
+            prices = sorted(x[0] for x in implied)
+            mid = prices[len(prices) // 2]
+            for price, amt, cells in implied:
+                if abs(price - mid) / mid > 0.03:
+                    out.setdefault(n, []).append(
+                        f"table row '{' | '.join(str(c) for c in cells)[:90]}' implies a share price of ${price:,.0f} "
+                        f"while the other rows imply ${mid:,.0f}; at ${mid:,.0f} that amount retires "
+                        f"{amt / mid / 1e6:,.2f}M shares. Fix the row so every option uses one price")
+    return out
+
+
 def tie_checks(slides) -> dict[int, list[str]]:
     """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
     another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
@@ -1554,6 +1607,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for n, msgs in arith_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
+        for n, msgs in table_checks(slides).items():
             fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
         from engines.forge.playbooks import playbook_checks
         for n, msgs in playbook_checks(slides, brief).items():
