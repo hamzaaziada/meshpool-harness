@@ -43,7 +43,9 @@ renderer applies a strict consulting design; you only fill fields.
   answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
   1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
   today, written "Decision today: <approve / choose / fund what, by when>"; it must NOT restate the title (the title
-  is the answer, the decision line is the ask) - leave it out when there is no decision to take.
+  is the answer, the decision line is the ask) - leave it out when there is no decision to take; "metrics": 2-3 of
+  {"value": the figure as shown, e.g. "$13.3B", "label": what it is, <= 8 words, "prov"} - the numbers that size the
+  decision, shown large in a panel beside the points (always give them when the answer has a size).
 - closing: the last slide when the deck ends on action. "title" (the call to action, with a verb), "steps": 3-5 of
   {"action": imperative, <= 8 words, "detail": what it involves and why, <= 25 words, with its numbers,
   "milestones": 1-3 short lines (first milestones, decision gates, the measure of success), "owner": who,

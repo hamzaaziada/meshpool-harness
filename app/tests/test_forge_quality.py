@@ -329,3 +329,21 @@ def test_unify_figures_replaces_the_losing_value_in_text_only():
     assert done == ["slide 3: $6.92B -> $6.93B"]
     assert slides[2]["title"] == "Cash left is $6.93B, not $16.92B" and slides[2]["notes"] == "was $6.92B"
     assert slides[2]["chart"]["series"][0]["values"] == [6.92]
+
+
+def test_executive_summary_shows_its_sizing_figures(tmp_path):
+    """metrics on the executive summary render as a figures panel beside the points, sourced like any number."""
+    from engines.forge.render import render
+    from pptx import Presentation
+    s = {"archetype": "executive_summary", "title": "Approve the $13.3B special dividend",
+         "points": [{"lead": "The dividend is funded", "bullets": ["Cash falls to $6.9B"], "prov": ["F1"]},
+                    {"lead": "The buyback waits", "bullets": ["It earns 1.88%"], "prov": ["F1"]}],
+         "metrics": [{"value": "$13.3B", "label": "special dividend", "prov": ["F1"]},
+                     {"value": "$4B", "label": "buyback authorisation", "prov": ["F1"]}]}
+    out = tmp_path / "es.pptx"
+    r = render([s], str(out), carry=False, density="balanced")
+    names = [sh.name for sh in Presentation(str(out)).slides[0].shapes]
+    assert "ov_MetricsPanel" in names and "role_numeral_Metric2" in names
+    import json as _j
+    prov = _j.loads(open(r["provenance"]).read())["slides"]["1"]
+    assert any(p["text"] == "$13.3B" for p in prov)

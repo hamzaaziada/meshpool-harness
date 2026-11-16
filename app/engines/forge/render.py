@@ -1195,6 +1195,16 @@ def _waterfall_style(plot, vals, spans, dec, usfx):
             f.color.theme_color = TC.TEXT_1 if colr == TC.ACCENT_2 else TC.BACKGROUND_1   # dark on the light highlight
 
 
+def _no_wrap(dl) -> None:
+    """A data label stays on one line: LibreOffice wraps "22.20%" to "22.20 / %" unless the label's body says no."""
+    try:
+        bp = dl._element.get_or_add_txPr().find(qn("a:bodyPr"))
+        if bp is not None:
+            bp.set("wrap", "none")
+    except Exception:  # noqa: BLE001 - styling only
+        pass
+
+
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     if c.get("kind") == "range":
         return _range_chart(ctx, sl, n, c, x, y, w, h)
@@ -1275,6 +1285,9 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         if kind in ("bar", "column", "stacked_bar", "stacked_column", "waterfall") and ends:
             if min(ends) >= 0:                                 # the axis is hidden: bars must start at zero, or
                 va.minimum_scale = 0                           # auto-scaling exaggerates the differences
+                if kind in ("bar", "column") and max(ends) > 0:   # room past the longest bar for its outside label:
+                    lab = max(len(f"{v:,.{dec}f}{usfx}") for v in allv)   # without it the label wraps ("22.20 / %")
+                    va.maximum_scale = max(ends) * (1 + (0.04 + 0.022 * lab if kind == "bar" else 0.12))
             elif max(ends) <= 0:
                 va.maximum_scale = 0
     except Exception:
@@ -1307,6 +1320,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False
         s.data_labels.font.size = Pt(T["label"])
+        _no_wrap(s.data_labels)
         if kind in ("column", "bar"):                     # clustered too: labels outside, in text colour
             s.data_labels.position = XL_LABEL_POSITION.OUTSIDE_END
             s.data_labels.font.color.theme_color = TC.TEXT_1
@@ -2771,6 +2785,22 @@ def a_executive_summary(ctx, s, sl, n):
         return
     lx, lw = span24(1, 9)
     dx, dw = span24(10, 23)
+    mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
+    if mets:                                              # the decision's size, large in a panel beside the points
+        dx, dw = span24(10, 18)
+        mx, mw = span24(19, 23)
+        _fill(sl, mx - 0.12, top - 0.05, RIGHT - mx + 0.12, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")
+        mh = (bottom - top) / len(mets)
+        for i, m in enumerate(mets):
+            my = top + i * mh
+            vb = [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
+                   "color": TC.ACCENT_1}]
+            ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
+            _write(_box(sl, mx, my + 0.12, mw - 0.1, 0.62, f"role_numeral_Metric{i + 1}"), vb)
+            _write(_box(sl, mx, my + 0.74, mw - 0.1, max(0.3, mh - 0.86), f"MetricLabel{i + 1}"),
+                   [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}])
+            if i < len(mets) - 1:
+                _rule(sl, mx, my + mh, mw - 0.1, TC.ACCENT_5, 0.5, f"MetricRule{i + 1}")
     size = T["body"] + 2
 
     def rows(z):
@@ -2800,7 +2830,7 @@ def a_executive_summary(ctx, s, sl, n):
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
         y += rh
         if i < len(laid) - 1:
-            _rule(sl, LEFT, y, RIGHT - LEFT, TC.ACCENT_5, 0.5, f"SummaryRule{i + 1}")
+            _rule(sl, LEFT, y, (dx + dw if mets else RIGHT) - LEFT, TC.ACCENT_5, 0.5, f"SummaryRule{i + 1}")
 
 
 def a_waterfall_bridge(ctx, s, sl, n):
@@ -2876,6 +2906,7 @@ def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
     se.format.fill.fore_color.theme_color = TC.ACCENT_4
     se.data_labels.show_value = True
     se.data_labels.number_format = fmt
+    _no_wrap(se.data_labels)
     se.data_labels.number_format_is_linked = False
     se.data_labels.position = XL_LABEL_POSITION.INSIDE_END    # inside the bar end, white: clear of the lines
     se.data_labels.font.size = Pt(T["label"])
