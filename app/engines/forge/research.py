@@ -510,8 +510,8 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
                 "dividend per share = amount / shares)", [(c, "share price"), (c, "shares outstanding")])
         if price and eps:
             add(co, "earnings yield", f"{eps / price:.2%} = diluted EPS ${eps:,.2f} / share price ${price:,.2f} (an "
-                "EPS-accretion test only: it ignores growth, so it is not the return a buyback earns and is never "
-                "compared with a cash yield)", [(c, "diluted EPS"), (c, "share price")])
+                "EPS-accretion test only: it ignores growth, so it is not the return a buyback earns; never put it "
+                "beside a cash or Treasury yield)", [(c, "diluted EPS"), (c, "share price")])
             rf = next((f for f in facts if f.get("label") == "treasury yield" and isinstance(f.get("value"), (int, float))),
                       None)
             beta = v(c, "beta")

@@ -56,10 +56,10 @@ def playbook_checks(slides: list[dict], brief: str) -> dict[int, list[str]]:
         if s.get("fixed"):
             continue
         txt = json.dumps({k: v for k, v in s.items() if k not in ("notes", "prov", "source")}, ensure_ascii=False)
-        if _EY.search(txt) and _CASH.search(txt) and not re.search(r"(?i)accretion test", txt):
+        if _EY.search(txt) and _CASH.search(txt):     # labelled or not: the MD rejects the comparison itself
             out.setdefault(n, []).append(
                 "[playbook] this slide sets a buyback's earnings yield against a cash or Treasury yield; a reviewing MD "
                 "rejects that as a valuation test. Value the buyback against intrinsic value (the implied return of "
-                "buying at today's price, or the share price against a DCF or multiple range from the facts), and if "
-                "earnings yield stays, label it an EPS-accretion test only, not a comparison with cash")
+                "buying at today's price against the cost of equity, from the facts), and never put a buyback's "
+                "yield and a cash or Treasury yield on the same slide, even labelled as an EPS test")
     return out
