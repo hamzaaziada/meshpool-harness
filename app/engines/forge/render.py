@@ -2125,7 +2125,8 @@ def a_cover(ctx, s, sl, n):
     """Opening (and end) slide: short accent bar, large serif title, subtitle, hairline, date line, firm label.
     The title stays in the layout's title placeholder so outline view and accessibility tools see it."""
     clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
-    x, w = LEFT, colx24(17) - LEFT
+    mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
+    x, w = LEFT, colx24(15 if mets else 17) - LEFT        # the headline figures take the right of the page
     from .common import font_file, wrap_lines
     f = _font("head", True)
     size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
@@ -2184,6 +2185,20 @@ def a_cover(ctx, s, sl, n):
     _write(_box(sl, colx(9), 6.65, RIGHT - colx(9), 0.3, "Firm"),
            [{"text": s.get("firm") or BRAND.get("firm") or FIRM, "size": 11, "bold": True, "numbers": False,
              "align": PP_ALIGN.RIGHT, "color": ink}])
+    if mets:                                               # the cover's empty right half carries the decision's size
+        mx = colx24(16) + 0.2
+        mw, top, bot = RIGHT - mx, 1.55, 6.25
+        mh = (bot - top) / len(mets)
+        for i, m in enumerate(mets):
+            my = top + i * mh
+            if i:
+                _rule(sl, mx, my, mw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"CoverMetricRule{i}")
+            _write(_box(sl, mx, my + 0.1, mw, 0.7, f"role_numeral_CoverMetric{i + 1}"),
+                   [{"text": clean(str(m["value"])), "size": 34, "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_2 if dark else TC.ACCENT_1}])
+            ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
+            _write(_box(sl, mx, my + 0.82, mw, max(0.3, mh - 0.95), f"CoverMetricLabel{i + 1}"),
+                   [{"text": clean(str(m.get("label") or "")), "size": 13, "numbers": False, "color": soft}])
 
 
 def a_closing(ctx, s, sl, n):

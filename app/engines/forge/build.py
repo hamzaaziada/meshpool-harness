@@ -30,7 +30,8 @@ STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
 _ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The
 renderer applies a strict consulting design; you only fill fields.
-- cover: title, subtitle, "date" (the occasion and today's month and year, e.g. "Board meeting, " + the month).
+- cover: title, subtitle, "date" (the occasion and today's month and year, e.g. "Board meeting, " + the month),
+  "metrics": 2-3 of {"value", "label" (<= 6 words), "prov"}: the figures that size the decision, shown on the cover.
 - grid: a slide assembled from PARTS on a grid when one exhibit is not enough (or too much). "layout": full, halves,
   halves_v, thirds, quarters, main_side (2/3 + 1/3), side_main, main_stack (left half + two stacked quarters right),
   stack_main; "look": editorial | boxed | minimal | bold; "parts": one per region, each {"type", "heading", ...}:

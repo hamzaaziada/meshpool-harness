@@ -399,3 +399,14 @@ def test_option_table_rows_imply_one_share_price():
     assert table_checks([good]) == {}
     out = table_checks([bad])
     assert list(out) == [1] and "4.50M shares" in out[1][0]
+
+
+def test_cover_shows_its_headline_figures(tmp_path):
+    from engines.forge.render import render
+    from pptx import Presentation
+    s = {"archetype": "cover", "title": "Fund the growth, then return cash", "subtitle": "Board decision",
+         "metrics": [{"value": "$13.3B", "label": "special dividend", "prov": ["F1"]},
+                     {"value": "$4.0B", "label": "buyback authorisation", "prov": ["F1"]}]}
+    render([s], str(tmp_path / "c.pptx"), carry=False)
+    names = [sh.name for sh in Presentation(str(tmp_path / "c.pptx")).slides[0].shapes]
+    assert "role_numeral_CoverMetric2" in names
