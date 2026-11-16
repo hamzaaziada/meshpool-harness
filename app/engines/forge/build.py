@@ -1184,6 +1184,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     # results, guidance, deals, news (engines/research/dossier.py). Its facts join the brief's; its list of structural
     # changes and unanswered questions goes to the planner.
     dossier = None
+    subjects: list[str] = []                           # the companies the brief is about: research stays on them
     if not insert and os.environ.get("MH_DOSSIER", "1") != "0":
         from engines.forge import critics as _CR, research as _RS
         ok_, why_ = _RS.allowed(client, rules, brief, research)
@@ -1193,6 +1194,8 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
                                     models=_CR.text_models(_CR.settings(rules)) or [MODEL], out_dir=str(out),
                                     rules=rules, task_id=f"{task_id}-dossier")
             facts.extend(dossier["facts"])
+            subjects[:] = [c.get("short") or c.get("name") for c in (dossier.get("identity") or {}).get("companies")
+                           or [] if isinstance(c, dict)]
     fact_txt = "\n".join(f"{f['id']}: {f['text']}" for f in facts)
     calls = 0
     findings = ""
@@ -1271,7 +1274,7 @@ supports it. Choose varied archetypes that prove each title.
             qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
-                                      rules=rules, task_id=f"{task_id}-research-sb{rnd}")
+                                      rules=rules, task_id=f"{task_id}-research-sb{rnd}", names=subjects or None)
                 research_steps += 1
                 new = res_["facts"]
                 facts.extend(new)
@@ -1550,7 +1553,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
             qs = RS.questions_from(pn, int(os.environ.get("MH_RESEARCH_QUESTIONS") or rcaps["max_questions"]))
             if qs and rs_ok and research_steps < int(rcaps["max_research_steps"]):
                 res_ = RS.investigate(qs, facts, client=client, models=critics.text_models(cfg), out_dir=str(out),
-                                      rules=rules, task_id=f"{task_id}-research-{tag}")
+                                      rules=rules, task_id=f"{task_id}-research-{tag}", names=subjects or None)
                 research_steps += 1
                 facts.extend(res_["facts"])
                 research_log.append(dict(res_, step=f"deck review {tag}"))

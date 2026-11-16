@@ -97,3 +97,17 @@ def test_xbrl_facts_add_the_companys_own_three_year_growth():
                        fetch=lambda cik: facts)
     g = [f for f in got if "grew" in f["text"]]
     assert g and "10.0% a year over three years" in g[0]["text"] and g[0]["derived"]
+
+
+def test_research_stays_on_the_subject_company():
+    """A reviewer's unnamed question is about the brief's company; a page about another company does not answer it."""
+    from types import SimpleNamespace as NS
+    from engines.forge.research import _about_subject, _mentions
+    assert _about_subject("What is the fiscal 2027 capex plan and expected free cash flow?", ["Costco"])
+    assert _about_subject("Does Costco's buyback beat the Treasury yield?", ["Costco"])
+    assert not _about_subject("How does Walmart's membership income compare?", ["Costco"])
+    msft = NS(text="We expect to remain free cash flow positive in FY27.",
+              source=NS(label="Microsoft FY2027 Q1 earnings call", url="https://www.microsoft.com/investor"))
+    cost = NS(text="Our share repurchase program is under a $4,000 authorization.",
+              source=NS(label="COSTCO WHOLESALE CORP 10-Q", url="https://www.sec.gov/x/cost-20260510.htm"))
+    assert not _mentions(msft, ["Costco"]) and _mentions(cost, ["Costco"])

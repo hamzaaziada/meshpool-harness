@@ -526,6 +526,29 @@ def economics_facts(facts: list[dict], no: int) -> list[dict]:
     return out
 
 
+_ASK = {"what", "how", "which", "does", "do", "is", "are", "why", "when", "who", "will", "can", "should", "has",
+        "have", "the", "a", "an", "if", "at", "in", "on", "for", "of", "and", "or", "board", "management", "company"}
+
+
+def _about_subject(question: str, subj: list[str]) -> bool:
+    """True when the question names no company other than the subject (it is about the subject even if unnamed)."""
+    if not subj:
+        return False
+    low = {n.lower() for n in subj}
+    words = re.findall(r"\b[A-Z][a-zA-Z&'.-]{2,}\b", question)
+    others = [w for w in words if w.lower() not in _ASK and w.lower().rstrip("'s") not in low and not w.isupper()
+              and not re.match(r"^(FY|Q)\d", w) and w.lower() not in ("treasury", "fed", "federal", "sec", "gaap",
+                                                                     "january", "february", "march", "april", "may",
+                                                                     "june", "july", "august", "september",
+                                                                     "october", "november", "december")]
+    return not others
+
+
+def _mentions(p, subj: list[str]) -> bool:
+    hay = " ".join(str(x or "") for x in (p.text, p.source.label if p.source else "", p.source.url if p.source else ""))
+    return any(re.search(r"(?i)\b" + re.escape(n), hay) for n in subj)
+
+
 def investigate(questions: list[dict | str], facts: list[dict], *, client=None, models: list[str] | None = None,
                 out_dir: str | None = None, rules: dict | None = None, task_id: str = "forge-research",
                 search_fn=None, fetch_fn=None, names: list[str] | None = None) -> dict:
@@ -547,6 +570,14 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
     mq = _queries_model([q["question"] for q in need], client, models, task_id, dead0) if need else None
     for i, q in enumerate(need):                         # short queries a search engine can use, not the sentence
         q["queries"] = [x for x in ((mq[i] if mq else []) + [_keywords(q["question"])]) if x.strip()][:3]
+
+    subj = [w for w in (re.sub(r"[^\w ]", " ", str(n or "")).split()[:1] for n in (names or [])) if w]
+    subj = [w[0] for w in subj if len(w[0]) >= 3]       # "Costco Wholesale" -> "Costco": the name people search
+    for q in qs:                                        # a reviewer's question rarely names the company: a search
+        q["_subject"] = _about_subject(q["question"], subj)  # for "the FY2027 capex plan" finds someone else's
+        if q["_subject"]:
+            q["queries"] = [x if any(n.lower() in x.lower() for n in subj) else f'"{subj[0]}" {x}'
+                            for x in q["queries"]]
 
     def gather(q):                                     # search + read in parallel across questions
         if time.time() - t0 > budget:
@@ -615,6 +646,8 @@ def investigate(questions: list[dict | str], facts: list[dict], *, client=None, 
         for text, p in picked:
             if not _holds(text, p.text):                # a number or words the passage does not state: dropped
                 continue
+            if q.get("_subject") and not _mentions(p, subj):   # about the subject, but the page is about
+                continue                                         # another company (a Microsoft call for Costco)
             key = re.sub(r"\W+", "", text.lower())[:200]
             if key in known:
                 continue
