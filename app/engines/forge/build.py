@@ -55,8 +55,8 @@ renderer applies a strict consulting design; you only fill fields.
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
   cell is {"lead": one bold sentence (<= 10 words), "bullets": 1-3 evidence lines (<= 22 words) each starting
   with its number}. Use for 'N issues/challenges/drivers, each with evidence'.
-- exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, may end with "…"),
-  "title_right" (<= 9 words, continues the thought, may start with "…but"), "exhibit": {"title": what is shown,
+- exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, a complete sentence,
+  never ending in "…"), "title_right" (<= 9 words, a complete sentence: the implication or the counter-point), "exhibit": {"title": what is shown,
   "unit": measure and period}, "chart" (bar/column/line, or bubble with points[{x,y,size,label,focus}],
   x_range, y_range, x_major, y_major, x_cross, y_cross, x_title), "blocks": 2-3 of {"text": intro sentence with
   **bold key phrases**, "bullets": 1-3 lines with the numbers as **bold phrases**}, "callout": {"bullets": 2-3
@@ -1323,13 +1323,22 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     help_ = arch_help(density)
     global CONSULTING                                  # the decision type's playbook joins the house style for
     from engines.forge.playbooks import playbook_for   # every writer prompt of this build (storyline, slides,
-    CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "")   # revisions)
+    from engines.review import memory as _MEM          # and the partner's and MD's masterclass, every model
+    CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "") + \
+        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "")
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     facts = facts_from_brief(brief) + [dict(f) for f in extra_facts or []]
+    start = Path(os.environ["FORGE_START_FROM"]) if os.environ.get("FORGE_START_FROM") else None
+    if start:                     # build on a previous run: its facts, storyline and slides; only the review loop runs
+        facts = json.loads((start / "facts.json").read_text())
+        facts = facts.get("facts", facts) if isinstance(facts, dict) else facts
+        start_story = json.loads((start / "storyline.json").read_text())
+        start_slides = json.loads((start / "slides.json").read_text())
+        start_slides = start_slides.get("slides", start_slides) if isinstance(start_slides, dict) else start_slides
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
     agenda = wants_agenda(brief, slides_wanted, insert)
     narrative_n = max(3, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
@@ -1353,7 +1362,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     # changes and unanswered questions goes to the planner.
     dossier = None
     subjects: list[str] = []                           # the companies the brief is about: research stays on them
-    if not insert and os.environ.get("MH_DOSSIER", "1") != "0":
+    if not insert and not start and os.environ.get("MH_DOSSIER", "1") != "0":
         from engines.forge import critics as _CR, research as _RS
         ok_, why_ = _RS.allowed(client, rules, brief, research)
         if ok_:
@@ -1388,8 +1397,8 @@ points in one unit. If the facts are thin on a point, merge it into another slid
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
 {help_}"""
-    story, why = {}, ""
-    for budget in (8000, 16000):                 # once more with room when a reasoning model ran out of tokens
+    story, why = (start_story if start else {}), ""
+    for budget in (() if start else (8000, 16000)):   # once more with room when a reasoning model ran out of tokens
         try:
             story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
                           + (f"\n\n{findings}" if findings else ""), task_id + "-story", budget)
@@ -1420,7 +1429,7 @@ supports it. Choose varied archetypes that prove each title.
     # issues and the new facts, until both sign off or the round cap (engines/forge/critics.py, research.py)
     from engines.forge import critics, research as RS
     cfg = critics.settings(rules)
-    panel_on = critics.personas_on(client, rules) and not insert
+    panel_on = critics.personas_on(client, rules) and not insert and not start
     rs_ok, rs_why = RS.allowed(client, rules, brief, research)
     rcaps = RS.caps(rules)
     research_steps = 0
@@ -1505,9 +1514,12 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
             return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", ""), "notes": f"content failed: {e}"}
-    with ThreadPoolExecutor(6) as ex:
-        content = {"slides": list(ex.map(one, plan))}
-    calls += len(plan)
+    if start:
+        content = {"slides": [dict(x) for x in start_slides]}
+    else:
+        with ThreadPoolExecutor(6) as ex:
+            content = {"slides": list(ex.map(one, plan))}
+        calls += len(plan)
     slides = [s for s in content.get("slides", []) if isinstance(s, dict)]
     if fixed:                                                  # model pages go in before the closing slide
         at = len(slides) - 1 if slides and slides[-1].get("archetype") in ("closing", "next_steps", "end") \
@@ -1842,6 +1854,15 @@ choice or the number of items; never layout. Keep node and keep the point of the
         panel_final = best["panel"] if best is not None else (deck_hist[-1]["panel"] if deck_hist else None)
         (out / "review.json").write_text(json.dumps({"rounds": deck_hist, "kept_round": best["round"] if best else None,
                                                      "bar": cfg["bar"]}, indent=1, default=str))
+        try:                                           # commit what this review taught to the team's memory
+            from engines.review import memory as _MEM
+            last = (deck_hist[-1]["panel"] if deck_hist else {}) or {}
+            learned = _MEM.learn("slides", last.get("reviews") or [], client,
+                                 (critics.text_models(cfg) or [MODEL])[0], f"{task_id}-memory")
+            if learned:
+                (out / "learned.json").write_text(json.dumps(learned, indent=1))
+        except Exception:  # noqa: BLE001
+            pass
     elif _review_on(client, rules):
         # the single generic partner review (review.personas.enabled false): content complaints go back to the
         # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)

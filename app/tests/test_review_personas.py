@@ -113,3 +113,22 @@ def test_reviewers_give_detailed_feedback_strengths_and_path_to_8():
     assert r["strengths"][0]["what"] == "the cash bridge ties" and len(r["to_8"]) == 2
     c = coaching([r], {"md": "MD"})
     assert "keep" in c and "slide 2: the cash bridge ties (auditable)" in c and "1. Size the buyback" in c
+
+
+def test_memory_loads_the_masterclass_and_learns_new_lessons(tmp_path, monkeypatch):
+    """Writers read the partner's and MD's masterclass; a review adds only lessons it does not already cover."""
+    import json as _j
+    from engines.review import memory as M
+    monkeypatch.setattr(M, "HERE", tmp_path)
+    (tmp_path / "masterclass_slides.md").write_text("# Masterclass\n- Every bridge foots.\n")
+    assert "Every bridge foots" in M.load("slides") and "MASTERCLASS" in M.load("slides")
+
+    class Stub:
+        def chat(self, **kw):
+            return {"choices": [{"message": {"content": _j.dumps({"lessons": ["Date every balance -> 'cash $XB at "
+                                                                              "period end' not 'cash $XB'"]})}}]}
+    rv = [{"persona": "md", "status": "ok", "issues": [{"severity": "major", "issue": "undated cash", "fix": "date it"}]}]
+    assert M.learn("slides", rv, Stub(), "m") and "Date every balance" in M.load("slides")
+    assert M.learn("slides", rv, Stub(), "m") == []                  # the same lesson is not added twice
+    monkeypatch.setenv("MH_MEMORY", "0")
+    assert M.load("slides") == ""

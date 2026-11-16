@@ -1782,6 +1782,11 @@ def normalize(s: dict) -> dict:
     if gaps:
         s["notes"] = (s.get("notes", "") + "\n[QA] Not available in the sources, left out of the text: "
                       + "; ".join(g for g in gaps if g)).strip()
+    for k in ("title", "title_right"):                       # no "…" continuation: reviewers read it as cut off
+        if isinstance(s.get(k), str):
+            s[k] = re.sub(r"^\s*(?:\.\.\.|…)\s*", "", re.sub(r"\s*(?:\.\.\.|…)\s*$", "", s[k]))
+            if k == "title_right" and s[k][:1].islower():
+                s[k] = s[k][:1].upper() + s[k][1:]
     for k in ("title", "title_right"):
         if isinstance(s.get(k), str) and s[k].rstrip().endswith(".") and not s[k].rstrip().endswith("..."):
             s[k] = s[k].rstrip()[:-1]

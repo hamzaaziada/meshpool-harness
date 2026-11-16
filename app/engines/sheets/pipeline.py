@@ -83,7 +83,10 @@ def ask_inputs(task: str, client, model: str, task_id: str) -> dict:
     last = ""
     for budget in (4000, 8000):
         try:
-            r = client.chat(model=model, messages=[{"role": "system", "content": PROMPT + spec},
+            from engines.review import memory as _MEM     # the partner's and MD's Excel masterclass, every model
+            mc = _MEM.load("excel")
+            r = client.chat(model=model, messages=[{"role": "system", "content": PROMPT + spec
+                                                    + (("\n\n" + mc[:16000]) if mc else "")},
                                                    {"role": "user", "content": task[:30000]}],
                             max_tokens=budget, temperature=0.0, task_id=f"{task_id}-inputs",
                             extra={"response_format": {"type": "json_object"}})

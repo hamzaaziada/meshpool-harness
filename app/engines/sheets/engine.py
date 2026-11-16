@@ -868,6 +868,10 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
         except Exception as e:  # noqa: BLE001
             answer.append(f"Revision round {k + 1} could not rebuild ({type(e).__name__}: {e}).")
             break
+    if rv and last:                                  # commit what this review taught to the team's memory
+        from engines.review import memory as _MEM
+        _MEM.learn("excel", last.get("reviews") or [], client, (getattr(rv, "models", None) or [model])[0],
+                   f"{task_id}-memory")
     best = rv.best() if rv else None
     if best and best.get("copy") and Path(best["copy"]).exists():
         if Path(best["copy"]).resolve() != Path(path).resolve():
