@@ -321,6 +321,25 @@ def _lighten(messages: list) -> None:
         _compact(messages, keep_recent=8)
 
 
+RESUME_NOTE = ("\n\n\u200b[Meshpool] Your previous turn was cut off by an error (such as a rate limit or a lost "
+               "connection) before you finished. Unless this message asks for something else, pick the task up exactly "
+               "where it stopped: the tool calls and results above are what was already done, so do not redo finished "
+               "steps or start over.")
+
+
+def _rate_limit_budget() -> float:
+    """How long one model call waits out rate limits before the turn ends (MH_RATE_LIMIT_WAIT_S, 30 min)."""
+    try:
+        return max(0.0, float(os.environ.get("MH_RATE_LIMIT_WAIT_S", "1800")))
+    except ValueError:
+        return 1800.0
+
+
+def _dur(s: float) -> str:
+    s = int(round(s))
+    return f"{s} s" if s < 90 else f"{round(s / 60)} min" if s < 5400 else f"{s / 3600:.1f} h"
+
+
 def _retry_text(msg: str, attempt: int) -> str:
     """One calm line per retry instead of the raw network error."""
     m = msg.lower()
@@ -679,6 +698,9 @@ class Agent:
             body = ("[Plan mode] Investigate as needed with read-only tools, then reply with a clear, numbered plan "
                     "for the request below. Do not change any files or run commands that change anything; the user "
                     "will review the plan and switch to building.\n\n" + text)
+        if getattr(self, "unfinished", False):
+            self.unfinished = False
+            body += RESUME_NOTE                      # hidden in the chat (after \u200b)
         if images:
             parts = [{"type": "text", "text": body}] + [
                 {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
@@ -796,7 +818,8 @@ class Agent:
                 "What you added wasn't answered yet; it goes along with your next message." if added
                 else "Send a message to continue.")})
         except Exception as e:
-            self._repair()
+            self._repair("Not run: the turn ended on an error before this call ran. Run it again if still needed.")
+            self.unfinished = True                   # the next message picks the task up where it stopped
             msg = raw = str(e)
             if "endpoint could not take this request" in msg:
                 head = msg.split(" (HTTP", 1)[0]         # already says what to do; keep only the status
@@ -805,15 +828,16 @@ class Agent:
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
-                msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send a message "
-                       "to try again; the next try starts on a fresh route."
+                msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send \"continue\" "
+                       "to pick up where it stopped; the next try starts on a fresh route."
                        if "answers small requests" not in msg else
                        "The endpoint answers small requests, but this conversation's requests keep failing. Send a "
                        "message to try again, or start a new chat.")
             elif re.search(r"HTTP 429", msg):
-                msg = "The model is busy right now. Wait a minute, then send your message again."
+                msg = ("The model is busy right now (rate limited). Everything done so far is kept: send \"continue\" "
+                       "to pick up where it stopped.")
             elif re.search(r"HTTP 5\d\d", msg):
-                msg = "The model service had a problem. Send your message again in a moment."
+                msg = "The model service had a problem. Send \"continue\" in a moment to pick up where it stopped."
             if re.search(r"HTTP 0|connection problem|timed out|urlopen error|HTTP 5\d\d", raw, re.I):
                 _lighten(self.messages)                # the next message starts lighter, on a fresh route
                 self.rotate_route()
@@ -927,6 +951,9 @@ class Agent:
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
         attempt, recoveries, swapped = -1, 0, False
+        # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
+        # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
+        rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
         self._first_scale = 1.0
         while True:
             attempt += 1
@@ -969,7 +996,20 @@ class Agent:
                 last, msg = e, str(e)
                 if isinstance(e, _EndpointDown):           # it already waited the whole recovery time
                     raise
-                if type(e).__name__ in ("NotSignedIn", "UsageLimit"):   # no sign-in or plan limit: retrying cannot help
+                if type(e).__name__ == "UsageLimit":
+                    # A ChatGPT plan limit: wait for it only when it resets within the wait budget; one that resets
+                    # in hours or days ends the turn at once (the next message picks the task up).
+                    left = (getattr(e, "resets_at", None) or 0) - time.time()
+                    if 0 < left + 5 <= rl_budget - rl_waited:
+                        wait = left + 5
+                        rl_waited += wait
+                        attempt -= 1
+                        self.emit({"type": "status", "text": f"Usage limit reached. It resets in {_dur(wait)}; this "
+                                                             "task waits and carries on then. Press Stop to end."})
+                        self._sleep(wait)
+                        continue
+                    raise
+                if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
@@ -1020,9 +1060,19 @@ class Agent:
                             m["content"] = clean(m["content"])
                     continue
                 if kind == "rate_limit":
+                    left = rl_budget - rl_waited
+                    if left <= 0:                          # waited the whole budget: end the turn, resumable
+                        raise RuntimeError(msg + f" [rate limited for {_dur(rl_waited)}]")
                     self._n429 = getattr(self, "_n429", 0) + 1   # no reset time: back off 3, 6, 12 ... 60 s (v4)
-                    wait = rate_limit_wait(msg, self._n429)
-                    self.emit({"type": "status", "text": f"Rate limited by the endpoint. Waiting {int(wait)} s."})
+                    wait = min(left, rate_limit_wait(msg, self._n429, cap=left))
+                    rl_waited += wait
+                    attempt -= 1                           # a rate limit is not a failed attempt
+                    if rl_waited - wait - rl_told >= 60 or wait >= 60:   # one line, then at most one a minute
+                        rl_told = rl_waited - wait
+                        so_far = f" (rate limited for {_dur(rl_told)} so far)" if rl_told > 0 else ""
+                        self.emit({"type": "status", "text": f"Rate limited by the endpoint{so_far}. Waiting "
+                                                             f"{_dur(wait)}, then carrying on where it stopped. "
+                                                             "Press Stop to end."})
                     self._sleep(wait)
                     continue
                 if kind == "gateway_reject" and attempt >= 2:
@@ -1643,7 +1693,7 @@ class Agent:
         except WEB.WebError as e:
             raise ToolError(str(e))
 
-    def _repair(self):
+    def _repair(self, note: str = "Not run: the user stopped the agent."):
         """After an interruption every tool call must still have a result, or the next request is invalid."""
         for i in range(len(self.messages) - 1, -1, -1):
             m = self.messages[i]
@@ -1654,7 +1704,7 @@ class Agent:
                         partial = (self.__dict__.pop("_delegate_partial", None)
                                    if (c.get("function") or {}).get("name") == "delegate_task" else None)
                         self.messages.append({"role": "tool", "tool_call_id": c["id"],
-                                              "content": partial or "Not run: the user stopped the agent."})
+                                              "content": partial or note})
                 break
             if m.get("role") == "user":
                 break
@@ -1670,7 +1720,8 @@ class Agent:
                 "updated": time.time(), "model": self.current_model(), "model_choice": self.model, "plan": self.plan,
                 "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
                 "kind": "cowork" if self.profile == "work" else "code",
-                "usage": self.usage, "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
+                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False)),
+                "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
 
@@ -1704,4 +1755,5 @@ class Agent:
         a.created = best.get("created", a.created)
         a.model = best.get("model_choice")
         a.plan = bool(best.get("plan"))
+        a.unfinished = bool(best.get("unfinished"))
         return a
