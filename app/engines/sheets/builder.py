@@ -2074,7 +2074,8 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     for c in cols:                         # the year's dividends on its average share count, not the opening count
         _f(ws, f"{c}{rows['regdiv']}", f"=-{c}{rows['dps']}*AVERAGE({c}{rows['sh_open']},{c}{rows['sh_close']})", "usd")
     ws.cell(row=rows["int"], column=1,
-            value="Interest income (special dividend paid at the start of the year, other flows mid-year)")
+            value="Interest income (no circularity: yield x average of the balance after the start-of-year "
+                  "special dividend and that balance plus the year's other flows; interest itself excluded)")
     for c in cols:                         # average balance without circularity: the year's own interest is excluded
         start = f"{c}{rows['open']}+{c}{rows['special']}"
         _f(ws, f"{c}{rows['int']}", f"=AVERAGE({start},{start}+{c}{rows['fcf']}+{c}{rows['regdiv']}"
