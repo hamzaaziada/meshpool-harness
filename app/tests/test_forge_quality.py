@@ -285,3 +285,26 @@ def test_percent_calc_accepts_formula_with_or_without_x100():
         slides = [{"calcs": [{"id": "C1", "formula": formula, "value": "1.63%", "from": ["F1", "F2", "F3"]}]}]
         ok, bad = verify_calcs(slides, facts, load_rules())
         assert not bad and ok, (formula, bad)
+
+
+def test_consistency_check_sends_a_conflict_to_the_later_slide():
+    """The cheap model's conflict list becomes a [tie] failure on every slide after the first one it names."""
+    import json as _j
+    from engines.forge import build as B
+    B._CONSISTENCY_CACHE.clear()
+
+    class Stub:
+        def chat(self, **kw):
+            assert "figures that disagree" in kw["messages"][0]["content"]
+            assert "chart Yield" in kw["messages"][1]["content"]
+            return {"choices": [{"message": {"content": _j.dumps({"conflicts": [
+                {"slides": [2, 4], "quantity": "buyback earnings yield", "values": ["1.9%", "2.2%"],
+                 "fix": "1.88% ($20.76 EPS / $1,106.21 price), shown as 1.9%"}]})}}]}
+    slides = [{"archetype": "cover", "title": "Board briefing"},
+              {"archetype": "argument_only", "title": "A buyback earns 1.9% at today's price"},
+              {"archetype": "bar_takeaway", "title": "Growth earns more",
+               "chart": {"kind": "bar", "categories": ["Buyback"], "series": [{"name": "Yield", "values": [2.2]}]}},
+              {"archetype": "argument_only", "title": "The buyback yields 2.2%"}]
+    out = B.consistency_checks(slides, Stub(), ["m"])
+    assert list(out) == [4] and "use one value" in out[4][0]
+    assert B.consistency_checks(slides, None, ["m"]) == {}

@@ -693,6 +693,62 @@ PER_SHARE = {"dividend", "dividends", "payout", "price", "eps", "earnings", "buy
              "book", "value", "cash"}
 
 
+CONSISTENCY = """You check a board deck for figures that disagree. Below is every line a reader sees, slide by slide,
+including footnotes and chart values. List each place where the SAME quantity (same metric, entity and period) is
+given different values on different lines or slides, where a footnote or label contradicts a figure or chart value,
+or where one figure is shown at different precisions (1.9% on one page, 1.88% on another: pick one). Do not flag
+different quantities that merely look alike, and do not judge the argument. Return ONLY JSON:
+{"conflicts": [{"slides": [<slide numbers>], "quantity": "<what is measured>", "values": ["<as written>", ...],
+"fix": "<the one value to use everywhere and why, from the deck's own figures>"}]}  ([] when every figure agrees)"""
+_CONSISTENCY_CACHE: dict[str, dict] = {}
+
+
+def consistency_checks(slides, client, models: list[str], task_id: str = "consistency") -> dict[int, list[str]]:
+    """One metric, one value, across lines, footnotes and charts: a cheap model reads the whole deck once (cached on
+    its text) and lists disagreements the regex tie check cannot key (different wording, a footnote against a chart
+    label). Each conflict goes to every slide it names after the first, as a failure the writer must fix."""
+    from engines.forge.render import normalize
+    if client is None or not models or os.environ.get("FORGE_CONSISTENCY", "1") == "0":
+        return {}
+    pages = []
+    for n, sl in enumerate(slides, 1):
+        if sl.get("archetype") in ("section_divider", "agenda"):
+            continue
+        nz = normalize(sl)
+        lines_ = [t for _, t in _strings(nz) if re.search(r"\d", t)]
+        for c in [sl.get("chart")] + [p.get("chart") for p in sl.get("parts") or [] if isinstance(p, dict)]:
+            if isinstance(c, dict):
+                for se in c.get("series") or []:
+                    lines_.append("chart " + str(se.get("name", "")) + ": " + ", ".join(
+                        f"{k} = {v}" for k, v in zip(c.get("categories") or [], se.get("values") or [])))
+        if lines_:
+            pages.append(f"Slide {n}:\n" + "\n".join(f"- {re.sub(r'[*^]', '', t)}" for t in lines_))
+    text = "\n\n".join(pages)
+    if not text:
+        return {}
+    key = str(hash(text))
+    if key not in _CONSISTENCY_CACHE:
+        got = None
+        for m in models:
+            try:
+                got = _call(client, m, CONSISTENCY, text[:40000], task_id, max_tokens=3000)
+                break
+            except Exception:  # noqa: BLE001 - a checker that cannot run adds nothing
+                continue
+        _CONSISTENCY_CACHE[key] = got or {}
+    out: dict[int, list[str]] = {}
+    for c in (_CONSISTENCY_CACHE[key].get("conflicts") or [])[:12]:
+        if not isinstance(c, dict):
+            continue
+        ns = sorted({int(x) for x in c.get("slides") or [] if str(x).isdigit() and 1 <= int(x) <= len(slides)})
+        vals = ", ".join(map(str, c.get("values") or []))
+        msg = (f"{c.get('quantity', 'a figure')} is given as {vals} across slides {', '.join(map(str, ns))}; use one "
+               f"value and one precision everywhere: {c.get('fix', '')}")[:400]
+        for n in (ns[1:] or ns):
+            out.setdefault(n, []).append(msg)
+    return out
+
+
 def tie_checks(slides) -> dict[int, list[str]]:
     """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
     another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
@@ -1371,6 +1427,9 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         for n, msgs in variety_checks(slides).items():
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
+        for n, msgs in consistency_checks(slides, client, critics.text_models(critics.settings(rules)),
+                                          f"{task_id}-consistency").items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for e in r["errors"]:
             m = re.match(r"slide (\d+): rows carried", e)
