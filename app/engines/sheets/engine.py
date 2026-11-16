@@ -286,8 +286,25 @@ class SheetsWorkspace(Workspace):
     def _run(self, command, timeout_s, kind, record=True, raw=False):
         bare = command.replace(str(self.root), ".")                # the workdir may itself sit under ROOT
         if _INTROSPECT.search(bare) or (_SOURCE.search(bare) and _READER.search(bare)):
-            raise ToolError(REFUSED)
+            raise ToolError(self._refusal(command))
         return super()._run(command, timeout_s, kind, record, raw)
+
+    def _refusal(self, command: str) -> str:
+        """The refusal says what to run instead, and gets firmer when the same command comes back: a DeepSeek run
+        sent one refused command (cd into the engine folder, ls, python -c importing the builder) 40 times in a row."""
+        self.refused = getattr(self, "refused", {})
+        key = re.sub(r"\s+", " ", command.strip())[:300]
+        self.refused[key] = self.refused.get(key, 0) + 1
+        scripts = sorted(p.name for p in self.root.glob("*.py"))
+        run = f"python {scripts[0]}" if scripts else "write build_workbook.py, then run: python build_workbook.py"
+        msg = (REFUSED + f" Run your code from the working folder instead, with no cd and no listing of the engine "
+               f"folder: {run}. Import the helpers in the script with "
+               f"`import sys; sys.path.insert(0, r\"{ROOT}\"); from engines.sheets import builder as B` as your "
+               "instructions show.")
+        if self.refused[key] >= 2:
+            msg = (f"REFUSED again ({self.refused[key]} times): this exact command will always be refused. Do not send "
+                   f"it again. Your next call must be: {run}")
+        return msg
 
     def saved_workbooks(self) -> list[Path]:
         """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
@@ -768,6 +785,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
+    os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     n = max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))
