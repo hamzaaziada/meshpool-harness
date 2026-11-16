@@ -2046,7 +2046,8 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     line("fcf", "Free cash flow", "={c}{ocf}+{c}{capex}", total=True)
     r += 1
     line("open", "Opening cash", f"={N['cash']}", "={p}{close}")
-    line("int", "Interest income on opening cash", "={c}{open}*" + N["cash_yield"])
+    line("int", "Interest income (on opening cash: on average cash the model would be circular)",
+         "={c}{open}*" + N["cash_yield"])
     line("sh_open", "Opening shares", f"={N['shares']}", "={p}{sh_close}", fmt="num")
     line("dps", "Regular dividend per share", f"={N['dps']}", "={p}{dps}*(1+" + N["dps_growth"] + ")", fmt="usd2")
     line("regdiv", "Regular dividends", "=-{c}{dps}*{c}{sh_open}")
