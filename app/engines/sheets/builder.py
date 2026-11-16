@@ -1999,8 +1999,8 @@ CA_NAMES = {"revenue_base": "revenue_base", "rev_growth": "rev_growth", "ocf_mar
             "special_dps": "special_dps", "buyback": "buyback", "cash_yield": "cash_yield"}
 
 
-def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_steps=(-0.02, -0.01, 0.0, 0.01, 0.02),
-                       capex_steps=(-0.2, -0.1, 0.0, 0.1, 0.2), title_text="Capital allocation") -> dict:
+def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.01, capex_step=0.1,
+                       title_text="Capital allocation") -> dict:
     """Cash generation and its uses, year by year, every number a formula over named inputs (assumption book first).
 
     Inputs (CA_NAMES, override with names=): revenue_base (last actual revenue), rev_growth, ocf_margin (operating
@@ -2091,27 +2091,27 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_steps=(-
     n = len(labels)
     n_name = P("years")
     model_constant(wb, n_name, "Forecast years", n, "num")
-    gs = [model_constant(wb, P(f"g_step{i}"), f"Growth step {i + 1}", v, "pct") for i, v in enumerate(growth_steps)]
-    cs = [model_constant(wb, P(f"c_step{j}"), f"Capex step {j + 1}", v, "pct") for j, v in enumerate(capex_steps)]
+    gst = model_constant(wb, P("g_step"), "Growth step in the cash grid", growth_step, "pct")
+    cst = model_constant(wb, P("c_step"), "Capex step in the cash grid", capex_step, "pct")
+    eps = model_constant(wb, P("eps"), "Rate treated as zero growth", 1e-9, "num")
     hdr = r + 1
-    ws.cell(row=hdr, column=1, value="Growth step \\ capex step")
-    for j, nm in enumerate(cs):
-        _f(ws, f"{get_column_letter(2 + j)}{hdr}", f"={nm}", "pct")
-    centre = None
-    for i, gn in enumerate(gs):
+    ws.cell(row=hdr, column=1, value="Growth change (rows), investment plan change (columns)")
+    for j in range(5):                       # one pattern per row and column: start at -2 steps, then add a step
+        c = get_column_letter(2 + j)
+        _f(ws, f"{c}{hdr}", f"=-2*{cst}" if j == 0 else f"={get_column_letter(1 + j)}{hdr}+{cst}", "pct")
+    centre = f"D{hdr + 3}"
+    for i in range(5):
         rr = hdr + 1 + i
-        _f(ws, f"A{rr}", f"={gn}", "pct")
+        _f(ws, f"A{rr}", f"=-2*{gst}" if i == 0 else f"=A{rr - 1}+{gst}", "pct")
         q = f"(1+{N['rev_growth']}+$A{rr})"
         p = f"(1+{N['capex_growth']})"
-        sum_q = f"IF(ABS({q}-1)<1E-9,{n_name},{q}*({q}^{n_name}-1)/({q}-1))"
-        sum_p = f"IF(ABS({p}-1)<1E-9,{n_name},({p}^{n_name}-1)/({p}-1))"
-        for j in range(len(cs)):
+        sum_q = f"IF(ABS({q}-1)<{eps},{n_name},{q}*({q}^{n_name}-1)/({q}-1))"
+        sum_p = f"IF(ABS({p}-1)<{eps},{n_name},({p}^{n_name}-1)/({p}-1))"
+        for j in range(5):
             c = get_column_letter(2 + j)
             _f(ws, f"{c}{rr}", f"={N['cash']}+{N['revenue_base']}*{N['ocf_margin']}*{sum_q}"
                                f"-{N['capex_base']}*(1+{c}${hdr})*{sum_p}-{P('uses_total')}", "usd")
-        if growth_steps[i] == 0 and 0.0 in capex_steps:
-            centre = f"{get_column_letter(2 + list(capex_steps).index(0.0))}{rr}"
-    r = hdr + 1 + len(gs) + 1
+    r = hdr + 1 + 5 + 1
     if "Checks" not in wb.sheetnames:
         wb.create_sheet("Checks")
     add_check(wb, f"{title_text}: closing cash ties to its flows",

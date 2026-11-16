@@ -781,6 +781,42 @@ def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> 
             + (brief_block(d) + "\n" if brief_block(d) else "") + "Findings:\n" + found)
 
 
+def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | None:
+    """A request a recipe covers (engines/sheets/pipeline.py) is built in code: one model call for the sourced inputs,
+    then the engine checks and the partner and MD review. None when no recipe applies or the build fails (the agent
+    then builds it as before)."""
+    from engines.sheets import pipeline as PL
+    recipe = PL.applies(task)
+    if not recipe:
+        return None
+    try:
+        res = PL.build(task, ws, client, model, task_id)
+    except Exception as e:  # noqa: BLE001 - the agent is the fallback
+        ws.pipeline_note = f"The {recipe} recipe could not build it ({type(e).__name__}: {e}); the agent built it."
+        return None
+    path = res["path"]
+    rep: dict = {}
+    msg = finish_check("", [path], ws, report=rep)
+    answer = [f"Built {Path(path).name}: " + " ".join(res["notes"])]
+    if msg:
+        answer.append("Engine checks: " + msg)
+    else:
+        answer.append("It passes the engine checks (recalculated, every check OK).")
+    out = {"ok": not msg, "answer": "", "artifacts": [path], "evidence": [f"engine finish check on {Path(path).name}: "
+                                                                          + ("PASS" if not msg else "FAIL")],
+           "turns": 1, "reason": None if not msg else "engine checks failed", "usage": {}, "recipe": recipe}
+    if rv:
+        try:
+            rnd = rv.run_round(path, rep, final=True)
+            if msg:
+                rnd["passed_checks"] = False
+            answer.append(rv.report(rnd["round"]))
+        except Exception as e:  # noqa: BLE001
+            answer.append(f"Partner and MD review failed: {type(e).__name__}: {e}")
+    out["answer"] = "\n\n".join(a for a in answer if a)
+    return out
+
+
 def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
@@ -799,6 +835,9 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
     if rv:
         task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
                  "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
+    done = _pipeline(task, ws, client, model, task_id, rv)
+    if done is not None:                      # a known model shape: built in code from one call's sourced inputs
+        return done
     crashed = False
     try:
         r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,

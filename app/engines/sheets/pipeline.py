@@ -1,0 +1,148 @@
+"""Fixed-pipeline models: one model call fills sourced inputs, code builds the whole workbook.
+
+The agentic sheets engine asks the model to write and debug a Python build script over many turns. A small model
+(DeepSeek flash) could not: one run wrote '=B{ocf_row}' into whole columns, the next a #VALUE! chain, the next
+saved a skeleton with no formulas, and one repeated a refused command 40 times. For the request types below the
+workbook's structure is known, so it is written in code (engines/sheets/builder.py) and the model only supplies the
+inputs, each with its source fact and rationale, the way the credit engine works. Quality then does not depend on
+which model is plugged in.
+
+    if pipeline.applies(task):
+        res = pipeline.build(task, ws, client, model, task_id)     # {"path", "inputs", "missing", "notes"}
+
+Recipes: capital allocation (return cash vs fund growth, buybacks, special dividends, uses of cash).
+MH_SHEETS_PIPELINE=0 sends every request to the agent instead.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+CAPITAL_ALLOCATION = re.compile(r"(?i)capital allocation|return (?:more )?cash|buy ?backs?|special dividend|"
+                                r"uses of cash|cash return")
+
+# name, label, number format, what the model must give (units)
+CA_INPUTS = [
+    ("revenue_base", "Revenue, last full fiscal year ($m)", "usd", "last reported annual revenue, $ millions"),
+    ("rev_growth", "Revenue growth per year", "pct", "decimal, e.g. 0.06 for 6%"),
+    ("ocf_margin", "Operating cash flow / revenue", "pct", "decimal: last year's operating cash flow / revenue"),
+    ("capex_base", "Capital expenditure, first forecast year ($m)", "usd", "$ millions, the plan or last year"),
+    ("capex_growth", "Capex growth per year", "pct", "decimal"),
+    ("cash", "Cash and equivalents, opening ($m)", "usd", "$ millions at the last balance sheet"),
+    ("min_cash", "Cash floor the board keeps ($m)", "usd", "$ millions; say if it is an assumption"),
+    ("shares", "Shares outstanding (m)", "num", "millions of shares"),
+    ("share_price", "Share price for buybacks ($)", "usd2", "$ per share, latest close"),
+    ("dps", "Regular dividend per share, first forecast year ($)", "usd2", "$ per share per year"),
+    ("dps_growth", "Regular dividend growth per year", "pct", "decimal"),
+    ("special_dps", "Special dividend per share, first forecast year ($)", "usd2", "$ per share; 0 if none"),
+    ("buyback", "Share buyback per year ($m)", "usd", "$ millions spent each year; 0 if none"),
+    ("cash_yield", "Interest earned on cash", "pct", "decimal, e.g. the short-term rate"),
+]
+
+
+def applies(task: str) -> str | None:
+    """The recipe for this request, or None (the agent builds it)."""
+    if os.environ.get("MH_SHEETS_PIPELINE", "1") == "0":
+        return None
+    return "capital_allocation" if CAPITAL_ALLOCATION.search(task or "") else None
+
+
+PROMPT = """You fill the inputs of a capital-allocation model for a finance professional. Use ONLY the facts and
+documents given: each value comes from a fact (cite its id, e.g. "F7") or is a labelled assumption with its
+rationale (a growth rate taken from the company's own history or guidance in the facts, a floor the board would
+keep). Never invent a reported figure. Units are fixed: money in $ millions (10-K figures in billions times 1000),
+per-share amounts in $, rates as decimals (6% = 0.06), shares in millions.
+Return ONLY JSON:
+{"company": "short company name", "title": "workbook title", "first_year": 2027, "years": 5,
+ "inputs": {"<name>": {"value": number, "source": "F12 10-K FY2026 ..." or "assumption", "rationale": "one line"}}}
+with exactly these input names:
+"""
+
+
+def ask_inputs(task: str, client, model: str, task_id: str) -> dict:
+    spec = "\n".join(f'- "{n}": {lab} ({unit})' for n, lab, _, unit in CA_INPUTS)
+    last = ""
+    for budget in (4000, 8000):
+        try:
+            r = client.chat(model=model, messages=[{"role": "system", "content": PROMPT + spec},
+                                                   {"role": "user", "content": task[:30000]}],
+                            max_tokens=budget, temperature=0.0, task_id=f"{task_id}-inputs",
+                            extra={"response_format": {"type": "json_object"}})
+            txt = (((r or {}).get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if "{" in txt:
+                return json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+            last = "no JSON in the reply"
+        except Exception as e:  # noqa: BLE001
+            last = f"{type(e).__name__}: {e}"
+    raise RuntimeError(f"the model did not return the model inputs: {last}")
+
+
+def _num(v):
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    m = re.search(r"-?\d[\d,]*(?:\.\d+)?", str(v or ""))
+    return float(m.group(0).replace(",", "")) if m else None
+
+
+def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
+    """Write the workbook into ws.root. Returns {"path", "inputs", "missing", "notes"}; raises when inputs are missing."""
+    from engines.sheets import builder as B
+    got = ask_inputs(task, client, model, task_id)
+    raw = got.get("inputs") or {}
+    inputs, missing = {}, []
+    for name, label, fmt, _ in CA_INPUTS:
+        it = raw.get(name) if isinstance(raw.get(name), dict) else {"value": raw.get(name)}
+        v = _num(it.get("value"))
+        if v is None:
+            missing.append(name)
+            continue
+        if fmt == "pct" and abs(v) > 1.5:             # 6 meant 6%
+            v /= 100.0
+        inputs[name] = {"value": v, "source": str(it.get("source") or "assumption"),
+                        "rationale": str(it.get("rationale") or "")}
+    if missing:
+        raise RuntimeError("the model left these inputs out: " + ", ".join(missing))
+    first = int(_num(got.get("first_year")) or time.gmtime().tm_year + 1)
+    n = max(3, min(10, int(_num(got.get("years")) or 5)))
+    years = list(range(first, first + n))
+    company = str(got.get("company") or "Company").strip()
+    title = str(got.get("title") or f"{company} capital allocation model")
+    wb = B.banker_workbook(title, "Cash generated and its uses: can the business fund growth and the cash returned?",
+                           date=time.strftime("%Y-%m-%d"), middle=("Inputs", "Model", "Outputs"))
+    B.title(wb["Inputs"], "Inputs: every number with its source")
+    book = B.assumption_book(wb["Inputs"])
+    sections = {"revenue_base": "Operations", "cash": "Balance sheet and shares", "dps": "Cash returned",
+                "cash_yield": "Rates"}
+    for name, label, fmt, _ in CA_INPUTS:
+        if name in sections:
+            book.section(sections[name])
+        it = inputs[name]
+        book.add(label, it["value"], fmt, name=name, source=it["source"], rationale=it["rationale"])
+    B.title(wb["Model"], f"{company}: cash generated and its uses, $m")
+    ca = B.capital_allocation(wb["Model"], 3, years)
+    out = wb["Outputs"]
+    B.title(out, "Outputs")
+    B.header(out, 3, ["Measure", "Value"])
+    rows = [("Free cash flow, all forecast years ($m)", f"={ca['fcf_total']}", "usd"),
+            ("Cash returned, all years ($m)", f"={ca['uses_total']}", "usd"),
+            (f"Closing cash, {years[-1]} ($m)", f"={ca['cash_end']}", "usd"),
+            ("Lowest headroom over the cash floor ($m)", f"={ca['min_headroom']}", "usd"),
+            ("Closing shares (m)", f"={ca['shares_end']}", "num"),
+            ("Funded without new debt?", f'=IF({ca["min_headroom"]}>=0,"Yes","No: cash falls below the floor")', None)]
+    for i, (lab, expr, fmt) in enumerate(rows, start=4):
+        out.cell(row=i, column=1, value=lab)
+        B._f(out, f"B{i}", expr, fmt)
+    B.widths(out, {"A": 46, "B": 22})
+    B.widths(wb["Model"], default=14, first=40)
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", company).strip("_") or "Company"
+    path = Path(ws.root) / f"{safe}_capital_allocation_model.xlsx"
+    wb.save(path)
+    notes = [f"Built by the capital-allocation recipe in code: {len(CA_INPUTS)} sourced inputs, {n} forecast years "
+             f"({years[0]}-{years[-1]}), every other number a formula."]
+    assumed = [n for n, it in inputs.items() if it["source"].lower().startswith("assum")]
+    if assumed:
+        notes.append("Inputs that are assumptions (not reported figures): " + ", ".join(assumed) + ".")
+    return {"path": str(path), "inputs": inputs, "missing": missing, "notes": notes, "years": years}
