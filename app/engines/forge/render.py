@@ -3332,10 +3332,39 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                           f"{len(left)} rows left out because the slide count is fixed")
     errors += ctx.overflow
     apply_rtl(prs)
+    _reading_order(prs)
     prs.save(out_path)
+    try:                                                    # P4: at most the density's sizes per text role
+        from .typescale import harmonize
+        harmonize(out_path)
+    except Exception as e:  # noqa: BLE001 - a QA pass never fails the render
+        errors.append(f"type-scale pass skipped: {type(e).__name__}: {e}")
     prov_path = str(Path(out_path).with_suffix("")) + ".provenance.json"
     Path(prov_path).write_text(json.dumps({"slides": ctx.prov}, indent=1))
     return {"slides": n, "errors": errors, "provenance": prov_path, "design": ctx.design}
+
+
+def _reading_order(prs) -> None:
+    """Screen readers and the tab order follow the shape tree, so it runs top to bottom (P18). A stable sort on each
+    shape's top edge: a panel or band starts above the text drawn on it, so it stays behind that text; shapes with
+    the same top keep their drawing order."""
+    tags = ("sp", "grpSp", "graphicFrame", "cxnSp", "pic")
+    for sl in prs.slides:
+        tree = sl.shapes._spTree
+        shapes = [sh for sh in sl.shapes if sh._element.tag.rsplit("}", 1)[-1] in tags]
+        tops = [round((sh.top if sh.top is not None else 0) / 9144) for sh in shapes]   # 0.01in steps
+        order = sorted(range(len(shapes)), key=lambda i: (tops[i], i))
+        if order == list(range(len(shapes))):
+            continue
+        anchor = shapes[-1]._element.getnext()           # extLst (if any) stays last
+        els = [shapes[i]._element for i in order]
+        for el in els:
+            tree.remove(el)
+        for el in els:
+            if anchor is not None:
+                anchor.addprevious(el)
+            else:
+                tree.append(el)
 
 
 def _designed(ctx, s, sl, n, spec, mode, arch) -> bool:
