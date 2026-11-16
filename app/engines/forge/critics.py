@@ -31,11 +31,17 @@ DEFAULTS = {"enabled": True, "bar": None, "max_storyboard_rounds": 3, "max_revie
             "who": ["partner", "md"]}
 
 
+REFERENCE_CALIBRATION = {"partner": 3.2, "md": 2.3}   # measured, docs/stack/reviewer-calibration.md
+
+
 def settings(rules: dict | None) -> dict:
     cfg = dict(DEFAULTS, **((rules or {}).get("review") or {}).get("personas") or {})
     cfg["bar"] = dict(P.BAR, **(cfg.get("bar") or {}))
-    if os.environ.get("MH_REVIEW_CALIBRATION", "1") == "0":     # grade raw, without the published-work calibration
+    flag = os.environ.get("MH_REVIEW_CALIBRATION", "")
+    if flag == "0":                                   # grade raw, without the published-work calibration
         cfg["bar"]["calibration"] = {}
+    elif flag == "1" and not cfg["bar"].get("calibration"):   # opt in: shift each reviewer so the published
+        cfg["bar"]["calibration"] = dict(REFERENCE_CALIBRATION)  # Goldman Sachs board book scores 8
     return cfg
 
 
