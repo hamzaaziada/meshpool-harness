@@ -388,3 +388,25 @@ def test_arithmetic_in_prose_must_add_up():
           {"archetype": "argument_only", "title": "$20.21B less the $8.00B return leaves $12.2B"}]
     out = arith_checks(sl)
     assert list(out) == [1] and "$8.32B" in out[1][0]
+
+
+def test_option_table_rows_imply_one_share_price():
+    from engines.forge.build import table_checks
+    good = {"archetype": "table_focus", "table": {"columns": ["Option", "Amount", "Shares retired"],
+            "rows": [["Buyback A", "$3.0B", "2.7M"], ["Buyback B", {"lead": "$4.0B"}, {"lead": "3.6M"}]]}}
+    bad = {"archetype": "table_focus", "table": {"columns": ["Option", "Amount", "Shares retired"],
+           "rows": [["Buyback A", "$3.0B", "2.7M"], ["Buyback B", "$4.0B", "3.6M"], ["Buyback C", "$5.0B", "3.0M"]]}}
+    assert table_checks([good]) == {}
+    out = table_checks([bad])
+    assert list(out) == [1] and "4.50M shares" in out[1][0]
+
+
+def test_cover_shows_its_headline_figures(tmp_path):
+    from engines.forge.render import render
+    from pptx import Presentation
+    s = {"archetype": "cover", "title": "Fund the growth, then return cash", "subtitle": "Board decision",
+         "metrics": [{"value": "$13.3B", "label": "special dividend", "prov": ["F1"]},
+                     {"value": "$4.0B", "label": "buyback authorisation", "prov": ["F1"]}]}
+    render([s], str(tmp_path / "c.pptx"), carry=False)
+    names = [sh.name for sh in Presentation(str(tmp_path / "c.pptx")).slides[0].shapes]
+    assert "role_numeral_CoverMetric2" in names
