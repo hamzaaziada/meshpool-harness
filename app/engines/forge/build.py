@@ -132,6 +132,7 @@ CONSULTING = """House style (always, whatever the brief says about look):
   on the page, never asserted. One recommendation, the same amount on every slide.
 - Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
 - Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
+CONSULTING_BASE = CONSULTING
 
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
 SIDE_PANEL = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "table_focus",
@@ -1270,6 +1271,9 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     steers the storyline and content prompts, the fill checks, the renderer's type scale and the P10/P20 limits."""
     density = _density(density) or DEFAULT_DENSITY
     help_ = arch_help(density)
+    global CONSULTING                                  # the decision type's playbook joins the house style for
+    from engines.forge.playbooks import playbook_for   # every writer prompt of this build (storyline, slides,
+    CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "")   # revisions)
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()

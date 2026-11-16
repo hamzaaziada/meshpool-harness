@@ -360,3 +360,11 @@ def test_footnotes_given_as_objects_still_render(tmp_path):
          "footnotes": [{"text": "Treasury yield after tax at 24.7%.", "prov": ["F1"]}]}
     r = render([s], str(tmp_path / "g.pptx"), carry=False, density="balanced")
     assert not [e for e in r["errors"] if "malformed" in e or "failed" in e], r["errors"]
+
+
+def test_capital_allocation_brief_gets_its_playbook():
+    """A brief about returning cash gets the capital-allocation playbook in every writer prompt; others do not."""
+    from engines.forge.playbooks import playbook_for
+    pb = playbook_for("Should Costco's board return more cash (buybacks or a special dividend)?")
+    assert "authorization is a ceiling" in pb and "sources-and-uses" in pb
+    assert playbook_for("Market entry strategy for a coffee chain in Egypt") == ""
