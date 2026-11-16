@@ -379,3 +379,12 @@ def test_playbook_check_rejects_earnings_yield_against_cash():
     out = playbook_checks(slides, brief)
     assert list(out) == [2] and "intrinsic value" in out[2][0]
     assert playbook_checks(slides, "Market entry in Egypt") == {}
+
+
+def test_arithmetic_in_prose_must_add_up():
+    from engines.forge.build import arith_checks
+    sl = [{"archetype": "argument_only", "title": "Operating cash flow of $15.82B funds $7.5B capex and leaves $6B"},
+          {"archetype": "argument_only", "title": "$20.21B cash less the $13.3B dividend leaves $6.91B"},
+          {"archetype": "argument_only", "title": "$20.21B less the $8.00B return leaves $12.2B"}]
+    out = arith_checks(sl)
+    assert list(out) == [1] and "$8.32B" in out[1][0]

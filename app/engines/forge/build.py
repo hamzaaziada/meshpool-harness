@@ -804,6 +804,56 @@ def _conflict_msgs(got: dict, n_slides: int) -> dict[int, list[str]]:
     return out
 
 
+_AMT = r"(\$\s?\d[\d,]*(?:\.\d+)?\s?(?:B|bn|billion|M|m|million|K)?\b|\d[\d,]*(?:\.\d+)?\s?%)"
+_ARITH = re.compile(_AMT + r"[^.;$%\d]{0,40}?\b(less|minus|after paying|after|funds|covers|pays for|plus|and)\b[^.;$%\d]{0,40}?"
+                    + _AMT + r"[^.;$%\d]{0,50}?\b(leaves|leaving|left|is|are|=|equals|gives|giving|totals?|to)\b"
+                    r"[^.;$%\d]{0,25}?" + _AMT, re.I)
+
+
+def _amount(t: str):
+    """($ value in billions or % value, kind) for a figure as written, or None."""
+    t = t.replace(",", "").strip()
+    m = re.match(r"(\$)?\s?(\d+(?:\.\d+)?)\s?(B|bn|billion|M|m|million|K|%)?$", t, re.I)
+    if not m:
+        return None
+    v, u = float(m.group(2)), (m.group(3) or "").lower()
+    if u == "%":
+        return v, "%"
+    if not m.group(1):
+        return None
+    return v * {"m": 1e-3, "million": 1e-3, "k": 1e-6}.get(u, 1.0), "$"
+
+
+def arith_checks(slides) -> dict[int, list[str]]:
+    """Arithmetic stated in prose must hold: "$15.82B funds $7.5B capex and leaves $6B" is wrong ($8.32B) and a
+    reviewing MD circles it first. A less/minus/funds/covers B leaves C, and A plus B is C, are checked to the
+    rounding shown; the slide fails with the right figure."""
+    from engines.forge.render import normalize
+    out: dict[int, list[str]] = {}
+    for n, sl in enumerate(slides, 1):
+        if sl.get("fixed"):
+            continue
+        for _, t in _strings(normalize(sl)):
+            for m in _ARITH.finditer(re.sub(r"\*\*|\^\d+", "", t)):
+                a, op, b, c = _amount(m.group(1)), m.group(2).lower(), _amount(m.group(3)), _amount(m.group(5))
+                if not (a and b and c) or len({a[1], b[1], c[1]}) != 1:
+                    continue
+                if op == "and" and m.group(4).lower() not in ("is", "are", "=", "equals", "totals", "total", "gives"):
+                    continue
+                want = a[0] + b[0] if op in ("plus", "and") else a[0] - b[0]
+                dec = len((re.search(r"\.(\d+)", m.group(5)) or [None, ""])[1])
+                tol = max(0.5 * 10 ** -dec * (1 if c[1] == "%" else 1), 0.006 * abs(want))
+                if abs(want - c[0]) > tol + 1e-9:
+                    unit = "%" if c[1] == "%" else "B"
+                    shown = f"{want:,.{max(dec, 1 if unit == 'B' else 0)}f}{unit}" if unit == "%" else \
+                        f"${want:,.{max(dec, 2)}f}B"
+                    out.setdefault(n, []).append(
+                        f"arithmetic in the text does not hold: '{m.group(0).strip()[:120]}' - {m.group(1)} "
+                        f"{'+' if op in ('plus', 'and') else '-'} {m.group(3)} is {shown}, not {m.group(5)}. Fix the "
+                        "figure (or add the missing step as a calc) so every sum on the page adds up")
+    return out
+
+
 def tie_checks(slides) -> dict[int, list[str]]:
     """One metric, one value across the deck: '22.2% return on capital' on one slide and '21.8% return on capital' on
     another is the first thing a reviewing MD circles. Only rate metrics (returns, yields, margins, rates, costs of
@@ -1490,6 +1540,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
+        for n, msgs in arith_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
         from engines.forge.playbooks import playbook_checks
         for n, msgs in playbook_checks(slides, brief).items():
             fails.setdefault(n, []).extend(msgs)
