@@ -18,7 +18,9 @@ class Inputs:
                 "down_growth": (0.03, "F18 half the 3-year growth"), "down_margin_cut": (0.01, "assumption"),
                 "capex_overrun": (0.15, "assumption")}
         out = {"company": "Costco", "title": "Costco capital allocation", "first_year": 2027, "years": 5,
-               "inputs": {k: {"value": v, "source": s, "rationale": "test"} for k, (v, s) in vals.items()}}
+               "inputs": {k: {"value": v, "source": s, "rationale": "test",
+                              **({"low": v * 0.5, "high": v * 1.5} if k in ("rev_growth", "min_cash") else {})}
+                          for k, (v, s) in vals.items()}}
         return {"choices": [{"message": {"content": json.dumps(out)}}]}
 
 
@@ -40,6 +42,8 @@ def test_capital_allocation_recipe_builds_a_workbook_that_passes_the_engine_chec
     assert finish_check("", [res["path"]], ws) is None
     assert qa.value(res["path"], "Checks!F3") == "OK"
     assert "assumption" in " ".join(res["notes"])
+    assert abs(res["inputs"]["rev_growth"]["low"] - 0.035) < 1e-9 and abs(res["inputs"]["rev_growth"]["high"] - 0.105) < 1e-9
+    assert qa.value(res["path"], "Outputs!B21") in ("2027", "2028", "2029", "2030", "2031")
 
 
 @pytest.mark.skipif(not find_soffice(), reason="LibreOffice not installed")

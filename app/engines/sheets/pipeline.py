@@ -63,9 +63,13 @@ guidance: cite that fact in the source and say in the rationale whether you keep
 and why. Only a floor the board would keep and similar policy choices are plain assumptions. Never invent a
 reported figure. Units are fixed: money in $ millions (10-K figures in billions times 1000),
 per-share amounts in $, rates as decimals (6% = 0.06), shares in millions.
+For rev_growth, capex_growth, min_cash, buyback and down_growth also give "low" and "high": the range a committee
+would test, with the reason in the rationale. When a value departs from the history it cites (e.g. 6% growth against
+a 7.8% three-year history), the rationale says why (guidance, base effects, the plan).
 Return ONLY JSON:
 {"company": "short company name", "title": "workbook title", "first_year": 2027, "years": 5,
- "inputs": {"<name>": {"value": number, "source": "F12 10-K FY2026 ..." or "assumption", "rationale": "one line"}}}
+ "inputs": {"<name>": {"value": number, "low": number, "high": number, "source": "F12 10-K FY2026 ..." or
+ "assumption", "rationale": "one line"}}}
 with exactly these input names:
 """
 
@@ -86,6 +90,11 @@ def ask_inputs(task: str, client, model: str, task_id: str) -> dict:
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {e}"
     raise RuntimeError(f"the model did not return the model inputs: {last}")
+
+
+def _col(n_years: int) -> str:
+    from openpyxl.utils import get_column_letter
+    return get_column_letter(1 + n_years)
 
 
 def _num(v):
@@ -109,8 +118,14 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
             continue
         if fmt == "pct" and abs(v) > 1.5:             # 6 meant 6%
             v /= 100.0
+        lo, hi = _num(it.get("low")), _num(it.get("high"))
+        if fmt == "pct":
+            lo = lo / 100.0 if lo is not None and abs(lo) > 1.5 else lo
+            hi = hi / 100.0 if hi is not None and abs(hi) > 1.5 else hi
+        if lo is not None and hi is not None and lo > hi:
+            lo, hi = hi, lo
         inputs[name] = {"value": v, "source": str(it.get("source") or "assumption"),
-                        "rationale": str(it.get("rationale") or "")}
+                        "rationale": str(it.get("rationale") or ""), "low": lo, "high": hi}
     if missing:
         raise RuntimeError("the model left these inputs out: " + ", ".join(missing))
     first = int(_num(got.get("first_year")) or time.gmtime().tm_year + 1)
@@ -128,7 +143,8 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
         if name in sections:
             book.section(sections[name])
         it = inputs[name]
-        book.add(label, it["value"], fmt, name=name, source=it["source"], rationale=it["rationale"])
+        book.add(label, it["value"], fmt, name=name, source=it["source"], rationale=it["rationale"],
+                 low=it.get("low"), high=it.get("high"))
     B.title(wb["Model"], f"{company}: cash generated and its uses, $m")
     ca = B.capital_allocation(wb["Model"], 3, years, names={"down_growth": "down_growth",
                                                              "down_margin_cut": "down_margin_cut",
@@ -177,7 +193,11 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
             ("Downside: closing cash ($m)", f"={ca['down_cash_end']}", "usd"),
             ("Downside: lowest headroom over the floor ($m)", f"={ca['down_min_headroom']}", "usd"),
             ("Funded in the downside?", f'=IF({ca["down_min_headroom"]}>=0,"Yes","No: in the downside cash falls below '
-             'the floor")', None)]
+             'the floor")', None),
+            ("Year of the lowest headroom, base", f"=INDEX($B$7:${_col(len(years))}$7,MATCH(MIN('Model'!$B${rws['head']}:"
+             f"${_col(len(years))}${rws['head']}),'Model'!$B${rws['head']}:${_col(len(years))}${rws['head']},0))", None),
+            ("Year of the lowest headroom, downside", f"=INDEX($B$7:${_col(len(years))}$7,MATCH(MIN('Model'!$B${rws['d_head']}:"
+             f"${_col(len(years))}${rws['d_head']}),'Model'!$B${rws['d_head']}:${_col(len(years))}${rws['d_head']},0))", None)]
     for i, (lab, expr, fmt) in enumerate(rows, start=12):
         out.cell(row=i, column=1, value=lab)
         B._f(out, f"B{i}", expr, fmt)
