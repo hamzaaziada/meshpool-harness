@@ -610,9 +610,9 @@ class WorkbookReview:
 
     def _median_panel(self, first: dict, model: str, material: str, k: int, panel) -> dict:
         """A single reviewer reply moves by up to 1.5 points on the same workbook. With MH_REVIEW_SAMPLES=n (default
-        1) the panel is asked n times and the panel whose mean score is the median is kept, so one generous or harsh
+        3) the panel is asked n times and the panel whose mean score is the median is kept, so one generous or harsh
         reply neither signs a workbook off nor sinks it. All samples are kept in the round record."""
-        n = max(1, int(os.environ.get("MH_REVIEW_SAMPLES") or 1))
+        n = max(1, int(os.environ.get("MH_REVIEW_SAMPLES") or 3))
         if n == 1 or first.get("not_run"):
             return first
         runs = [first] + [panel(self.client, "workbook", material, model=model, task_id=f"{self.task_id}-r{k}s{i}",

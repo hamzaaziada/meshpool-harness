@@ -1408,7 +1408,8 @@ supports it. Choose varied archetypes that prove each title.
         if [x for x in (story.get("slides") or []) if isinstance(x, dict)] if isinstance(story, dict) else []:
             break
     else:
-        raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
+        if not (start and isinstance(story, dict) and story.get("slides")):   # a resumed run brings its storyline
+            raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
     notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
     if notes and len(story.get("slides") or []) >= 4:
         try:                                     # the partner's read of the storyboard, sent back once
@@ -1429,13 +1430,13 @@ supports it. Choose varied archetypes that prove each title.
     # issues and the new facts, until both sign off or the round cap (engines/forge/critics.py, research.py)
     from engines.forge import critics, research as RS
     cfg = critics.settings(rules)
-    panel_on = critics.personas_on(client, rules) and not insert and not start
+    panel_on = critics.personas_on(client, rules) and not insert
     rs_ok, rs_why = RS.allowed(client, rules, brief, research)
     rcaps = RS.caps(rules)
     research_steps = 0
     research_log: list[dict] = []
     sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
-    if panel_on:
+    if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
         max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
         for rnd in range(1, max_sb + 1):
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
