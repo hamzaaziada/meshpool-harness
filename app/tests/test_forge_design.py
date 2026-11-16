@@ -430,7 +430,8 @@ def test_build_with_design_records_the_path_and_keeps_images(tmp_path, monkeypat
     assert json.loads((tmp_path / "qa.json").read_text())["design"]["slides"]["2"]["path"] == "image"
     prs = Presentation(res["pptx"])
     assert all("design:image" in prs.slides[i]._element.cSld.get("name") for i in (1, 2))
-    assert "Do NOT use these layouts" in imgs.prompts[1]                    # the second page avoids the first's
+    # the second page avoids the first's; designs run in parallel threads, so the stub's prompt order varies
+    assert sum("Do NOT use these layouts" in p for p in imgs.prompts) == 1
     from engines.forge.engine import design_sentence
     assert "2 of 2 content slides were image-designed" in design_sentence(res["design"])
 
