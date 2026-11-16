@@ -393,6 +393,27 @@ def _chart_lines(c: dict) -> list[str]:
     return out
 
 
+HOUSE = {   # the reference an image model knows: named so it understands the genre, never drawn on the page
+    "consulting": "House style: a McKinsey / BCG / Bain strategy deck page. An action title that states the conclusion "
+                  "as a full sentence; one clear exhibit that proves it; generous white space; thin grey rules; "
+                  "restrained colour with a single accent on the point that matters; numbered footnotes and a source "
+                  "line at the bottom left; a small section tracker at the top right.",
+    "banking": "House style: a Goldman Sachs / Morgan Stanley investment-banking pitch book page. Dense but orderly: "
+               "precise tables and charts with exact figures and units, thin navy rules, bold column headers, "
+               "light shading on the key row, footnotes and a source line at the bottom, no decoration.",
+}
+BANKING = re.compile(r"(?i)\b(valuation|EV/|EBITDA|multiple|buyback|repurchase|dividend|IRR|LBO|DCF|accretion|"
+                     r"dilution|leverage|debt|bond|yield|comps|precedent|football field|capital allocation)\b")
+
+
+def house_line(s: dict) -> str:
+    """MH_DESIGN_HOUSE=consulting|banking|auto (default auto: banking when the page is about money and valuation)."""
+    h = (os.environ.get("MH_DESIGN_HOUSE") or "auto").lower()
+    if h not in HOUSE:
+        h = "banking" if BANKING.search(json.dumps(s, ensure_ascii=False, default=str)) else "consulting"
+    return HOUSE[h] + " Do not draw any firm's logo or name; the page carries only the text given below."
+
+
 def design_prompt(s: dict, direc: dict, recent: list[str], layout: str | None = None) -> str:
     """The image-generation prompt for ONE slide: the exact text and numbers (quoted), a layout that fits the message
     and avoids the layouts of the previous slides, the palette, fonts and the style guide."""
@@ -402,6 +423,7 @@ def design_prompt(s: dict, direc: dict, recent: list[str], layout: str | None = 
     lines = [f"Design ONE 16:9 presentation slide (1536 x 864 px, a {CANVAS[0]} x {CANVAS[1]} in page) for a "
              "top-tier strategy consulting deck. It must look designed by a senior visual designer: a distinctive "
              "composition for this message, not a generic template.",
+             house_line(s),
              f"Layout: {layout.replace('_', ' ')}: {LAYOUTS.get(layout, '')}."]
     avoid = [r for r in dict.fromkeys(recent[-3:]) if r and r != layout]
     if avoid:
