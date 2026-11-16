@@ -52,8 +52,10 @@ def applies(task: str) -> str | None:
 
 PROMPT = """You fill the inputs of a capital-allocation model for a finance professional. Use ONLY the facts and
 documents given: each value comes from a fact (cite its id, e.g. "F7") or is a labelled assumption with its
-rationale (a growth rate taken from the company's own history or guidance in the facts, a floor the board would
-keep). Never invent a reported figure. Units are fixed: money in $ millions (10-K figures in billions times 1000),
+rationale. Growth rates are anchored on the company's own history ("grew x% a year over three years" facts) or its
+guidance: cite that fact in the source and say in the rationale whether you keep, fade or cut the historical rate
+and why. Only a floor the board would keep and similar policy choices are plain assumptions. Never invent a
+reported figure. Units are fixed: money in $ millions (10-K figures in billions times 1000),
 per-share amounts in $, rates as decimals (6% = 0.06), shares in millions.
 Return ONLY JSON:
 {"company": "short company name", "title": "workbook title", "first_year": 2027, "years": 5,

@@ -301,6 +301,9 @@ def _days_between(a: str, b: str) -> int:
         return 0
 
 
+GROWTH_LINES = {"revenue", "operating cash flow", "capital expenditure"}
+
+
 def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=None) -> list[dict]:
     """Latest reported values for each named company that files with the SEC, as sourced facts (F ids from no).
     Each fact names the form, period end, filing date and the filing's URL."""
@@ -323,6 +326,7 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
         except Exception:  # noqa: BLE001
             continue
         seen = set()
+        growth: list[dict] = []
         ends = [u.get("end", "") for ns, tag, unit, _ in XBRL_LINES for u in
                 ((facts.get("facts", {}).get(ns, {}).get(tag) or {}).get("units") or {}).get(unit) or []
                 if u.get("form") in ("10-K", "10-Q")]
@@ -342,12 +346,25 @@ def xbrl_facts(names: list[str], no: int, ticker_map: dict | None = None, fetch=
             else:
                 per = f"at {u['end']}"
             url = SP._filing_url(cik, u.get("accn", ""))
+            if label in GROWTH_LINES and u.get("start") and _days_between(u["start"], u["end"]) > 330:
+                past = [x for x in pts if x.get("start") and _days_between(x["start"], x["end"]) > 330
+                        and 1050 <= _days_between(x["end"], u["end"]) <= 1140 and float(x.get("val") or 0) > 0]
+                if past and float(u["val"]) > 0:      # the company's own 3-year growth: what a forecast is anchored on
+                    x = max(past, key=lambda z: z.get("filed", ""))
+                    cagr = (float(u["val"]) / float(x["val"])) ** (1 / 3) - 1
+                    growth.append({"label": f"{label} 3-year growth", "value": cagr, "text":
+                                   f"{hit['title']} {label} grew {cagr:.1%} a year over three years, from "
+                                   f"{_money(float(x['val']), unit)} (year to {x['end']}) to "
+                                   f"{_money(float(u['val']), unit)} (year to {u['end']}) (computed from SEC XBRL {tag}; "
+                                   f"{url})", "company": hit["title"], "source": url})
             out.append({"id": f"F{no + len(out)}", "text": f"{hit['title']} {label} {_money(float(u['val']), unit)} "
                         f"{per} ({u.get('form')} filed {u.get('filed')}; SEC XBRL {tag}; {url})",
                         "source": url, "research": True, "company": hit["title"], "label": label,
                         "value": float(u["val"]), "annual": not u.get("start") or
                         _days_between(u["start"], u["end"]) > 330, "end": u.get("end", "")})
             seen.add(label)
+        for g in growth:
+            out.append(dict(g, id=f"F{no + len(out)}", research=True, derived=True, annual=True))
     return out
 
 

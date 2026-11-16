@@ -84,3 +84,16 @@ def test_a_long_document_sharing_a_short_ones_boilerplate_is_not_its_duplicate(t
     copy = c.add_text("Syndicated dividend notice", "The board declared a quarterly dividend of $1.47 per share. " + boiler + " Reuters")
     assert getattr(long_, "duplicate_of", None) in (None, "")
     assert copy.duplicate_of == short.id
+
+
+def test_xbrl_facts_add_the_companys_own_three_year_growth():
+    from engines.forge import research as R
+
+    def u(start, end, val, filed):
+        return {"start": start, "end": end, "val": val, "form": "10-K", "filed": filed, "accn": "0000-00-1"}
+    facts = {"facts": {"us-gaap": {"Revenues": {"units": {"USD": [
+        u("2022-09-01", "2023-08-31", 100e9, "2023-10-10"), u("2025-09-01", "2026-08-31", 133.1e9, "2026-10-10")]}}}}}
+    got = R.xbrl_facts(["ACME"], 1, ticker_map={"0": {"ticker": "ACME", "title": "ACME CORP", "cik_str": 1}},
+                       fetch=lambda cik: facts)
+    g = [f for f in got if "grew" in f["text"]]
+    assert g and "10.0% a year over three years" in g[0]["text"] and g[0]["derived"]
