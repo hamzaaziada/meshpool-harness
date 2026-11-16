@@ -1953,6 +1953,7 @@ def _stats(ctx, sl, n, c, x, y, w, h):
         _write(_box(sl, x, yy + 0.02, vw, rh - 0.1, f"role_subtitle_Stat{i + 1}", MSO_ANCHOR.MIDDLE),
                [{"text": it["value"], "size": vsize, "bold": True, "heading": True, "numbers": False,
                  "color": TC.ACCENT_1}])
+        ctx.track(n, str(it["value"]), c.get("prov"))   # the chart's figures keep its sources (P13)
         _write(_box(sl, x + vw + 0.1, yy + 0.02, w - vw - 0.1, rh - 0.1, f"StatLabel{i + 1}", MSO_ANCHOR.MIDDLE),
                [{"text": it["label"], "size": lsize, "numbers": False}])
         if i < k - 1:
@@ -2049,6 +2050,8 @@ def fallback(s: dict) -> dict:
         return football_fallback(s)
     if c and chart_problems(c):                        # a misleading chart becomes a stat stack, layout kept
         st = stat_stack(c, json.dumps({k: v for k, v in s.items() if k not in ("chart", "table")}, ensure_ascii=False))
+        tk = s.get("takeaway")
+        st["prov"] = c.get("prov") or s.get("title_prov") or (tk.get("prov") if isinstance(tk, dict) else None)
         if len(st["items"]) < 2:                       # one number is not an exhibit: full-width argument instead
             s["chart"] = None
             s["archetype"] = "argument_only"
@@ -2124,6 +2127,7 @@ def a_cover(ctx, s, sl, n):
     tf.vertical_anchor = MSO_ANCHOR.BOTTOM
     tf.margin_left = tf.margin_right = Inches(0)
     tf.text = clean(s["title"])
+    ctx.track(n, clean(s["title"]), s.get("title_prov"))          # cover figures are sourced like any title (P13)
     for p in tf.paragraphs:
         p.alignment = PP_ALIGN.LEFT
         p.line_spacing = Pt(_pitch(size, 1.05))
@@ -2133,6 +2137,7 @@ def a_cover(ctx, s, sl, n):
     tw, sw_ = set(re.findall(r"[a-z0-9$.]+", clean(s["title"]).lower())), re.findall(r"[a-z0-9$.]+", sub.lower())
     if sw_ and sum(w_ in tw for w_ in sw_) / len(sw_) > 0.6:
         sub = ""                                           # a subtitle that only repeats the title is dropped
+    ctx.track(n, sub, s.get("subtitle_prov") or s.get("title_prov"))
     for ph in list(sl.placeholders):
         if ph.placeholder_format.idx == 1:
             if sub:
@@ -2182,7 +2187,8 @@ def a_closing(ctx, s, sl, n):
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
 
     def cells(st, size):
-        a = [{"text": st.get("action", ""), "size": size + (4 if size > T["body"] else 2), "bold": True, "numbers": False}]
+        a = [{"text": st.get("action", ""), "size": size + (4 if size > T["body"] else 2), "bold": True, "numbers": False,
+              "prov": st.get("prov")}]                         # an action that names an amount cites it (P13)
         d = [{"text": st.get("detail", ""), "size": size, "prov": st.get("prov")}] if st.get("detail") else []
         d += [{"text": m if isinstance(m, str) else _txt(m), "size": size - 1, "bullet": True, "space_before": 3,
                "prov": st.get("prov")} for m in (st.get("milestones") or [])[:3]]
